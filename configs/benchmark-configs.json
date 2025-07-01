@@ -1,0 +1,13 @@
+[
+    {
+      "requests": [10000000],
+      "keyspacelen": [10000000],
+      "data_sizes": [16],
+      "pipelines": [10],
+      "clients": [50],
+      "commands": ["SET", "GET", "RPUSH", "LPUSH", "LPOP", "SADD", "SPOP", "HSET"],
+      "cluster_mode": "no",
+      "tls_mode": "no",
+      "warmup": [10]
+    }
+  ]
