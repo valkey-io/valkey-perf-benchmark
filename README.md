@@ -106,7 +106,7 @@ Create benchmark configurations in JSON format. Example:
 - `keyspacelen`: Key space size (number of distinct keys)
 - `data_sizes`: Size of data in bytes
 - `pipelines`: Number of commands to pipeline
-- `commands`: Redis commands to benchmark
+- `commands`: Valkey commands to benchmark
 - `cluster_mode`: Whether to enable cluster mode ("yes" or "no")
 - `tls_mode`: Whether to enable TLS ("yes" or "no")
 - `warmup`: Warmup time in seconds before benchmarking
