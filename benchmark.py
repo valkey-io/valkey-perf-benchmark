@@ -192,7 +192,7 @@ def run_benchmark_matrix(
             valkey_path=args.valkey_path,
             cores=bench_core_range,
         )
-        runner.ping_server()
+        runner.wait_for_server_ready()
         runner.run_benchmark_config()
 
         if not args.use_running_server:

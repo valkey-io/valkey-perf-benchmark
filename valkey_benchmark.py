@@ -65,7 +65,7 @@ class ClientRunner:
         Logger.info(f"Running: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
 
-    def _wait_for_server_ready(self, timeout: int = 30) -> None:
+    def wait_for_server_ready(self, timeout: int = 30) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
         Logger.info("Waiting for Valkey server to be ready...")
         cli_cmd = [self.valkey_cli]
