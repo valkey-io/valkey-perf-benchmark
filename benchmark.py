@@ -168,18 +168,19 @@ def run_benchmark_matrix(
         f"TLS={'on' if cfg['tls_mode'] == 'yes' else 'off'} | "
         f"Cluster={'on' if cfg['cluster_mode'] == 'yes' else 'off'}"
     )
-    # ---- server side -----------------
+    # ---- server section -----------------
     if (not args.use_running_server) and args.mode in ("server", "both"):
         launcher = ServerLauncher(
             commit_id=commit_id,
             valkey_path=args.valkey_path,
             cores=server_core_range,
         )
-        launcher.launch_all_servers(
+        launcher.launch(
             cluster_mode=cfg["cluster_mode"],
             tls_mode=cfg["tls_mode"],
         )
 
+    # ---- benchmarking client section -----------------
     if args.mode in ("client", "both"):
         runner = ClientRunner(
             commit_id=commit_id,
