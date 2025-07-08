@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
+
 import json
 import statistics
 import sys
-
-
-if len(sys.argv) < 3:
-    print(
-        "Usage: compare_benchmark_results.py BASELINE NEW [OUT_FILE]", file=sys.stderr
-    )
-    sys.exit(1)
-
-baseline_file = sys.argv[1]
-new_file = sys.argv[2]
-out_file = sys.argv[3] if len(sys.argv) > 3 else None
 
 
 def load(path):
@@ -82,91 +72,97 @@ def pct_change(new_v, old_v):
     return ((new_v - old_v) / old_v * 100.0) if old_v else 0.0
 
 
-# Load data
-baseline_data = load(baseline_file)
-new_data = load(new_file)
-
-# Group by command
-baseline_by_command = group_by_command(baseline_data)
-new_by_command = group_by_command(new_data)
-baseline_by_modes = group_by_modes(baseline_data)
-new_by_modes = group_by_modes(new_data)
-
-# Get all unique commands
-all_commands = sorted(
-    set(list(baseline_by_command.keys()) + list(new_by_command.keys()))
-)
-
-metrics = [
-    "rps",
-    "latency_avg_ms",
-    "latency_p50_ms",
-    "latency_p95_ms",
-    "latency_p99_ms",
-]
-
-# Generate comparison table
-lines = ["# Benchmark Comparison by Command\n"]
-
-for command in all_commands:
-    lines.append(f"## {command}\n")
-    lines.append("| Metric | Baseline | PR | Diff | % Change |")
-    lines.append("| --- | --- | --- | --- | --- |")
-
-    # Get data for this command
-    baseline_items = baseline_by_command.get(command, [])
-    new_items = new_by_command.get(command, [])
-
-    baseline_summary = summarize(baseline_items)
-    new_summary = summarize(new_items)
-
-    # Generate metrics rows
-    for metric in metrics:
-        baseline_value = baseline_summary.get(metric, 0.0)
-        new_value = new_summary.get(metric, 0.0)
-        diff = new_value - baseline_value
-        change = pct_change(new_value, baseline_value)
-
-        # Format the row with appropriate precision
-        lines.append(
-            f"| {metric} | {baseline_value:.2f} | {new_value:.2f} | {diff:.2f} | {change:+.2f}% |"
+def main():
+    if len(sys.argv) < 3:
+        print(
+            "Usage: compare_benchmark_results.py BASELINE NEW [OUT_FILE]",
+            file=sys.stderr,
         )
+        sys.exit(1)
 
-    lines.append("")  # Add empty line between command sections
+    baseline_file = sys.argv[1]
+    new_file = sys.argv[2]
+    out_file = sys.argv[3] if len(sys.argv) > 3 else None
 
-# ---- Cluster/TLS combinations ----------------------------------------------
-lines.append("# Benchmark Comparison by Command, Cluster and TLS\n")
-all_keys = sorted(set(baseline_by_modes.keys()) | set(new_by_modes.keys()))
-for (command, cluster, tls) in all_keys:
-    lines.append(
-        f"## {command} | cluster {'enabled' if cluster else 'off'} | tls {'enabled' if tls else 'off'}\n"
+    baseline_data = load(baseline_file)
+    new_data = load(new_file)
+
+    baseline_by_command = group_by_command(baseline_data)
+    new_by_command = group_by_command(new_data)
+    baseline_by_modes = group_by_modes(baseline_data)
+    new_by_modes = group_by_modes(new_data)
+
+    all_commands = sorted(
+        set(list(baseline_by_command.keys()) + list(new_by_command.keys()))
     )
-    lines.append("| Metric | Baseline | PR | Diff | % Change |")
-    lines.append("| --- | --- | --- | --- | --- |")
 
-    baseline_items = baseline_by_modes.get((command, cluster, tls), [])
-    new_items = new_by_modes.get((command, cluster, tls), [])
+    metrics = [
+        "rps",
+        "latency_avg_ms",
+        "latency_p50_ms",
+        "latency_p95_ms",
+        "latency_p99_ms",
+    ]
 
-    baseline_summary = summarize(baseline_items)
-    new_summary = summarize(new_items)
+    lines = ["# Benchmark Comparison by Command\n"]
 
-    for metric in metrics:
-        baseline_value = baseline_summary.get(metric, 0.0)
-        new_value = new_summary.get(metric, 0.0)
-        diff = new_value - baseline_value
-        change = pct_change(new_value, baseline_value)
+    for command in all_commands:
+        lines.append(f"## {command}\n")
+        lines.append("| Metric | Baseline | PR | Diff | % Change |")
+        lines.append("| --- | --- | --- | --- | --- |")
 
+        baseline_items = baseline_by_command.get(command, [])
+        new_items = new_by_command.get(command, [])
+
+        baseline_summary = summarize(baseline_items)
+        new_summary = summarize(new_items)
+
+        for metric in metrics:
+            baseline_value = baseline_summary.get(metric, 0.0)
+            new_value = new_summary.get(metric, 0.0)
+            diff = new_value - baseline_value
+            change = pct_change(new_value, baseline_value)
+
+            lines.append(
+                f"| {metric} | {baseline_value:.2f} | {new_value:.2f} | {diff:.2f} | {change:+.2f}% |"
+            )
+
+        lines.append("")
+
+    lines.append("# Benchmark Comparison by Command, Cluster and TLS\n")
+    all_keys = sorted(set(baseline_by_modes.keys()) | set(new_by_modes.keys()))
+    for (command, cluster, tls) in all_keys:
         lines.append(
-            f"| {metric} | {baseline_value:.2f} | {new_value:.2f} | {diff:.2f} | {change:+.2f}% |"
+            f"## {command} | cluster {'enabled' if cluster else 'off'} | tls {'enabled' if tls else 'off'}\n"
         )
+        lines.append("| Metric | Baseline | PR | Diff | % Change |")
+        lines.append("| --- | --- | --- | --- | --- |")
 
-    lines.append("")
+        baseline_items = baseline_by_modes.get((command, cluster, tls), [])
+        new_items = new_by_modes.get((command, cluster, tls), [])
 
-# Join all lines
-table = "\n".join(lines)
+        baseline_summary = summarize(baseline_items)
+        new_summary = summarize(new_items)
 
-# Output
-if out_file:
-    with open(out_file, "w", encoding="utf-8") as f:
-        f.write(table)
-print(table)
+        for metric in metrics:
+            baseline_value = baseline_summary.get(metric, 0.0)
+            new_value = new_summary.get(metric, 0.0)
+            diff = new_value - baseline_value
+            change = pct_change(new_value, baseline_value)
+
+            lines.append(
+                f"| {metric} | {baseline_value:.2f} | {new_value:.2f} | {diff:.2f} | {change:+.2f}% |"
+            )
+
+        lines.append("")
+
+    table = "\n".join(lines)
+
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write(table)
+    print(table)
+
+
+if __name__ == "__main__":
+    main()
