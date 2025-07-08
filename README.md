@@ -1,6 +1,6 @@
 # Valkey Performance Benchmark
 
-A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-memory data structure store. This tool allows you to measure performance across different configurations, including TLS and cluster modes.
+A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-memory data store. This tool allows you to measure performance across different commits, configurations, including TLS and cluster modes.
 
 ## Features
 

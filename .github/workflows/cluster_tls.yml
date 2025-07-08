@@ -27,7 +27,7 @@ jobs:
         sudo apt-get install -y build-essential
         python -m pip install --upgrade pip
 
-    - name: Run cluster+TLS benchmark
+    - name: Run benchmark on TLS enabled clusters
       run: |
         set -euo pipefail
         python benchmark.py --config configs/benchmark-configs-cluster-tls.json
