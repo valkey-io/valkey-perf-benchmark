@@ -8,6 +8,6 @@
       "commands": ["SET", "GET", "RPUSH", "LPUSH", "LPOP", "SADD", "SPOP", "HSET"],
       "cluster_mode": "yes",
       "tls_mode": "yes",
-      "warmup": [10]
+      "warmup":10
     }
   ]

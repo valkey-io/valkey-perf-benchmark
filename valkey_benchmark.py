@@ -203,7 +203,7 @@ class ClientRunner:
                 self.config["pipelines"],
                 self.config["clients"],
                 self.config["commands"],
-                self.config["warmup"],
+                [self.config["warmup"]],
             )
         )
 
