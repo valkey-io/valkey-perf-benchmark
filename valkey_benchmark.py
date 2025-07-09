@@ -14,7 +14,7 @@ VALKEY_CLI = "src/valkey-cli"
 VALKEY_BENCHMARK = "src/valkey-benchmark"
 
 # Supported Valkey benchmark commands
-READ_COMMANDS = ["GET", "LRANGE", "SPOP", "ZPOPMIN"]
+READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"]
 WRITE_COMMANDS = [
     "SET", "MSET", "INCR", "LPUSH", "RPUSH", "LPOP",
     "RPOP", "SADD", "HSET", "ZADD", "XADD"
@@ -23,6 +23,7 @@ WRITE_COMMANDS = [
 # Map for read commands to populate equivalents
 READ_POPULATE_MAP = {
     "GET": "SET",
+    "MGET": "MSET",
     "LRANGE": "LPUSH",
     "SPOP": "SADD",
     "ZPOPMIN": "ZADD",

@@ -5,7 +5,7 @@
       "data_sizes": [16],
       "pipelines": [10],
       "clients": [50],
-      "commands": ["SET", "GET", "RPUSH", "LPUSH", "LPOP", "SADD", "SPOP", "HSET"],
+      "commands": ["SET", "MSET", "INCR", "LPUSH", "RPUSH", "LPOP", "RPOP", "SADD", "HSET", "ZADD", "XADD"],
       "cluster_mode": "yes",
       "tls_mode": "yes",
       "warmup":10
