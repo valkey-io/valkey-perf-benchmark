@@ -1,337 +1,181 @@
-/* app.js — Valkey benchmark dashboard for all recorded commits
-   Features:
-   • Fetch commit SHAs from completed_commits.json
-     (ignoring entries with status "in_progress")
-   • Load metrics.json for each commit in parallel
-   • Filter by cluster_mode and tls
-   • Display separate trend charts for each command over the available commits
-*/
-
-/* global React, ReactDOM, Recharts */
+// app.js - Plain JS dashboard using Chart.js
 
 const COMPLETED_URL = "../completed_commits.json";
 const RESULT_URL = sha => `../results/${sha}/metrics.json`;
 const COMMIT_URL = sha => `https://github.com/valkey-io/valkey/commit/${sha}`;
 
-const {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  Brush
-} = Recharts;
-
-// Utility fetch ---------------------------------------------------------
-async function fetchJSON(url) {
+async function fetchJSON(url){
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  if(!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }
 
-// React root component --------------------------------------------------
-function Dashboard() {
-  const [commits, setCommits] = React.useState([]);  // full sha[]
-  const [metrics, setMetrics] = React.useState([]);  // flat metrics rows
-  const [commitTimes, setCommitTimes] = React.useState({});
+const state = {
+  commits: [],       // ordered list of shas
+  commitTimes: {},   // sha -> timestamp
+  metrics: [],       // raw metric rows
+  cluster: 'all',
+  tls: 'all',
+  metricKey: 'rps',
+  pipeline: 'all',
+  dataSize: 'all',
+  selectedCommands: new Set(),
+  fromDate: '',
+  toDate: ''
+};
 
-  const [cluster, setCluster]         = React.useState("all"); // all/true/false
-  const [tls, setTLS]                 = React.useState("all"); // all/true/false
-  const [metricKey, setMetricKey]     = React.useState("rps");
-  const [pipeline, setPipeline]       = React.useState("all");
-  const [dataSize, setDataSize]       = React.useState("all");
-  const [selectedCommands, setSelectedCommands] = React.useState(new Set());
-  const [fromDate, setFromDate]       = React.useState("");
-  const [toDate, setToDate]           = React.useState("");
-  const [fromDateUser, setFromDateUser] = React.useState(false);
-  const [toDateUser, setToDateUser]     = React.useState(false);
-  const [brushRange, setBrushRange]   = React.useState(null);
-
-  function toggleCommand(cmd) {
-    setSelectedCommands(prev => {
-      const next = new Set(prev);
-      if (next.has(cmd)) next.delete(cmd); else next.add(cmd);
-      return next;
-    });
-  }
-
-  // 1) load commit list once on mount
-  React.useEffect(() => {
-    async function refresh() {
-      try {
-        const raw = await fetchJSON(COMPLETED_URL);
-
-        const list = [];
-        const times = {};
-        raw.forEach(c => {
-          if (typeof c === 'object' && c.status === 'in_progress') return;
-          const sha = typeof c === 'string'
-            ? c
-            : (c.sha || c.commit || c.full);
-          if (!sha) return;
-          list.push(sha);
-          if (c.timestamp) times[sha] = c.timestamp;
-        });
-
-        setCommitTimes(prev => ({ ...prev, ...times }));
-        setCommits(prev => {
-          const same = prev.length === list.length &&
-            prev.every((sha, i) => sha === list[i]);
-          return same ? prev : list;
-        });
-      } catch (err) {
-        console.error('Failed to load commit list:', err);
-      }
+// DOM helpers --------------------------------------------------------------
+function el(tag, attrs={}, children=[]){
+  const e = document.createElement(tag);
+  Object.entries(attrs).forEach(([k,v])=>{
+    if(k.startsWith('on') && typeof v === 'function'){
+      e.addEventListener(k.slice(2).toLowerCase(), v);
+    } else if(k==='class') {
+      e.className = v;
+    } else {
+      e.setAttribute(k,v);
     }
-    refresh();
-  }, []);
+  });
+  children.forEach(c=>{ if(typeof c==='string') e.appendChild(document.createTextNode(c));
+                       else if(c) e.appendChild(c); });
+  return e;
+}
 
-  const loadMetrics = React.useCallback(async () => {
-    if (!commits.length) return;
-    const all = [];
-    const times = { ...commitTimes };
-    await Promise.all(commits.map(async sha => {
-      try {
-        const rows = await fetchJSON(RESULT_URL(sha));
-        rows.forEach(r => all.push({ ...r, sha }));
-        if (rows[0] && rows[0].timestamp && !times[sha]) times[sha] = rows[0].timestamp;
-      } catch (err) {
-        console.error(`Failed to load metrics for ${sha}:`, err);
-      }
-    }));
-    const ordered = [...commits].sort((a, b) =>
-      new Date(times[a] || 0) - new Date(times[b] || 0)
+function buildControls(){
+  const controls = el('div', {class:'flex flex-wrap gap-4 justify-center text-center mb-4'});
+  const selectCluster = el('select', {class:'border rounded p-1 ml-2',
+    onchange:e=>{state.cluster=e.target.value; updateChart();}},
+    ['all','true','false'].map(o=>el('option',{value:o},[o])));
+  const selectTLS = el('select', {class:'border rounded p-1 ml-2',
+    onchange:e=>{state.tls=e.target.value; updateChart();}},
+    ['all','true','false'].map(o=>el('option',{value:o},[o])));
+  const selectPipeline = el('select', {class:'border rounded p-1 ml-2'});
+  selectPipeline.addEventListener('change', e=>{state.pipeline=e.target.value; updateChart();});
+  const selectSize = el('select', {class:'border rounded p-1 ml-2'});
+  selectSize.addEventListener('change', e=>{state.dataSize=e.target.value; updateChart();});
+  const selectMetric = el('select', {class:'border rounded p-1 ml-2',
+    onchange:e=>{state.metricKey=e.target.value; updateChart();}},
+    ['rps','avg_latency_ms','p95_latency_ms','p99_latency_ms'].map(o=>el('option',{value:o},[o])));
+  const inputFrom = el('input', {type:'date', class:'border rounded p-1 ml-2',
+    onchange:e=>{state.fromDate=e.target.value; updateChart();}});
+  const inputTo = el('input', {type:'date', class:'border rounded p-1 ml-2',
+    onchange:e=>{state.toDate=e.target.value; updateChart();}});
+
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Cluster:',selectCluster]));
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['TLS:',selectTLS]));
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Pipeline:',selectPipeline]));
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Data Size:',selectSize]));
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Metric:',selectMetric]));
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['From:',inputFrom]));
+  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['To:',inputTo]));
+
+  return {controls, selectPipeline, selectSize, inputFrom, inputTo};
+}
+
+function buildCommandChecks(commands){
+  const wrap = el('div', {class:'flex flex-wrap gap-2 justify-center text-center mb-4'});
+  commands.forEach(cmd=>{
+    const cb = el('input',{type:'checkbox',class:'mr-1',checked:true});
+    cb.addEventListener('change',()=>{
+      if(cb.checked) state.selectedCommands.add(cmd);
+      else state.selectedCommands.delete(cmd);
+      updateChart();
+    });
+    state.selectedCommands.add(cmd);
+    wrap.appendChild(el('label',{class:'flex items-center'},[cb,cmd]));
+  });
+  return wrap;
+}
+
+let chart;
+
+function updateChart(){
+  if(!state.metrics.length) return;
+  // filter commits by date range
+  const allowedShas = state.commits.filter(sha=>{
+    const ts = state.commitTimes[sha];
+    if(!ts) return false;
+    if(state.fromDate && new Date(ts) < new Date(state.fromDate)) return false;
+    if(state.toDate && new Date(ts) > new Date(state.toDate)) return false;
+    return true;
+  });
+
+  const labels = allowedShas.map(s=>s.slice(0,8));
+  const datasets = [];
+  const commands = Array.from(state.selectedCommands);
+  commands.forEach((cmd,i)=>{
+    const rows = state.metrics.filter(r=>
+      r.command===cmd &&
+      (state.cluster==='all' || r.cluster_mode === (state.cluster==='true')) &&
+      (state.tls==='all'     || r.tls          === (state.tls==='true')) &&
+      (state.pipeline==='all'|| r.pipeline     === Number(state.pipeline)) &&
+      (state.dataSize==='all'|| r.data_size    === Number(state.dataSize))
     );
-    const orderMap = Object.fromEntries(ordered.map((s, i) => [s, i]));
-    all.sort((a, b) => orderMap[a.sha] - orderMap[b.sha]);
-    setCommitTimes(times);
-    // avoid triggering the effect again if order didn't change
-    const isSameOrder = ordered.length === commits.length &&
-      ordered.every((sha, i) => sha === commits[i]);
-    if (!isSameOrder) setCommits(ordered);
-    setMetrics(all);
-  }, [commits, commitTimes]);
-
-  // 2) fetch metrics for each commit
-  React.useEffect(() => { if (commits.length) loadMetrics(); }, [commits, loadMetrics]);
-
-  // ensure the date range includes all commit times
-  React.useEffect(() => {
-    if (!commits.length) return;
-    const times = commits
-      .map(s => commitTimes[s])
-      .filter(Boolean)
-      .map(t => new Date(t));
-    if (!times.length) return;
-    const min = new Date(Math.min.apply(null, times));
-    const max = new Date(Math.max.apply(null, times));
-    const minStr = min.toISOString().slice(0, 10);
-    const maxStr = max.toISOString().slice(0, 10);
-    if (!fromDateUser) {
-      setFromDate(d => (!d || new Date(d) > min) ? minStr : d);
-    }
-    if (!toDateUser) {
-      setToDate(d => (!d || new Date(d) < max) ? maxStr : d);
-    }
-  }, [commits, commitTimes, fromDateUser, toDateUser]);
-
-  // unique values for filters
-  const commands = React.useMemo(() => [...new Set(metrics.map(m => m.command))].sort(), [metrics]);
-  const pipelines = React.useMemo(
-    () => [...new Set(metrics.map(m => m.pipeline))].sort((a,b)=>a-b),
-    [metrics]
-  );
-  const dataSizes = React.useMemo(
-    () => [...new Set(metrics.map(m => m.data_size))].sort((a,b)=>a-b),
-    [metrics]
-  );
-
-  const filteredCommits = React.useMemo(() =>
-    commits.filter(sha => {
-      const ts = commitTimes[sha];
-      if (!ts) return false;
-      if (fromDate && new Date(ts) < new Date(fromDate)) return false;
-      if (toDate && new Date(ts) > new Date(toDate)) return false;
-      return true;
-    }),
-    [commits, commitTimes, fromDate, toDate]
-  );
-
-  // reset brush range whenever the user changes the date filters so the
-  // full range of the new selection is displayed
-  React.useEffect(() => {
-    setBrushRange(null);
-  }, [fromDate, toDate]);
-
-  React.useEffect(() => {
-    if (!filteredCommits.length) {
-      setBrushRange(null);
-      return;
-    }
-    setBrushRange(range => {
-      if (!range) return { startIndex: 0, endIndex: filteredCommits.length - 1 };
-      const start = Math.max(0, Math.min(range.startIndex, filteredCommits.length - 1));
-      const end = Math.max(start, Math.min(range.endIndex, filteredCommits.length - 1));
-      return { startIndex: start, endIndex: end };
+    const data = allowedShas.map(sha=>{
+      const row = rows.find(r=>r.sha===sha);
+      return row ? row[state.metricKey] : null;
     });
-  }, [filteredCommits]);
+    const color = `hsl(${(i*50)%360},70%,50%)`;
+    datasets.push({label:cmd,data,borderColor:color,backgroundColor:color,fill:false});
+  });
 
-  const brushStartDate = React.useMemo(() => {
-    if (!brushRange || !filteredCommits.length) return null;
-    const sha = filteredCommits[brushRange.startIndex];
-    const ts = commitTimes[sha];
-    return ts ? String(ts).slice(0, 10) : null;
-  }, [brushRange, filteredCommits, commitTimes]);
+  const ctx = document.getElementById('chartCanvas').getContext('2d');
+  if(chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type:'line',
+    data:{labels,datasets},
+    options:{responsive:true,interaction:{mode:'index',intersect:false},scales:{x:{display:true},y:{display:true}}}
+  });
+}
 
-  const brushEndDate = React.useMemo(() => {
-    if (!brushRange || !filteredCommits.length) return null;
-    const sha = filteredCommits[brushRange.endIndex];
-    const ts = commitTimes[sha];
-    return ts ? String(ts).slice(0, 10) : null;
-  }, [brushRange, filteredCommits, commitTimes]);
+async function init(){
+  const root = document.getElementById('chartRoot');
+  const {controls,selectPipeline,selectSize,inputFrom,inputTo} = buildControls();
+  root.appendChild(controls);
+  const canvas = el('canvas',{id:'chartCanvas',class:'bg-white rounded shadow p-2 w-full max-w-4xl'});
+  root.appendChild(canvas);
 
-  // when command list changes keep existing selections but avoid
-  // re-enabling commands the user unchecked
-  React.useEffect(() => {
-    setSelectedCommands(prev => {
-      if (!prev.size) return new Set(commands);
-      return new Set([...prev].filter(c => commands.includes(c)));
+  try {
+    const raw = await fetchJSON(COMPLETED_URL);
+    const shas=[]; const times={};
+    raw.forEach(c=>{
+      if(typeof c==='object' && c.status==='in_progress') return;
+      const sha = typeof c==='string'? c : (c.sha||c.commit||c.full);
+      if(!sha) return;
+      shas.push(sha);
+      if(c.timestamp) times[sha]=c.timestamp;
     });
-  }, [commands]);
+    state.commits=shas; state.commitTimes=times;
+  } catch(err){ console.error('Failed to load commit list',err); return; }
 
-  // regroup per command → series of commit metrics
-  const seriesByCommand = React.useMemo(() => {
-    const map = {};
-    commands.forEach(cmd => {
-      const rows = metrics.filter(r =>
-        r.command === cmd &&
-        (cluster  === "all" || r.cluster_mode === (cluster === "true")) &&
-        (tls      === "all" || r.tls          === (tls === "true")) &&
-        (pipeline === "all" || r.pipeline    === Number(pipeline)) &&
-        (dataSize === "all" || r.data_size   === Number(dataSize))
-      );
-      map[cmd] = filteredCommits.map(sha => {
-        const row = rows.find(r => r.sha === sha);
-        return {
-          sha: sha.slice(0,8),
-          full: sha,
-          timestamp: commitTimes[sha],
-          value: row ? row[metricKey] : null
-        };
-      });
-    });
-    return map;
-  }, [metrics, commands, filteredCommits, cluster, tls, pipeline, dataSize, metricKey, commitTimes]);
-
-  // The full seriesByCommand data is fed into each chart so the Brush component
-  // can control the visible range.  Recharts will automatically display only
-  // the selected slice based on `startIndex` and `endIndex` provided to Brush.
-
-  const children = [
-    // Controls -----------------------------------------------------------
-    React.createElement('div', {className:'flex flex-wrap gap-4 justify-center text-center'},
-      labelSel('Cluster', cluster, setCluster, ['all','true','false']),
-      labelSel('TLS',     tls,     setTLS,     ['all','true','false']),
-      labelSel('Pipeline', pipeline, setPipeline, ['all', ...pipelines.map(p=>String(p))]),
-      labelSel('Data Size', dataSize, setDataSize, ['all', ...dataSizes.map(d=>String(d))]),
-      labelSel('Metric',  metricKey,setMetricKey, ['rps','avg_latency_ms','p95_latency_ms','p99_latency_ms']),
-      labelDate('From', fromDate, v => { setFromDate(v); setFromDateUser(true); }, brushStartDate),
-      labelDate('To',   toDate,   v => { setToDate(v);   setToDateUser(true);   }, brushEndDate)
-    ),
-    React.createElement('div', {className:'flex flex-wrap gap-2 justify-center text-center'},
-      ...commands.map(cmd => React.createElement('label', {key:cmd, className:'flex items-center'},
-        React.createElement('input', {
-          type:'checkbox',
-          className:'mr-1',
-          checked: selectedCommands.has(cmd),
-          onChange:()=>toggleCommand(cmd)
-        }),
-        cmd
-      ))
-    ),
-    // One chart per command ---------------------------------------------
-    ...commands.filter(c=>selectedCommands.has(c)).map(cmd => React.createElement('div', {key:cmd, className:'bg-white rounded shadow p-2 w-full max-w-4xl'},
-      React.createElement('div', {className:'font-semibold mb-2'}, cmd),
-      React.createElement(ResponsiveContainer, {width:'100%', height:400},
-        React.createElement(LineChart, {data: seriesByCommand[cmd]},
-          React.createElement(CartesianGrid, {strokeDasharray:'3 3'}),
-          React.createElement(XAxis, {
-            dataKey:'sha',
-            interval:0,
-            height:70,
-            tick: ShaTick
-          }),
-          React.createElement(YAxis),
-          React.createElement(Tooltip, {content: CustomTooltip}),
-          (filteredCommits.length > 0) && React.createElement(Brush, {
-            dataKey:'timestamp',
-            startIndex: brushRange ? brushRange.startIndex : 0,
-            endIndex: brushRange ? brushRange.endIndex : (filteredCommits.length - 1),
-            tickFormatter: t => t ? String(t).slice(0,10) : '',
-            onChange: r => setBrushRange(r)
-          }),
-          React.createElement(Line, {type:'monotone', dataKey:'value', stroke:'#3b82f6', dot:false, name: metricKey })
-        )
-      )
-    ))
-  ];
-
-  return React.createElement('div', {className:'space-y-6 w-full flex flex-col items-center text-center'}, ...children);
+  try {
+    const all=[]; const times={...state.commitTimes};
+    await Promise.all(state.commits.map(async sha=>{
+      try {
+        const rows=await fetchJSON(RESULT_URL(sha));
+        rows.forEach(r=>all.push({...r,sha}));
+        if(rows[0]&&rows[0].timestamp&&!times[sha]) times[sha]=rows[0].timestamp;
+      } catch(err){ console.error('Failed to load metrics for',sha,err); }
+    }));
+    state.metrics=all; state.commitTimes=times;
+    // update pipelines and data sizes
+    const pipelines=[...new Set(all.map(r=>r.pipeline))].sort((a,b)=>a-b);
+    pipelines.forEach(p=>selectPipeline.appendChild(el('option',{value:String(p)},[String(p)])));
+    const sizes=[...new Set(all.map(r=>r.data_size))].sort((a,b)=>a-b);
+    sizes.forEach(s=>selectSize.appendChild(el('option',{value:String(s)},[String(s)])));
+    const cmds=[...new Set(all.map(r=>r.command))].sort();
+    const cmdChecks=buildCommandChecks(cmds);
+    root.insertBefore(cmdChecks, canvas);
+    if(Object.values(times).length){
+      const min=new Date(Math.min(...Object.values(times)));
+      const max=new Date(Math.max(...Object.values(times)));
+      inputFrom.value=min.toISOString().slice(0,10);
+      inputTo.value=max.toISOString().slice(0,10);
+      state.fromDate=inputFrom.value;
+      state.toDate=inputTo.value;
+    }
+    updateChart();
+  } catch(err){ console.error('Failed to load metrics',err); }
 }
 
-function labelSel(label, val, setter, opts){
-  return React.createElement('label', {className:'font-medium inline-flex items-center'}, `${label}:`,
-    React.createElement('select', {className:'border rounded p-1 ml-2', value:val, onChange:e=>setter(e.target.value)},
-      opts.map(o=>React.createElement('option',{key:o,value:o},o))
-    )
-  );
-}
-
-function labelDate(label, val, setter, brushVal){
-  const displayVal = brushVal || val || '';
-  return React.createElement('label', {className:'font-medium inline-flex items-center'}, `${label}:`,
-    React.createElement('input', {
-      type:'date',
-      className:'border rounded p-1 ml-2',
-      value: displayVal,
-      onChange:e=>setter(e.target.value)
-    })
-  );
-}
-
-function ShaTick(props) {
-  const {x, y, payload} = props;
-  const sha = payload.value;
-  const full = payload.payload && payload.payload.full ? payload.payload.full : sha;
-  return React.createElement('g', {transform:`translate(${x},${y})`},
-    React.createElement('a', {href: COMMIT_URL(full), target:'_blank', rel:'noopener noreferrer'},
-      React.createElement('text', {x:0, y:0, dy:16, textAnchor:'end', transform:'rotate(-45)', style:{cursor:'pointer'}}, sha)
-    )
-  );
-}
-
-function CustomTooltip(props) {
-  const {active, payload} = props;
-  if (!active || !payload || !payload.length) return null;
-  const data = payload[0].payload || {};
-  const time = data.timestamp ? new Date(data.timestamp).toLocaleString() : '';
-  const name = payload[0].name;
-  const value = payload[0].value;
-  return React.createElement('div', {className:'bg-white p-2 border rounded shadow text-sm'},
-    React.createElement('div', null, time),
-    React.createElement('div', null, `${name}: ${value}`)
-  );
-}
-
-// boot ------------------------------------------------------------------
-document.addEventListener('DOMContentLoaded', () => {
-  const rootEl = document.getElementById('chartRoot');
-  if (ReactDOM.createRoot) {
-    ReactDOM.createRoot(rootEl).render(React.createElement(Dashboard));
-  } else {
-    ReactDOM.render(React.createElement(Dashboard), rootEl);
-  }
-});
+document.addEventListener('DOMContentLoaded', init);
