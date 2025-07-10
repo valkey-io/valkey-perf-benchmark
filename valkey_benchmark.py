@@ -142,6 +142,14 @@ class ClientRunner:
             command,
             warmup,
         ) in self._generate_combinations():
+            
+            if command not in READ_COMMANDS + WRITE_COMMANDS:
+                Logger.warning(f"Unsupported command: {command}, skipping.")
+                continue
+            
+            if command in ["MSET", "MGET"] and self.cluster_mode:
+                Logger.warning(f"Command {command} not supported in cluster mode, skipping.")
+                continue
 
             Logger.info(f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients}")
             Logger.info(f"requests={requests}, keyspacelen={keyspacelen}, warmup={warmup}")
@@ -176,6 +184,16 @@ class ClientRunner:
                             text=True,
                         )
                 time.sleep(warmup)
+                
+                # Check if warmup process already exited
+                if proc.poll() not in (None, 0):
+                    Logger.error(f"Warmup failed with exit code {proc.returncode}.")
+                    stdout, stderr = proc.communicate()
+                    Logger.error(f"stdout: {stdout}")
+                    Logger.error(f"stderr: {stderr}")
+                    raise RuntimeError(f"Warmup failed with exit code {proc.returncode}")
+
+                # Otherwise terminate as before
                 proc.terminate()
                 proc.wait(timeout=5)
                 Logger.info("Warmup phase complete.")
