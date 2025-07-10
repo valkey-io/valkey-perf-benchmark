@@ -166,13 +166,16 @@ async function init(){
     const cmds=[...new Set(all.map(r=>r.command))].sort();
     const cmdChecks=buildCommandChecks(cmds);
     root.insertBefore(cmdChecks, canvas);
-    if(Object.values(times).length){
-      const min=new Date(Math.min(...Object.values(times)));
-      const max=new Date(Math.max(...Object.values(times)));
-      inputFrom.value=min.toISOString().slice(0,10);
-      inputTo.value=max.toISOString().slice(0,10);
-      state.fromDate=inputFrom.value;
-      state.toDate=inputTo.value;
+    const tVals = Object.values(times)
+      .map(t => Date.parse(t))
+      .filter(v => !Number.isNaN(v));
+    if (tVals.length) {
+      const min = new Date(Math.min(...tVals));
+      const max = new Date(Math.max(...tVals));
+      inputFrom.value = min.toISOString().slice(0,10);
+      inputTo.value = max.toISOString().slice(0,10);
+      state.fromDate = inputFrom.value;
+      state.toDate = inputTo.value;
     }
     updateChart();
   } catch(err){ console.error('Failed to load metrics',err); }
