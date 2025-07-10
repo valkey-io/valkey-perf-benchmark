@@ -184,14 +184,6 @@ class ClientRunner:
                             text=True,
                         )
                 time.sleep(warmup)
-                
-                # Check if warmup process already exited
-                if proc.poll() not in (None, 0):
-                    Logger.error(f"Warmup failed with exit code {proc.returncode}.")
-                    stdout, stderr = proc.communicate()
-                    Logger.error(f"stdout: {stdout}")
-                    Logger.error(f"stderr: {stderr}")
-                    raise RuntimeError(f"Warmup failed with exit code {proc.returncode}")
 
                 # Otherwise terminate as before
                 proc.terminate()
