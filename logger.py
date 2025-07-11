@@ -43,6 +43,7 @@ class Logger:
             Logger._logger.error(message)
         else:
             print(f"ERROR: {message}", file=sys.stderr)
+        sys.exit(1)
 
     @staticmethod
     def debug(message: str) -> None:
