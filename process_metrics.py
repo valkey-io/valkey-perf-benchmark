@@ -32,9 +32,31 @@ class MetricsProcessor:
         self.commit_time = commit_time
 
     def parse_csv_output(
-        self, output: str, command: str, data_size: int, pipeline: int
+        self,
+        output: str,
+        command: str,
+        data_size: int,
+        pipeline: int,
+        clients: int,
+        requests: int,
     ) -> Optional[Dict[str, object]]:
-        """Return a metrics dictionary parsed from CSV output."""
+        """Return a metrics dictionary parsed from CSV output.
+
+        Parameters
+        ----------
+        output : str
+            Raw CSV output from ``valkey-benchmark``.
+        command : str
+            Benchmark command that was executed.
+        data_size : int
+            Size of the payload in bytes.
+        pipeline : int
+            Number of commands pipelined.
+        clients : int
+            Concurrent client connections used.
+        requests : int
+            Total number of requests issued.
+        """
         lines = output.strip().split("\n")
         if len(lines) < 2:
             Logger.warning("Unexpected CSV format in benchmark output.")
@@ -55,6 +77,8 @@ class MetricsProcessor:
             "command": command,
             "data_size": int(data_size),
             "pipeline": int(pipeline),
+            "clients": int(clients),
+            "requests": int(requests),
             "rps": float(data.get("rps", 0)),
             "avg_latency_ms": float(data.get("avg_latency_ms", 0)),
             "min_latency_ms": float(data.get("min_latency_ms", 0)),

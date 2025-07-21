@@ -106,6 +106,7 @@ Create benchmark configurations in JSON format. Example:
 - `keyspacelen`: Key space size (number of distinct keys)
 - `data_sizes`: Size of data in bytes
 - `pipelines`: Number of commands to pipeline
+- `clients`: Number of concurrent client connections
 - `commands`: Valkey commands to benchmark
 - `cluster_mode`: Whether to enable cluster mode ("yes" or "no")
 - `tls_mode`: Whether to enable TLS ("yes" or "no")
@@ -120,9 +121,32 @@ results/
 └── <commit-id>/
     ├── logs.txt                         # Benchmark logs
     ├── metrics.json                     # Performance metrics in JSON format
-    # each row includes the commit timestamp
     └── valkey_log_cluster_disabled.log  # Valkey server logs
 ```
+
+Sample metrics.json
+
+```
+[
+    {
+        "timestamp": "2025-05-28T01:29:42+02:00",
+        "commit": "ff7135836b5d9ccaa19d5dbaf2a0b0325755c8b4",
+        "command": "SET",
+        "data_size": 16,
+        "pipeline": 10,
+        "clients": 10000000,
+        "requests": 10000000,
+        "rps": 556204.44,
+        "avg_latency_ms": 0.813,
+        "min_latency_ms": 0.28,
+        "p50_latency_ms": 0.775,
+        "p95_latency_ms": 1.159,
+        "p99_latency_ms": 1.407,
+        "max_latency_ms": 2.463,
+        "cluster_mode": false,
+        "tls": false
+    }
+]
 
 ## Dashboard Hosted on S3
 

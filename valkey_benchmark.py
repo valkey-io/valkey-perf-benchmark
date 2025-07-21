@@ -197,7 +197,14 @@ class ClientRunner:
             if proc.stderr:
                 Logger.warning(f"Benchmark stderr:\n{proc.stderr}")
 
-            metrics = metrics_processor.parse_csv_output(proc.stdout, command, data_size, pipeline)
+            metrics = metrics_processor.parse_csv_output(
+                proc.stdout,
+                command,
+                data_size,
+                pipeline,
+                clients,
+                requests,
+            )
             if metrics:
                 Logger.info(f"Parsed metrics: {metrics}")
                 metric_json.append(metrics)
