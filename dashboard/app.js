@@ -77,8 +77,11 @@ function buildCommandChecks(commands){
   commands.forEach(cmd=>{
     const cb = el('input',{type:'checkbox',class:'mr-1',checked:true});
     cb.addEventListener('change',()=>{
-      if(cb.checked) state.selectedCommands.add(cmd);
-      else state.selectedCommands.delete(cmd);
+      if(cb.checked) {
+        state.selectedCommands.add(cmd);
+      } else {
+        state.selectedCommands.delete(cmd);
+      }
       updateChart();
     });
     state.selectedCommands.add(cmd);
@@ -87,7 +90,10 @@ function buildCommandChecks(commands){
   return wrap;
 }
 
-let chart;
+let charts = [];
+
+// Store original command order
+let originalCommandOrder = [];
 
 function updateChart(){
   if(!state.metrics.length) return;
@@ -99,11 +105,33 @@ function updateChart(){
     if(state.toDate && new Date(ts) > new Date(state.toDate)) return false;
     return true;
   });
+  
+  // Sort commits by date (oldest to newest)
+  allowedShas.sort((a, b) => {
+    const dateA = new Date(state.commitTimes[a]);
+    const dateB = new Date(state.commitTimes[b]);
+    return dateA - dateB;
+  });
 
+  // Create shortened labels for display
   const labels = allowedShas.map(s=>s.slice(0,8));
-  const datasets = [];
-  const commands = Array.from(state.selectedCommands);
-  commands.forEach((cmd,i)=>{
+  
+  // Use commands in their original order, filtered by selected commands
+  const commands = originalCommandOrder.filter(cmd => state.selectedCommands.has(cmd));
+  
+  // Clean up existing charts
+  charts.forEach(chart => {
+    if(chart) chart.destroy();
+  });
+  charts = [];
+  
+  // Clear existing chart containers
+  const chartRoot = document.getElementById('chartRoot');
+  const chartContainers = document.querySelectorAll('.chart-container');
+  chartContainers.forEach(container => container.remove());
+  
+  // Create a chart for each command
+  commands.forEach((cmd, i) => {
     const rows = state.metrics.filter(r=>
       r.command===cmd &&
       (state.cluster==='all' || r.cluster_mode === (state.cluster==='true')) &&
@@ -111,29 +139,112 @@ function updateChart(){
       (state.pipeline==='all'|| r.pipeline     === Number(state.pipeline)) &&
       (state.dataSize==='all'|| r.data_size    === Number(state.dataSize))
     );
+    
     const data = allowedShas.map(sha=>{
       const row = rows.find(r=>r.sha===sha);
       return row ? row[state.metricKey] : null;
     });
+    
+    // Skip if no data
+    if (data.every(d => d === null || d === undefined)) return;
+    
+    // Create container for this chart
+    const container = el('div', {class: 'chart-container bg-white rounded shadow p-2 w-full max-w-4xl mb-4'});
+    const title = el('h3', {class: 'text-lg font-bold mb-2'}, [cmd]);
+    const canvas = el('canvas', {id: `chart-${cmd}`, style: 'cursor: pointer;'});
+    container.appendChild(title);
+    container.appendChild(canvas);
+    chartRoot.appendChild(container);
+    
     const color = `hsl(${(i*50)%360},70%,50%)`;
-    datasets.push({label:cmd,data,borderColor:color,backgroundColor:color,fill:false});
+    const dataset = {label:cmd, data, borderColor:color, backgroundColor:color, fill:false};
+    
+    const ctx = canvas.getContext('2d');
+    const chart = new Chart(ctx, {
+      type:'line',
+      data:{labels, datasets:[dataset]},
+      options:{
+        responsive:true,
+        interaction:{mode:'index',intersect:false},
+        scales:{
+          x:{
+            display:true,
+            ticks: {
+              callback: function(value, index) {
+                return labels[index];
+              }
+            }
+          },
+          y:{display:true}
+        },
+        maintainAspectRatio: true,
+        aspectRatio: 3,
+        plugins: {
+          title: {
+            display: false
+          },
+          tooltip: {
+            padding: 8,
+            callbacks: {
+              title: function(tooltipItems) {
+                const value = tooltipItems[0].formattedValue;
+                return `${cmd.toUpperCase()}: ${value} ${state.metricKey}`;
+              },
+              label: function(tooltipItem) {
+                const index = tooltipItem.dataIndex;
+                const sha = allowedShas[index];
+                return `Commit: ${sha.slice(0,8)}`;
+              },
+              afterLabel: function(tooltipItem) {
+                const index = tooltipItem.dataIndex;
+                const sha = allowedShas[index];
+                const timestamp = state.commitTimes[sha];
+                let dateStr = '';
+                if (timestamp) {
+                  const date = new Date(timestamp);
+                  dateStr = `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+                }
+                return [
+                  `Date: ${dateStr || 'Unknown'}`,
+                  'Click to view on GitHub'
+                ];
+              }
+            },
+            displayColors: false,
+            backgroundColor: 'rgba(41, 41, 41, 0.9)',
+            bodyColor: '#ffffff',
+            titleColor: '#ff3333',
+            bodyFont: { size: 13 },
+            titleFont: { size: 14, weight: 'bold' },
+            titleAlign: 'left',
+            bodyAlign: 'left',
+            cornerRadius: 4,
+            caretSize: 0,
+            caretPadding: 10,
+            padding: { top: 8, bottom: 8, left: 12, right: 12 }
+          }
+        },
+        onClick: function(event, elements) {
+          if (elements && elements.length > 0) {
+            const index = elements[0].index;
+            const sha = allowedShas[index];
+            window.open(COMMIT_URL(sha), '_blank');
+          }
+        }
+      }
+    });
+    
+    charts.push(chart);
   });
-
-  const ctx = document.getElementById('chartCanvas').getContext('2d');
-  if(chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type:'line',
-    data:{labels,datasets},
-    options:{responsive:true,interaction:{mode:'index',intersect:false},scales:{x:{display:true},y:{display:true}}}
-  });
+  
+  // Log for debugging
+  console.log(`Updated charts for ${commands.length} commands`);
 }
 
 async function init(){
   const root = document.getElementById('chartRoot');
   const {controls,selectPipeline,selectSize,inputFrom,inputTo} = buildControls();
   root.appendChild(controls);
-  const canvas = el('canvas',{id:'chartCanvas',class:'bg-white rounded shadow p-2 w-full max-w-4xl'});
-  root.appendChild(canvas);
 
   try {
     const raw = await fetchJSON(COMPLETED_URL);
@@ -163,9 +274,13 @@ async function init(){
     pipelines.forEach(p=>selectPipeline.appendChild(el('option',{value:String(p)},[String(p)])));
     const sizes=[...new Set(all.map(r=>r.data_size))].sort((a,b)=>a-b);
     sizes.forEach(s=>selectSize.appendChild(el('option',{value:String(s)},[String(s)])));
-    const cmds=[...new Set(all.map(r=>r.command))].sort();
-    const cmdChecks=buildCommandChecks(cmds);
-    root.insertBefore(cmdChecks, canvas);
+    // Clear any existing command selections
+    state.selectedCommands.clear();
+    
+    // Get unique commands and store original order
+    originalCommandOrder = [...new Set(all.map(r=>r.command))].sort();
+    const cmdChecks = buildCommandChecks(originalCommandOrder);
+    root.appendChild(cmdChecks);
     const tVals = Object.values(times)
       .map(t => Date.parse(t))
       .filter(v => !Number.isNaN(v));
