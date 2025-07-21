@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         choices=["server", "client", "both"],
         default="both",
-        help="Where to run: only server setup, only client tests, or both on one host.",
+        help="Execution mode: 'server' to only setup and run Valkey server, 'client' to only run benchmark tests against an existing server, or 'both' to run server and benchmarks on the same host.",
     )
     parser.add_argument(
         "--commits",

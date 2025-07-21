@@ -95,22 +95,29 @@ Create benchmark configurations in JSON format. Example:
     "commands": ["SET", "GET"],
     "cluster_mode": "yes",
     "tls_mode": "yes",
-    "warmup": [10]
+    "warmup": 10
   }
 ]
 ```
 
 ### Configuration Parameters
 
-- `requests`: Number of requests to perform
-- `keyspacelen`: Key space size (number of distinct keys)
-- `data_sizes`: Size of data in bytes
-- `pipelines`: Number of commands to pipeline
-- `clients`: Number of concurrent client connections
-- `commands`: Valkey commands to benchmark
-- `cluster_mode`: Whether to enable cluster mode ("yes" or "no")
-- `tls_mode`: Whether to enable TLS ("yes" or "no")
-- `warmup`: Warmup time in seconds before benchmarking
+| Parameter | Description | Data Type | Multiple Values |
+|-----------|-------------|-----------|----------------|
+| `requests` | Number of requests to perform | Integer | Yes |
+| `keyspacelen` | Key space size (number of distinct keys) | Integer | Yes |
+| `data_sizes` | Size of data in bytes | Integer | Yes |
+| `pipelines` | Number of commands to pipeline | Integer | Yes |
+| `clients` | Number of concurrent client connections | Integer | Yes |
+| `commands` | Valkey commands to benchmark | String | Yes |
+| `cluster_mode` | Whether to enable cluster mode | String ("yes"/"no") | No |
+| `tls_mode` | Whether to enable TLS | String ("yes"/"no") | No |
+| `warmup` | Warmup time in seconds before benchmarking | Integer | No |
+
+Supported commands:
+```
+"SET", "GET", "RPUSH", "LPUSH", "LPOP", "SADD", "SPOP", "HSET", "GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"
+```
 
 ## Results
 
