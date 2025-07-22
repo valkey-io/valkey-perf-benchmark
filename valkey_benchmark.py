@@ -258,6 +258,7 @@ class ClientRunner:
             "-P", str(pipeline),
             "-c", str(clients),
             "-t", command,
+            "--sequential",
             "--seed", str(seed_val),
             "--csv"
         ]
@@ -268,3 +269,6 @@ class ClientRunner:
         flush_cmd = self._build_cli_command(self.tls_mode) + ["FLUSHALL", "SYNC"]
         self._run(flush_cmd)
         self._run(["pkill", "-f", "valkey-server"])
+        # Delete any .rdb files if present
+        Logger.info("Deleting any .rdb files...")
+        self._run(["find", "-name", "*.rdb", "-delete"])
