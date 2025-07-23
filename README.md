@@ -77,8 +77,6 @@ python benchmark.py --results-dir ./my-results
 
 # Set logging level
 python benchmark.py --log-level DEBUG
-# Pin server and benchmark to separate CPU cores
-python benchmark.py --cpu-range 0-1,2-3
 ```
 
 ## Configuration

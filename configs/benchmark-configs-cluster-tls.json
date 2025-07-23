@@ -1,13 +1,25 @@
 [
-    {
-      "requests": [10000000],
-      "keyspacelen": [10000000],
-      "data_sizes": [16],
-      "pipelines": [10],
-      "clients": [50],
-      "commands": ["SET", "MSET", "INCR", "LPUSH", "RPUSH", "LPOP", "RPOP", "SADD", "HSET", "ZADD", "XADD"],
-      "cluster_mode": "yes",
-      "tls_mode": "yes",
-      "warmup":10
-    }
-  ]
+  {
+    "requests": [10000000],
+    "keyspacelen": [10000000],
+    "data_sizes": [16],
+    "pipelines": [10],
+    "clients": [50],
+    "commands": [
+      "SET",
+      "MSET",
+      "INCR",
+      "LPUSH",
+      "RPUSH",
+      "LPOP",
+      "RPOP",
+      "SADD",
+      "HSET",
+      "ZADD",
+      "XADD"
+    ],
+    "cluster_mode": "yes",
+    "tls_mode": "yes",
+    "warmup": 10
+  }
+]
