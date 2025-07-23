@@ -19,13 +19,16 @@ class ServerBuilder:
         self.valkey_dir = Path(valkey_path)
 
     def _run(self, command: Iterable[str], cwd: Optional[Path] = None) -> None:
+        cmd_list = list(command)
+        Logger.info(f"Running: {' '.join(cmd_list)}")
         try:
-            Logger.info(f"Running: {' '.join(command)}")
-            subprocess.run(command, check=True, cwd=cwd)
+            subprocess.run(cmd_list, check=True, cwd=cwd)
         except subprocess.CalledProcessError as e:
-            Logger.error(f"Command failed with error: {e}")
+            raise RuntimeError(
+                f"Command '{' '.join(cmd_list)}' failed with exit code {e.returncode}"
+            ) from e
         except Exception as e:
-            Logger.error(f"An error occurred: {e}")
+            raise RuntimeError(f"Error running {' '.join(cmd_list)}: {e}") from e
 
     def clone_and_checkout(self) -> None:
         if not self.valkey_dir.exists():
@@ -47,6 +50,6 @@ class ServerBuilder:
         self._run(["make", "distclean"], cwd=self.valkey_dir)
         if self.tls_mode == "yes":
             self._run(["make", "BUILD_TLS=yes", "-j"], cwd=self.valkey_dir)
-            self._run("./utils/gen-test-certs.sh", cwd=self.valkey_dir)
+            self._run(["./utils/gen-test-certs.sh"], cwd=self.valkey_dir)
         else:
             self._run(["make", "-j"], cwd=self.valkey_dir)

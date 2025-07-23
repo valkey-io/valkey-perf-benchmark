@@ -216,7 +216,7 @@ class ClientRunner:
         metrics_processor.write_metrics(self.results_dir, metric_json)
 
     def _generate_combinations(self) -> List[tuple]:
-        """Cartesian product of config dimensions."""
+        """Cartesian product of parameters within a single config item."""
         return list(product(
             self.config["requests"],
             self.config["keyspacelen"],

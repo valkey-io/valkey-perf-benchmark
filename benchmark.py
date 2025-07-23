@@ -74,7 +74,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         default="./configs/benchmark-configs.json",
-        help="Path to benchmark-configs.json.",
+        help=(
+            "Path to benchmark-configs.json. Each entry is an explicit benchmark "
+            "configuration and combinations are not generated automatically."
+        ),
     )
     parser.add_argument(
         "--results-dir",
@@ -86,10 +89,19 @@ def parse_args() -> argparse.Namespace:
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
     parser.add_argument(
-        "--cpu-range",
+        "--server-cpu-range",
+        metavar="RANGE",
         help=(
-            "Comma-separated CPU ranges for server and benchmark, e.g. "
-            "'0-1,2-3'. If omitted, processes are not pinned."
+            "Pin the Valkey server to the given CPU cores, e.g. '0-3'. "
+            "If omitted the server is not pinned."
+        ),
+    )
+    parser.add_argument(
+        "--client-cpu-range",
+        metavar="RANGE",
+        help=(
+            "Pin the benchmark client to the given CPU cores, e.g. '4-7'. "
+            "If omitted the client is not pinned."
         ),
     )
 
@@ -124,7 +136,11 @@ def ensure_results_dir(root: Path, commit_id: str) -> Path:
 
 
 def parse_core_range(range_str: str) -> List[int]:
-    """Return a list of CPU cores from a range string like '0-3'."""
+    """Return a list of CPU cores from ``range_str``.
+
+    ``range_str`` can be a simple range like ``"0-3"`` or a comma separated
+    list such as ``"0,2,4"``.
+    """
     if "-" in range_str:
         start, end = range_str.split("-", 1)
         return list(range(int(start), int(end) + 1))
@@ -141,17 +157,12 @@ def run_benchmark_matrix(
 
     server_core_range = None
     bench_core_range = None
-    if args.cpu_range:
-        try:
-            server_str, bench_str = [s.strip() for s in args.cpu_range.split(',')]
-        except ValueError:
-            raise ValueError(
-                "--cpu-range must be two comma-separated ranges, e.g. '0-1,2-3'"
-            )
-        parse_core_range(server_str)
-        parse_core_range(bench_str)
-        server_core_range = server_str
-        bench_core_range = bench_str
+    if args.server_cpu_range:
+        parse_core_range(args.server_cpu_range)
+        server_core_range = args.server_cpu_range
+    if args.client_cpu_range:
+        parse_core_range(args.client_cpu_range)
+        bench_core_range = args.client_cpu_range
 
     builder = ServerBuilder(
         commit_id=commit_id,
@@ -206,7 +217,7 @@ def main() -> None:
 
     if args.use_running_server and args.mode in ("server", "both"):
         Logger.error(
-            "ERROR: --use-running-server implies the valkey is already build and running, "
+            "ERROR: --use-running-server implies the valkey is already built and running, "
             "so --mode must be 'client'."
         )
 
