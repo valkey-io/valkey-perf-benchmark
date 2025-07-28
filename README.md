@@ -16,6 +16,7 @@ A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valk
 
 - Git
 - Python 3.6+
+- [valkey-py](https://github.com/valkey-io/valkey-py) Python client (install via `pip install valkey`)
 - Linux environment (for taskset CPU pinning)
 - Build tools required by Valkey (gcc, make, etc.)
 

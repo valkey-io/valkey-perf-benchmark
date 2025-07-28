@@ -7,10 +7,11 @@ from itertools import product
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+import valkey
+
 from process_metrics import MetricsProcessor
 from logger import Logger
 
-VALKEY_CLI = "src/valkey-cli"
 VALKEY_BENCHMARK = "src/valkey-benchmark"
 
 # Supported Valkey benchmark commands
@@ -51,7 +52,6 @@ class ClientRunner:
         self.target_ip = target_ip
         self.results_dir = results_dir
         self.valkey_path = valkey_path
-        self.valkey_cli = f"{valkey_path}/{VALKEY_CLI}"
         self.valkey_benchmark = f"{valkey_path}/{VALKEY_BENCHMARK}"
         self.cores = cores
 
@@ -62,6 +62,22 @@ class ClientRunner:
             "--cacert", f"{valkey_path}/tests/tls/ca.crt"
         ]
 
+    def _create_client(self):
+        """Return a Valkey client configured for TLS or plain mode."""
+        kwargs = {
+            "host": self.target_ip,
+            "port": 6379,
+            "decode_responses": True,
+        }
+        if self.tls_mode:
+            kwargs.update({
+                "ssl": True,
+                "ssl_certfile": f"{self.valkey_path}/tests/tls/valkey.crt",
+                "ssl_keyfile": f"{self.valkey_path}/tests/tls/valkey.key",
+                "ssl_ca_certs": f"{self.valkey_path}/tests/tls/ca.crt",
+            })
+        return valkey.Valkey(**kwargs)
+
     def _run(self, cmd: Iterable[str]) -> None:
         Logger.info(f"Running: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
@@ -69,18 +85,15 @@ class ClientRunner:
     def wait_for_server_ready(self, timeout: int = 30) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
         Logger.info("Waiting for Valkey server to be ready...")
-        cli_cmd = [self.valkey_cli]
-        if self.tls_mode:
-            cli_cmd += self.tls_cli_args
-        cli_cmd += ["-h", self.target_ip, "-p", "6379", "PING"]
-
         start = time.time()
         while time.time() - start < timeout:
             try:
-                subprocess.run(cli_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                client = self._create_client()
+                client.ping()
+                client.close()
                 Logger.info("Valkey server is ready.")
                 return
-            except subprocess.CalledProcessError:
+            except Exception:
                 time.sleep(1)
 
         Logger.error(f"Valkey server did not become ready within {timeout} seconds.")
@@ -174,8 +187,9 @@ class ClientRunner:
             # Warmup for write commands if needed
             if command in WRITE_COMMANDS and warmup:
                 Logger.info("Flushing keyspace before warmup...")
-                flush_cmd = self._build_cli_command(self.tls_mode) + ["FLUSHALL", "SYNC"]
-                self._run(flush_cmd)
+                client = self._create_client()
+                client.execute_command("FLUSHALL", "SYNC")
+                client.close()
                 Logger.info(f"Starting warmup for {warmup}s...")
                 proc = subprocess.Popen(
                             bench_cmd,
@@ -227,11 +241,6 @@ class ClientRunner:
             [self.config["warmup"]],
         ))
 
-    def _build_cli_command(self, tls: bool) -> List[str]:
-        cmd = [self.valkey_cli, "-h", self.target_ip, "-p", "6379"]
-        if tls:
-            cmd += self.tls_cli_args
-        return cmd
 
     def _build_benchmark_command(
         self,
@@ -266,8 +275,9 @@ class ClientRunner:
 
     def cleanup_terminate(self) -> None:
         Logger.info("Cleaning up...")
-        flush_cmd = self._build_cli_command(self.tls_mode) + ["FLUSHALL", "SYNC"]
-        self._run(flush_cmd)
+        client = self._create_client()
+        client.execute_command("FLUSHALL", "SYNC")
+        client.close()
         self._run(["pkill", "-f", "valkey-server"])
         # Delete any .rdb files if present
         Logger.info("Deleting any .rdb files...")

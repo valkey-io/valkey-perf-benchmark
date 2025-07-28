@@ -4,10 +4,11 @@ import subprocess
 import time
 from typing import Iterable, Optional
 
+import valkey
+
 from logger import Logger
 
 VALKEY_SERVER = "src/valkey-server"
-VALKEY_CLI = "src/valkey-cli"
 
 
 class ServerLauncher:
@@ -18,15 +19,24 @@ class ServerLauncher:
     ) -> None:
         self.commit_id = commit_id
         self.valkey_path = valkey_path
-        self.valkey_cli = f"{valkey_path}/{VALKEY_CLI}"
         self.valkey_server = f"{valkey_path}/{VALKEY_SERVER}"
         self.cores = cores
-        self.tls_cli_args = [
-            "--tls",
-            "--cert", f"{valkey_path}/tests/tls/valkey.crt",
-            "--key", f"{valkey_path}/tests/tls/valkey.key",
-            "--cacert", f"{valkey_path}/tests/tls/ca.crt",
-        ]
+
+    def _create_client(self, tls_mode: str):
+        """Return a Valkey client for server management."""
+        kwargs = {
+            "host": "127.0.0.1",
+            "port": 6379,
+            "decode_responses": True,
+        }
+        if tls_mode == "yes":
+            kwargs.update({
+                "ssl": True,
+                "ssl_certfile": f"{self.valkey_path}/tests/tls/valkey.crt",
+                "ssl_keyfile": f"{self.valkey_path}/tests/tls/valkey.key",
+                "ssl_ca_certs": f"{self.valkey_path}/tests/tls/ca.crt",
+            })
+        return valkey.Valkey(**kwargs)
 
     def launch(self, cluster_mode: str, tls_mode: str) -> None:
         """Launch Valkey server and setup cluster if needed."""
@@ -49,18 +59,15 @@ class ServerLauncher:
     def _wait_for_server_ready(self, tls_mode: str, timeout: int = 15) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
         Logger.info("Waiting for Valkey server to be ready...")
-        cli_cmd = [self.valkey_cli]
-        if tls_mode == "yes":
-            cli_cmd += self.tls_cli_args
-        cli_cmd += ["PING"]
-
         start = time.time()
         while time.time() - start < timeout:
             try:
-                subprocess.run(cli_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                client = self._create_client(tls_mode)
+                client.ping()
+                client.close()
                 Logger.info("Valkey server is ready.")
                 return
-            except subprocess.CalledProcessError:
+            except Exception:
                 time.sleep(1)
 
         Logger.error(f"Valkey server did not become ready within {timeout} seconds.")
@@ -116,12 +123,7 @@ class ServerLauncher:
     def _setup_cluster(self, tls_mode: str) -> None:
         """Setup cluster on single primary."""
         Logger.info("Setting up cluster configuration...")
-        base = [self.valkey_cli]
-        if tls_mode == "yes":
-            base += self.tls_cli_args
-
-        reset_cmd = ["CLUSTER", "RESET", "HARD"]
-        add_slots_cmd = ["CLUSTER", "ADDSLOTSRANGE", "0", "16383"]
-        for cmd in [reset_cmd, add_slots_cmd]:
-            self._run(base + cmd)
-            time.sleep(2)
+        client = self._create_client(tls_mode)
+        for cmd in (["CLUSTER", "RESET", "HARD"], ["CLUSTER", "ADDSLOTSRANGE", "0", "16383"]):
+            client.execute_command(*cmd)
+        client.close()

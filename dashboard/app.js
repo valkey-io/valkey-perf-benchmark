@@ -55,7 +55,7 @@ function buildControls(){
   selectSize.addEventListener('change', e=>{state.dataSize=e.target.value; updateChart();});
   const selectMetric = el('select', {class:'border rounded p-1 ml-2',
     onchange:e=>{state.metricKey=e.target.value; updateChart();}},
-    ['rps','avg_latency_ms','p95_latency_ms','p99_latency_ms'].map(o=>el('option',{value:o},[o])));
+    ['rps','avg_latency_ms','p95_latency_ms','p99_latency_ms','p50_latency_ms'].map(o=>el('option',{value:o},[o])));
   const inputFrom = el('input', {type:'date', class:'border rounded p-1 ml-2',
     onchange:e=>{state.fromDate=e.target.value; updateChart();}});
   const inputTo = el('input', {type:'date', class:'border rounded p-1 ml-2',
