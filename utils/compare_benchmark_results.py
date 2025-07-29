@@ -47,16 +47,28 @@ def summarize(data_items):
 
     rps = _mean([item.get("rps", 0.0) for item in data_items])
     latency_avg = _mean(
-        [item.get("avg_latency_ms", item.get("latency_avg_ms", 0.0)) for item in data_items]
+        [
+            item.get("avg_latency_ms", item.get("latency_avg_ms", 0.0))
+            for item in data_items
+        ]
     )
     latency_p50 = _mean(
-        [item.get("p50_latency_ms", item.get("latency_p50_ms", 0.0)) for item in data_items]
+        [
+            item.get("p50_latency_ms", item.get("latency_p50_ms", 0.0))
+            for item in data_items
+        ]
     )
     latency_p95 = _mean(
-        [item.get("p95_latency_ms", item.get("latency_p95_ms", 0.0)) for item in data_items]
+        [
+            item.get("p95_latency_ms", item.get("latency_p95_ms", 0.0))
+            for item in data_items
+        ]
     )
     latency_p99 = _mean(
-        [item.get("p99_latency_ms", item.get("latency_p99_ms", 0.0)) for item in data_items]
+        [
+            item.get("p99_latency_ms", item.get("latency_p99_ms", 0.0))
+            for item in data_items
+        ]
     )
 
     return {
@@ -131,7 +143,7 @@ def main():
 
     lines.append("# Benchmark Comparison by Command, Cluster and TLS\n")
     all_keys = sorted(set(baseline_by_modes.keys()) | set(new_by_modes.keys()))
-    for (command, cluster, tls) in all_keys:
+    for command, cluster, tls in all_keys:
         lines.append(
             f"## {command} | cluster {'enabled' if cluster else 'off'} | tls {'enabled' if tls else 'off'}\n"
         )

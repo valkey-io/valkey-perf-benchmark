@@ -49,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential jq
+          sudo apt-get install -y build-essential
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
@@ -69,36 +69,24 @@ jobs:
         id: determine_commits
         working-directory: valkey
         run: |
-            # Convert completed_commits.json to newline-separated SHA list
-            jq -r '.[].sha' completed_commits.json > seen.txt || echo > seen.txt
-
-            to_benchmark=()
-
-            echo "Scanning commits from branch: $BRANCH"
-
-            echo "Most recent 10 commits from branch:"
-            git rev-list "$BRANCH" | head -n 10 || true 
-            
-            for sha in $(git rev-list unstable); do
-              echo "Checking commit: $sha"
-              grep -q "^$sha$" seen.txt || to_benchmark+=("$sha")
-              [[ ${#to_benchmark[@]} -ge $MAX_COMMITS ]] && break
-            done
-            echo "commit_ids=${to_benchmark[*]}" >> "$GITHUB_OUTPUT"
+          commits=$(python ../valkey-perf-benchmark/utils/workflow_commits.py \
+            determine \
+            --repo . \
+            --branch "$BRANCH" \
+            --completed-file completed_commits.json \
+            --max-commits "$MAX_COMMITS")
+          echo "commit_ids=$commits" >> "$GITHUB_OUTPUT"
 
       - name: Mark commits as in progress
         working-directory: valkey
         run: |
-          cp completed_commits.json temp.json 2>/dev/null || echo '[]' > temp.json
-          for sha in ${{ steps.determine_commits.outputs.commit_ids }}; do
-            ts=$(git show -s --format=%cI "$sha")
-            if jq -e '.[] | select(.sha=="'$sha'")' temp.json > /dev/null; then
-              jq 'map(if .sha=="'$sha'" then .status="in_progress" else . end)' temp.json > updated.json && mv updated.json temp.json
-            else
-              jq ". + [{\"sha\":\"$sha\",\"timestamp\":\"$ts\",\"status\":\"in_progress\"}]" temp.json > updated.json && mv updated.json temp.json
-            fi
-          done
-          mv temp.json completed_commits.json
+          COMMIT_IDS="${{ steps.determine_commits.outputs.commit_ids }}"
+          python ../valkey-perf-benchmark/utils/workflow_commits.py \
+            mark \
+            --repo . \
+            --completed-file completed_commits.json \
+            --status in_progress \
+            $COMMIT_IDS
           aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
   
       - name: benchmark_commits
@@ -109,7 +97,8 @@ jobs:
           # -- run benchmark
           python benchmark.py \
             --commits ${{ steps.determine_commits.outputs.commit_ids }} \
-            --config ./configs/benchmark-configs.json
+            --config ./configs/benchmark-configs.json \
+            --completed-file ../valkey/completed_commits.json
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -128,21 +117,11 @@ jobs:
               "s3://${{ secrets.AWS_S3_BUCKET }}/results/$sha/metrics.json"
           done
 
-      - name: Update completed_commits.json
+      - name: Upload updated completed_commits.json to S3
         working-directory: valkey
         run: |
-          cp completed_commits.json temp.json 2>/dev/null || echo '[]' > temp.json
-          for sha in ${{ steps.determine_commits.outputs.commit_ids }}; do
-            ts=$(git show -s --format=%cI "$sha")
-            if jq -e '.[] | select(.sha=="'$sha'")' temp.json > /dev/null; then
-              jq 'map(if .sha=="'$sha'" then .status="complete" else . end)' temp.json > updated.json && mv updated.json temp.json
-            else
-              jq ". + [{\"sha\":\"$sha\",\"timestamp\":\"$ts\",\"status\":\"complete\"}]" temp.json > updated.json && mv updated.json temp.json
-            fi
-          done
-
-          # Write back to completed_commits.json
-          mv temp.json completed_commits.json
-
-          # Upload updated completed_commits.json to S3
+          python ../valkey-perf-benchmark/utils/workflow_commits.py \
+            from-results \
+            --results-dir ../valkey-perf-benchmark/results \
+            --output completed_commits.json
           aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"

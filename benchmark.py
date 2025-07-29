@@ -104,6 +104,12 @@ def parse_args() -> argparse.Namespace:
             "If omitted the client is not pinned."
         ),
     )
+    parser.add_argument(
+        "--completed-file",
+        type=Path,
+        default="../valkey/completed_commits.json",
+        help="Path to completed_commits.json used for tracking progress",
+    )
 
     args, unknown = parser.parse_known_args()
     if unknown:
@@ -208,6 +214,19 @@ def run_benchmark_matrix(
 
         if not args.use_running_server:
             runner.cleanup_terminate()
+
+    # Mark commit as complete when done
+    try:
+        from utils.workflow_commits import mark_commits
+
+        mark_commits(
+            completed_file=Path(args.completed_file),
+            repo=Path(args.valkey_path),
+            shas=[commit_id],
+            status="complete",
+        )
+    except Exception as exc:
+        Logger.warning(f"Failed to update completed_commits.json: {exc}")
 
 
 # ---------- Entry point ------------------------------------------------------

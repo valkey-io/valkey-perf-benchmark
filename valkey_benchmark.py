@@ -17,8 +17,17 @@ VALKEY_BENCHMARK = "src/valkey-benchmark"
 # Supported Valkey benchmark commands
 READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"]
 WRITE_COMMANDS = [
-    "SET", "MSET", "INCR", "LPUSH", "RPUSH", "LPOP",
-    "RPOP", "SADD", "HSET", "ZADD", "XADD"
+    "SET",
+    "MSET",
+    "INCR",
+    "LPUSH",
+    "RPUSH",
+    "LPOP",
+    "RPOP",
+    "SADD",
+    "HSET",
+    "ZADD",
+    "XADD",
 ]
 
 # Map for read commands to populate equivalents
@@ -57,9 +66,12 @@ class ClientRunner:
 
         self.tls_cli_args = [
             "--tls",
-            "--cert", f"{valkey_path}/tests/tls/valkey.crt",
-            "--key", f"{valkey_path}/tests/tls/valkey.key",
-            "--cacert", f"{valkey_path}/tests/tls/ca.crt"
+            "--cert",
+            f"{valkey_path}/tests/tls/valkey.crt",
+            "--key",
+            f"{valkey_path}/tests/tls/valkey.key",
+            "--cacert",
+            f"{valkey_path}/tests/tls/ca.crt",
         ]
 
     def _create_client(self):
@@ -70,12 +82,14 @@ class ClientRunner:
             "decode_responses": True,
         }
         if self.tls_mode:
-            kwargs.update({
-                "ssl": True,
-                "ssl_certfile": f"{self.valkey_path}/tests/tls/valkey.crt",
-                "ssl_keyfile": f"{self.valkey_path}/tests/tls/valkey.key",
-                "ssl_ca_certs": f"{self.valkey_path}/tests/tls/ca.crt",
-            })
+            kwargs.update(
+                {
+                    "ssl": True,
+                    "ssl_certfile": f"{self.valkey_path}/tests/tls/valkey.crt",
+                    "ssl_keyfile": f"{self.valkey_path}/tests/tls/valkey.key",
+                    "ssl_ca_certs": f"{self.valkey_path}/tests/tls/ca.crt",
+                }
+            )
         return valkey.Valkey(**kwargs)
 
     def _run(self, cmd: Iterable[str]) -> None:
@@ -104,7 +118,9 @@ class ClientRunner:
         try:
             commit_time = subprocess.run(
                 ["git", "show", "-s", "--format=%cI", commit_id],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
                 cwd=self.valkey_path,
             )
             return commit_time.stdout.strip()
@@ -112,7 +128,9 @@ class ClientRunner:
             Logger.error(f"Failed to get commit time for {commit_id}: {e}")
             return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    def _populate_keyspace(self, read_command: str, requests: int, keyspacelen: int, data_size: int) -> None:
+    def _populate_keyspace(
+        self, read_command: str, requests: int, keyspacelen: int, data_size: int
+    ) -> None:
         """Populate keyspace for a read command using its write equivalent."""
         write_cmd = READ_POPULATE_MAP.get(read_command)
         if not write_cmd:
@@ -144,7 +162,9 @@ class ClientRunner:
         )
         metric_json = []
 
-        Logger.info(f"=== Starting benchmark: TLS={self.tls_mode}, Cluster={self.cluster_mode} ===")
+        Logger.info(
+            f"=== Starting benchmark: TLS={self.tls_mode}, Cluster={self.cluster_mode} ==="
+        )
 
         for (
             requests,
@@ -155,17 +175,23 @@ class ClientRunner:
             command,
             warmup,
         ) in self._generate_combinations():
-            
+
             if command not in READ_COMMANDS + WRITE_COMMANDS:
                 Logger.warning(f"Unsupported command: {command}, skipping.")
                 continue
-            
+
             if command in ["MSET", "MGET"] and self.cluster_mode:
-                Logger.warning(f"Command {command} not supported in cluster mode, skipping.")
+                Logger.warning(
+                    f"Command {command} not supported in cluster mode, skipping."
+                )
                 continue
 
-            Logger.info(f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients}")
-            Logger.info(f"requests={requests}, keyspacelen={keyspacelen}, warmup={warmup}")
+            Logger.info(
+                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients}"
+            )
+            Logger.info(
+                f"requests={requests}, keyspacelen={keyspacelen}, warmup={warmup}"
+            )
 
             # Populate keyspace if read command
             if command in READ_COMMANDS:
@@ -192,11 +218,11 @@ class ClientRunner:
                 client.close()
                 Logger.info(f"Starting warmup for {warmup}s...")
                 proc = subprocess.Popen(
-                            bench_cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                        )
+                    bench_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
                 time.sleep(warmup)
 
                 # Otherwise terminate as before
@@ -231,16 +257,17 @@ class ClientRunner:
 
     def _generate_combinations(self) -> List[tuple]:
         """Cartesian product of parameters within a single config item."""
-        return list(product(
-            self.config["requests"],
-            self.config["keyspacelen"],
-            self.config["data_sizes"],
-            self.config["pipelines"],
-            self.config["clients"],
-            self.config["commands"],
-            [self.config["warmup"]],
-        ))
-
+        return list(
+            product(
+                self.config["requests"],
+                self.config["keyspacelen"],
+                self.config["data_sizes"],
+                self.config["pipelines"],
+                self.config["clients"],
+                self.config["commands"],
+                [self.config["warmup"]],
+            )
+        )
 
     def _build_benchmark_command(
         self,
@@ -259,17 +286,17 @@ class ClientRunner:
         cmd.append(self.valkey_benchmark)
         if tls:
             cmd += self.tls_cli_args
-        cmd += ['-h', self.target_ip]
-        cmd += ['-p', '6379']
-        cmd += ['-n', str(requests)]
-        cmd += ['-r', str(keyspacelen)]
-        cmd += ['-d', str(data_size)]
-        cmd += ['-P', str(pipeline)]
-        cmd += ['-c', str(clients)]
-        cmd += ['-t', command]
-        cmd += ['--sequential']
-        cmd += ['--seed', str(seed_val)]
-        cmd += ['--csv']
+        cmd += ["-h", self.target_ip]
+        cmd += ["-p", "6379"]
+        cmd += ["-n", str(requests)]
+        cmd += ["-r", str(keyspacelen)]
+        cmd += ["-d", str(data_size)]
+        cmd += ["-P", str(pipeline)]
+        cmd += ["-c", str(clients)]
+        cmd += ["-t", command]
+        cmd += ["--sequential"]
+        cmd += ["--seed", str(seed_val)]
+        cmd += ["--csv"]
         return cmd
 
     def cleanup_terminate(self) -> None:
