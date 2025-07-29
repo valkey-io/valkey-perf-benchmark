@@ -87,34 +87,21 @@ class ServerLauncher:
         args = []
         # Add TLS args or standard port
         if tls_mode == "yes":
-            args += [
-                "--tls-port", "6379",
-                "--port", "0",
-                "--tls-cert-file",
-                f"{self.valkey_path}/tests/tls/valkey.crt",
-                "--tls-key-file",
-                f"{self.valkey_path}/tests/tls/valkey.key",
-                "--tls-ca-cert-file",
-                f"{self.valkey_path}/tests/tls/ca.crt",
-            ]
+            args += ['--tls-port', '6379']
+            args += ['--port', '0']
+            args += ['--tls-cert-file', f'{self.valkey_path}/tests/tls/valkey.crt']
+            args += ['--tls-key-file', f'{self.valkey_path}/tests/tls/valkey.key']
+            args += ['--tls-ca-cert-file', f'{self.valkey_path}/tests/tls/ca.crt']
         else:
             args += ["--port", "6379"]
 
         # Add common base server args
-        args += [
-            "--cluster-enabled",
-            cluster_mode,
-            "--daemonize",
-            "yes",
-            "--maxmemory-policy",
-            "allkeys-lru",
-            "--appendonly",
-            "no",
-            "--logfile",
-            log_file,
-            "--save",
-            "''",
-        ]
+        args += ["--cluster-enabled", cluster_mode]
+        args += ["--daemonize", "yes"]
+        args += ["--maxmemory-policy", "allkeys-lru"]
+        args += ["--appendonly", "no"]
+        args += ["--logfile", log_file]
+        args += ["--save", "''"]
 
         self._run(base + args)
         Logger.info(f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode}")

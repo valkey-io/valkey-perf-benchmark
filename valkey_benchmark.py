@@ -259,18 +259,17 @@ class ClientRunner:
         cmd.append(self.valkey_benchmark)
         if tls:
             cmd += self.tls_cli_args
-        cmd += [
-            "-h", self.target_ip, "-p", "6379",
-            "-n", str(requests),
-            "-r", str(keyspacelen),
-            "-d", str(data_size),
-            "-P", str(pipeline),
-            "-c", str(clients),
-            "-t", command,
-            "--sequential",
-            "--seed", str(seed_val),
-            "--csv"
-        ]
+        cmd += ['-h', self.target_ip]
+        cmd += ['-p', '6379']
+        cmd += ['-n', str(requests)]
+        cmd += ['-r', str(keyspacelen)]
+        cmd += ['-d', str(data_size)]
+        cmd += ['-P', str(pipeline)]
+        cmd += ['-c', str(clients)]
+        cmd += ['-t', command]
+        cmd += ['--sequential']
+        cmd += ['--seed', str(seed_val)]
+        cmd += ['--csv']
         return cmd
 
     def cleanup_terminate(self) -> None:
