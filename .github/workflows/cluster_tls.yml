@@ -25,6 +25,8 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
     - name: Run benchmark on TLS enabled clusters
       run: |

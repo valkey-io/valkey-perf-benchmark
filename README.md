@@ -137,7 +137,7 @@ results/
 
 Sample metrics.json
 
-```
+```json
 [
     {
         "timestamp": "2025-05-28T01:29:42+02:00",
@@ -158,6 +158,7 @@ Sample metrics.json
         "tls": false
     }
 ]
+```
 
 ## Dashboard Hosted on S3
 
