@@ -47,8 +47,8 @@ class ClientRunner:
         self,
         commit_id: str,
         config: dict,
-        cluster_mode: str,
-        tls_mode: str,
+        cluster_mode: bool,
+        tls_mode: bool,
         target_ip: str,
         results_dir: Path,
         valkey_path: str,
@@ -56,8 +56,8 @@ class ClientRunner:
     ) -> None:
         self.commit_id = commit_id
         self.config = config
-        self.cluster_mode = True if cluster_mode == "yes" else False
-        self.tls_mode = True if tls_mode == "yes" else False
+        self.cluster_mode = cluster_mode
+        self.tls_mode = tls_mode
         self.target_ip = target_ip
         self.results_dir = results_dir
         self.valkey_path = valkey_path

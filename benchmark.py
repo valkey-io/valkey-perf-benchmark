@@ -132,6 +132,8 @@ def load_configs(path: str) -> List[dict]:
         configs = json.load(fp)
     for c in configs:
         validate_config(c)
+        c["cluster_mode"] = parse_bool(c["cluster_mode"])
+        c["tls_mode"] = parse_bool(c["tls_mode"])
     return configs
 
 
@@ -167,6 +169,19 @@ def parse_core_range(range_str: str) -> List[int]:
     return [int(c) for c in range_str.split(",") if c]
 
 
+def parse_bool(value) -> bool:
+    """Return ``value`` converted to ``bool``.
+
+    Accepts booleans directly or common string representations like
+    ``"yes"``/``"no"``, "1"/"0" and ``"true"``/``"false"``.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("yes", "true", "1")
+    return bool(value)
+
+
 def run_benchmark_matrix(
     *, commit_id: str, cfg: dict, args: argparse.Namespace
 ) -> None:
@@ -196,8 +211,8 @@ def run_benchmark_matrix(
 
     logging.info(
         f"Commit {commit_id[:10]} | "
-        f"TLS={'on' if cfg['tls_mode'] == 'yes' else 'off'} | "
-        f"Cluster={'on' if cfg['cluster_mode'] == 'yes' else 'off'}"
+        f"TLS={'on' if cfg['tls_mode'] else 'off'} | "
+        f"Cluster={'on' if cfg['cluster_mode'] else 'off'}"
     )
     # ---- server section -----------------
     if (not args.use_running_server) and args.mode in ("server", "both"):

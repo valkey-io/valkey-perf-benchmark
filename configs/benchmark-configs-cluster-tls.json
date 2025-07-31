@@ -18,8 +18,8 @@
       "ZADD",
       "XADD"
     ],
-    "cluster_mode": "yes",
-    "tls_mode": "yes",
+    "cluster_mode": true,
+    "tls_mode": true,
     "warmup": 10
   }
 ]

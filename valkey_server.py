@@ -25,14 +25,14 @@ class ServerLauncher:
         self.valkey_server = f"{valkey_path}/{VALKEY_SERVER}"
         self.cores = cores
 
-    def _create_client(self, tls_mode: str):
+    def _create_client(self, tls_mode: bool):
         """Return a Valkey client for server management."""
         kwargs = {
             "host": "127.0.0.1",
             "port": 6379,
             "decode_responses": True,
         }
-        if tls_mode == "yes":
+        if tls_mode:
             kwargs.update(
                 {
                     "ssl": True,
@@ -43,10 +43,10 @@ class ServerLauncher:
             )
         return valkey.Valkey(**kwargs)
 
-    def launch(self, cluster_mode: str, tls_mode: str) -> None:
+    def launch(self, cluster_mode: bool, tls_mode: bool) -> None:
         """Launch Valkey server and setup cluster if needed."""
         self._launch_server(tls_mode=tls_mode, cluster_mode=cluster_mode)
-        if cluster_mode == "yes":
+        if cluster_mode:
             self._setup_cluster(tls_mode=tls_mode)
 
     def _run(self, command: Iterable[str], check: bool = True) -> None:
@@ -61,7 +61,7 @@ class ServerLauncher:
             logging.error(f"Unexpected error running command: {e}")
             raise
 
-    def _wait_for_server_ready(self, tls_mode: str, timeout: int = 15) -> None:
+    def _wait_for_server_ready(self, tls_mode: bool, timeout: int = 15) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
         logging.info("Waiting for Valkey server to be ready...")
         start = time.time()
@@ -78,9 +78,9 @@ class ServerLauncher:
         logging.error(f"Valkey server did not become ready within {timeout} seconds.")
         raise RuntimeError("Server failed to start in time.")
 
-    def _launch_server(self, tls_mode: str, cluster_mode: str) -> None:
+    def _launch_server(self, tls_mode: bool, cluster_mode: bool) -> None:
         """Start Valkey server."""
-        log_file = f"results/{self.commit_id}/valkey_log_cluster_{'enabled' if (cluster_mode == 'yes') else 'disabled'}.log"
+        log_file = f"results/{self.commit_id}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}.log"
 
         base = []
         if self.cores:
@@ -90,7 +90,7 @@ class ServerLauncher:
 
         args = []
         # Add TLS args or standard port
-        if tls_mode == "yes":
+        if tls_mode:
             args += ["--tls-port", "6379"]
             args += ["--port", "0"]
             args += ["--tls-cert-file", f"{self.valkey_path}/tests/tls/valkey.crt"]
@@ -100,7 +100,7 @@ class ServerLauncher:
             args += ["--port", "6379"]
 
         # Add common base server args
-        args += ["--cluster-enabled", cluster_mode]
+        args += ["--cluster-enabled", "yes" if cluster_mode else "no"]
         args += ["--daemonize", "yes"]
         args += ["--maxmemory-policy", "allkeys-lru"]
         args += ["--appendonly", "no"]
@@ -113,7 +113,7 @@ class ServerLauncher:
         )
         self._wait_for_server_ready(tls_mode=tls_mode)
 
-    def _setup_cluster(self, tls_mode: str) -> None:
+    def _setup_cluster(self, tls_mode: bool) -> None:
         """Setup cluster on single primary."""
         logging.info("Setting up cluster configuration...")
         client = self._create_client(tls_mode)

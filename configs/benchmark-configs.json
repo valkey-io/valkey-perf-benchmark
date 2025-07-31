@@ -18,8 +18,8 @@
       "LRANGE",
       "ZPOPMIN"
     ],
-    "cluster_mode": "no",
-    "tls_mode": "no",
+    "cluster_mode": false,
+    "tls_mode": false,
     "warmup": 10
   }
 ]
