@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from logger import Logger
+import logging
 
 
 class MetricsProcessor:
@@ -59,14 +59,14 @@ class MetricsProcessor:
         """
         lines = output.strip().split("\n")
         if len(lines) < 2:
-            Logger.warning("Unexpected CSV format in benchmark output.")
+            logging.warning("Unexpected CSV format in benchmark output.")
             return None
 
         labels = lines[0].replace('"', "").split(",")
         values = lines[1].replace('"', "").split(",")
 
         if len(values) != len(labels):
-            Logger.warning("Mismatch between CSV labels and values")
+            logging.warning("Mismatch between CSV labels and values")
             return None
 
         data = dict(zip(labels, values))
@@ -102,7 +102,7 @@ class MetricsProcessor:
                 with metrics_file.open("r", encoding="utf-8") as f:
                     metrics = json.load(f)
             except json.JSONDecodeError:
-                Logger.warning(
+                logging.warning(
                     f"Could not decode JSON from {metrics_file}, starting fresh."
                 )
 
@@ -112,4 +112,4 @@ class MetricsProcessor:
         with metrics_file.open("w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=4)
 
-        Logger.info(f"Metrics written to {metrics_file}")
+        logging.info(f"Metrics written to {metrics_file}")

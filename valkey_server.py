@@ -6,7 +6,7 @@ from typing import Iterable, Optional
 
 import valkey
 
-from logger import Logger
+import logging
 
 VALKEY_SERVER = "src/valkey-server"
 
@@ -51,31 +51,31 @@ class ServerLauncher:
 
     def _run(self, command: Iterable[str], check: bool = True) -> None:
         """Execute a command with optional check and fail loudly if needed."""
-        Logger.info(f"Running: {' '.join(command)}")
+        logging.info(f"Running: {' '.join(command)}")
         try:
             subprocess.run(command, check=check)
         except subprocess.CalledProcessError as e:
-            Logger.error(f"Command failed: {e}")
+            logging.error(f"Command failed: {e}")
             raise
         except Exception as e:
-            Logger.error(f"Unexpected error running command: {e}")
+            logging.error(f"Unexpected error running command: {e}")
             raise
 
     def _wait_for_server_ready(self, tls_mode: str, timeout: int = 15) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
-        Logger.info("Waiting for Valkey server to be ready...")
+        logging.info("Waiting for Valkey server to be ready...")
         start = time.time()
         while time.time() - start < timeout:
             try:
                 client = self._create_client(tls_mode)
                 client.ping()
                 client.close()
-                Logger.info("Valkey server is ready.")
+                logging.info("Valkey server is ready.")
                 return
             except Exception:
                 time.sleep(1)
 
-        Logger.error(f"Valkey server did not become ready within {timeout} seconds.")
+        logging.error(f"Valkey server did not become ready within {timeout} seconds.")
         raise RuntimeError("Server failed to start in time.")
 
     def _launch_server(self, tls_mode: str, cluster_mode: str) -> None:
@@ -108,14 +108,14 @@ class ServerLauncher:
         args += ["--save", "''"]
 
         self._run(base + args)
-        Logger.info(
+        logging.info(
             f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode}"
         )
         self._wait_for_server_ready(tls_mode=tls_mode)
 
     def _setup_cluster(self, tls_mode: str) -> None:
         """Setup cluster on single primary."""
-        Logger.info("Setting up cluster configuration...")
+        logging.info("Setting up cluster configuration...")
         client = self._create_client(tls_mode)
         for cmd in (
             ["CLUSTER", "RESET", "HARD"],

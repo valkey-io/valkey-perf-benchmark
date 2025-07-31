@@ -6,8 +6,9 @@ import json
 import logging
 from pathlib import Path
 from typing import List
+import sys
 
-from logger import Logger
+
 from valkey_build import ServerBuilder
 from valkey_server import ServerLauncher
 from valkey_benchmark import ClientRunner
@@ -141,6 +142,19 @@ def ensure_results_dir(root: Path, commit_id: str) -> Path:
     return d
 
 
+def init_logging(log_path: Path) -> None:
+    """Set up logging to both file and stdout/stderr."""
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, mode="w"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+
 def parse_core_range(range_str: str) -> List[int]:
     """Return a list of CPU cores from ``range_str``.
 
@@ -158,8 +172,8 @@ def run_benchmark_matrix(
 ) -> None:
     """Run benchmarks for all tls and cluster mode combinations."""
     results_dir = ensure_results_dir(args.results_dir, commit_id)
-    Logger.init_logging(results_dir / "logs.txt")
-    logging.getLogger().setLevel(args.log_level)
+    init_logging(results_dir / "logs.txt")
+    logging.info(f"Loaded config: {cfg}")
 
     server_core_range = None
     bench_core_range = None
@@ -178,9 +192,9 @@ def run_benchmark_matrix(
     if not args.use_running_server:
         builder.build()
     else:
-        Logger.info("Using pre-built Valkey instance.")
+        logging.info("Using pre-built Valkey instance.")
 
-    Logger.info(
+    logging.info(
         f"Commit {commit_id[:10]} | "
         f"TLS={'on' if cfg['tls_mode'] == 'yes' else 'off'} | "
         f"Cluster={'on' if cfg['cluster_mode'] == 'yes' else 'off'}"
@@ -226,7 +240,7 @@ def run_benchmark_matrix(
             status="complete",
         )
     except Exception as exc:
-        Logger.warning(f"Failed to update completed_commits.json: {exc}")
+        logging.warning(f"Failed to update completed_commits.json: {exc}")
 
 
 # ---------- Entry point ------------------------------------------------------
@@ -235,17 +249,17 @@ def main() -> None:
     args = parse_args()
 
     if args.use_running_server and args.mode in ("server", "both"):
-        Logger.error(
+        print(
             "ERROR: --use-running-server implies the valkey is already built and running, "
             "so --mode must be 'client'."
         )
+        sys.exit(1)
 
     commits = args.commits.copy()
     if args.baseline and args.baseline not in commits:
         commits.append(args.baseline)
 
     for cfg in load_configs(args.config):
-        Logger.info(f"Loaded config: {cfg}")
         for commit in commits:
             run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
 

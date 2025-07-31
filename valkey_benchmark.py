@@ -10,7 +10,7 @@ from typing import Iterable, List, Optional
 import valkey
 
 from process_metrics import MetricsProcessor
-from logger import Logger
+import logging
 
 VALKEY_BENCHMARK = "src/valkey-benchmark"
 
@@ -93,24 +93,24 @@ class ClientRunner:
         return valkey.Valkey(**kwargs)
 
     def _run(self, cmd: Iterable[str]) -> None:
-        Logger.info(f"Running: {' '.join(cmd)}")
+        logging.info(f"Running: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
 
     def wait_for_server_ready(self, timeout: int = 30) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
-        Logger.info("Waiting for Valkey server to be ready...")
+        logging.info("Waiting for Valkey server to be ready...")
         start = time.time()
         while time.time() - start < timeout:
             try:
                 client = self._create_client()
                 client.ping()
                 client.close()
-                Logger.info("Valkey server is ready.")
+                logging.info("Valkey server is ready.")
                 return
             except Exception:
                 time.sleep(1)
 
-        Logger.error(f"Valkey server did not become ready within {timeout} seconds.")
+        logging.error(f"Valkey server did not become ready within {timeout} seconds.")
         raise RuntimeError("Server failed to start in time.")
 
     def get_commit_time(self, commit_id: str) -> str:
@@ -125,7 +125,7 @@ class ClientRunner:
             )
             return commit_time.stdout.strip()
         except Exception as e:
-            Logger.error(f"Failed to get commit time for {commit_id}: {e}")
+            logging.warning(f"Failed to get commit time for {commit_id}: {e}")
             return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     def _populate_keyspace(
@@ -134,10 +134,10 @@ class ClientRunner:
         """Populate keyspace for a read command using its write equivalent."""
         write_cmd = READ_POPULATE_MAP.get(read_command)
         if not write_cmd:
-            Logger.info(f"No populate needed for {read_command}")
+            logging.info(f"No populate needed for {read_command}")
             return
 
-        Logger.info(f"Populating keyspace for {read_command} using {write_cmd}")
+        logging.info(f"Populating keyspace for {read_command} using {write_cmd}")
 
         seed_val = random.randint(0, 1000000)
         bench_cmd = self._build_benchmark_command(
@@ -152,7 +152,7 @@ class ClientRunner:
         )
 
         self._run(bench_cmd)
-        Logger.info(f"Keyspace populated for {read_command} with {requests} keys")
+        logging.info(f"Keyspace populated for {read_command} with {requests} keys")
 
     def run_benchmark_config(self) -> None:
         """Run benchmark for all config combinations."""
@@ -162,7 +162,7 @@ class ClientRunner:
         )
         metric_json = []
 
-        Logger.info(
+        logging.info(
             f"=== Starting benchmark: TLS={self.tls_mode}, Cluster={self.cluster_mode} ==="
         )
 
@@ -177,19 +177,19 @@ class ClientRunner:
         ) in self._generate_combinations():
 
             if command not in READ_COMMANDS + WRITE_COMMANDS:
-                Logger.warning(f"Unsupported command: {command}, skipping.")
+                logging.warning(f"Unsupported command: {command}, skipping.")
                 continue
 
             if command in ["MSET", "MGET"] and self.cluster_mode:
-                Logger.warning(
+                logging.warning(
                     f"Command {command} not supported in cluster mode, skipping."
                 )
                 continue
 
-            Logger.info(
+            logging.info(
                 f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients}"
             )
-            Logger.info(
+            logging.info(
                 f"requests={requests}, keyspacelen={keyspacelen}, warmup={warmup}"
             )
 
@@ -198,7 +198,7 @@ class ClientRunner:
                 self._populate_keyspace(command, requests, keyspacelen, data_size)
 
             seed_val = random.randint(0, 1000000)
-            Logger.info(f"Using seed value: {seed_val}")
+            logging.info(f"Using seed value: {seed_val}")
             bench_cmd = self._build_benchmark_command(
                 self.tls_mode,
                 requests,
@@ -212,11 +212,11 @@ class ClientRunner:
 
             # Warmup for write commands if needed
             if command in WRITE_COMMANDS and warmup:
-                Logger.info("Flushing keyspace before warmup...")
+                logging.info("Flushing keyspace before warmup...")
                 client = self._create_client()
                 client.execute_command("FLUSHALL", "SYNC")
                 client.close()
-                Logger.info(f"Starting warmup for {warmup}s...")
+                logging.info(f"Starting warmup for {warmup}s...")
                 proc = subprocess.Popen(
                     bench_cmd,
                     stdout=subprocess.PIPE,
@@ -228,14 +228,14 @@ class ClientRunner:
                 # Otherwise terminate as before
                 proc.terminate()
                 proc.wait(timeout=5)
-                Logger.info("Warmup phase complete.")
+                logging.info("Warmup phase complete.")
 
             # Run actual benchmark
-            Logger.info("Running main benchmark...")
+            logging.info("Running main benchmark...")
             proc = subprocess.run(bench_cmd, capture_output=True, text=True, check=True)
-            Logger.info(f"Benchmark output:\n{proc.stdout}")
+            logging.info(f"Benchmark output:\n{proc.stdout}")
             if proc.stderr:
-                Logger.warning(f"Benchmark stderr:\n{proc.stderr}")
+                logging.warning(f"Benchmark stderr:\n{proc.stderr}")
 
             metrics = metrics_processor.parse_csv_output(
                 proc.stdout,
@@ -246,11 +246,11 @@ class ClientRunner:
                 requests,
             )
             if metrics:
-                Logger.info(f"Parsed metrics: {metrics}")
+                logging.info(f"Parsed metrics: {metrics}")
                 metric_json.append(metrics)
 
         if not metric_json:
-            Logger.warning("No metrics collected, skipping write.")
+            logging.warning("No metrics collected, skipping write.")
             return
 
         metrics_processor.write_metrics(self.results_dir, metric_json)
@@ -300,11 +300,11 @@ class ClientRunner:
         return cmd
 
     def cleanup_terminate(self) -> None:
-        Logger.info("Cleaning up...")
+        logging.info("Cleaning up...")
         client = self._create_client()
         client.execute_command("FLUSHALL", "SYNC")
         client.close()
         self._run(["pkill", "-f", "valkey-server"])
         # Delete any .rdb files if present
-        Logger.info("Deleting any .rdb files...")
+        logging.info("Deleting any .rdb files...")
         self._run(["find", "-name", "*.rdb", "-delete"])
