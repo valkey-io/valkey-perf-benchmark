@@ -177,6 +177,7 @@ entries with the status `in_progress`.
 
 Open `dashboard/index.html` from your bucket to view the latest benchmark
 results. See `dashboard/README.md` for more details.
+
 ## License
 
-This project is licensed under the same license as Valkey.
+Please see the [LICENSE.md](./LICENSE.md)
