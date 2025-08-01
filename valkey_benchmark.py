@@ -63,16 +63,6 @@ class ClientRunner:
         self.valkey_path = valkey_path
         self.cores = cores
 
-        self.tls_cli_args = [
-            "--tls",
-            "--cert",
-            f"{valkey_path}/tests/tls/valkey.crt",
-            "--key",
-            f"{valkey_path}/tests/tls/valkey.key",
-            "--cacert",
-            f"{valkey_path}/tests/tls/ca.crt",
-        ]
-
     def _create_client(self):
         """Return a Valkey client configured for TLS or plain mode."""
         kwargs = {
@@ -212,10 +202,7 @@ class ClientRunner:
                 continue
 
             logging.info(
-                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients}"
-            )
-            logging.info(
-                f"requests={requests}, keyspacelen={keyspacelen}, warmup={warmup}"
+                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | requests={requests} | keyspacelen={keyspacelen} | warmup={warmup}"
             )
 
             seed_val = random.randint(0, 1000000)
@@ -244,7 +231,7 @@ class ClientRunner:
                 sequential=False,
             )
 
-            if command in READ_COMMANDS and warmup:
+            if warmup:
                 logging.info(f"Starting warmup for {warmup}s...")
                 proc = subprocess.Popen(
                     bench_cmd,
@@ -315,7 +302,10 @@ class ClientRunner:
             cmd += ["taskset", "-c", self.cores]
         cmd.append(VALKEY_BENCHMARK)
         if tls:
-            cmd += self.tls_cli_args
+            cmd += ["--tls"]
+            cmd += ["--cert", "./tests/tls/valkey.crt"]
+            cmd += ["--key", "./tests/tls/valkey.key"]
+            cmd += ["--cacert", "./tests/tls/ca.crt"]
         cmd += ["-h", self.target_ip]
         cmd += ["-p", "6379"]
         cmd += ["-n", str(requests)]
@@ -329,13 +319,3 @@ class ClientRunner:
         cmd += ["--seed", str(seed_val)]
         cmd += ["--csv"]
         return cmd
-
-    def cleanup_terminate(self) -> None:
-        logging.info("Cleaning up...")
-        client = self._create_client()
-        client.execute_command("FLUSHALL", "SYNC")
-        client.close()
-        self._run(["pkill", "-f", "valkey-server"])
-        # Delete any .rdb files if present
-        logging.info("Deleting any .rdb files...")
-        self._run(["find", "-name", "*.rdb", "-delete"])

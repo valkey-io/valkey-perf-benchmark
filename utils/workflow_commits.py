@@ -69,6 +69,11 @@ def mark_commits(
     """Update ``completed_file`` marking ``shas`` with the given ``status``."""
     commits = load_commits(completed_file)
     for sha in shas:
+        # Resolve HEAD to actual commit SHA
+        if sha == "HEAD":
+            sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
         ts = _git_commit_time(repo, sha)
         found = False
         for entry in commits:
@@ -79,6 +84,7 @@ def mark_commits(
                 break
         if not found:
             commits.append({"sha": sha, "timestamp": ts, "status": status})
+        print(f"Marked {sha} as {status} with timestamp {ts}")
     save_commits(completed_file, commits)
 
 

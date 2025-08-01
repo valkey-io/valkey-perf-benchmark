@@ -87,9 +87,9 @@ class ServerLauncher:
         if tls_mode:
             cmd += ["--tls-port", "6379"]
             cmd += ["--port", "0"]
-            cmd += ["--tls-cert-file", f"{self.valkey_path}/tests/tls/valkey.crt"]
-            cmd += ["--tls-key-file", f"{self.valkey_path}/tests/tls/valkey.key"]
-            cmd += ["--tls-ca-cert-file", f"{self.valkey_path}/tests/tls/ca.crt"]
+            cmd += ["--tls-cert-file", "./tests/tls/valkey.crt"]
+            cmd += ["--tls-key-file", "./tests/tls/valkey.key"]
+            cmd += ["--tls-ca-cert-file", "./tests/tls/ca.crt"]
         else:
             cmd += ["--port", "6379"]
 

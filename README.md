@@ -35,6 +35,11 @@ valkey-perf-benchmark/
 └── logger.py                 # Logging utilities
 ```
 
+Each benchmark run clones a fresh copy of the Valkey repository for the
+target commit. If ``--valkey-path`` is omitted, the repository is cloned into
+``valkey_<commit>`` and removed after the run to keep builds isolated and
+repeatable.
+
 ## Usage
 
 ### Basic Usage
@@ -57,6 +62,8 @@ python benchmark.py --commits 1a2b3c4d
 
 # Use a pre-existing Valkey dir
 python benchmark.py --valkey-path /path/to/valkey
+
+# Without --valkey-path a directory named valkey_<commit> is cloned and later removed
 
 # Use a pre-running Valkey Server
 python benchmark.py --valkey-path /path/to/valkey --use-running-server
