@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+from pathlib import Path
 from typing import Iterable, Optional
 
 import valkey
@@ -16,13 +17,12 @@ class ServerLauncher:
 
     def __init__(
         self,
-        commit_id: str,
+        results_dir: str,
         valkey_path: str = "../valkey",
         cores: Optional[str] = None,
     ) -> None:
-        self.commit_id = commit_id
+        self.results_dir = results_dir
         self.valkey_path = valkey_path
-        self.valkey_server = f"{valkey_path}/{VALKEY_SERVER}"
         self.cores = cores
 
     def _create_client(self, tls_mode: bool):
@@ -43,23 +43,19 @@ class ServerLauncher:
             )
         return valkey.Valkey(**kwargs)
 
-    def launch(self, cluster_mode: bool, tls_mode: bool) -> None:
-        """Launch Valkey server and setup cluster if needed."""
-        self._launch_server(tls_mode=tls_mode, cluster_mode=cluster_mode)
-        if cluster_mode:
-            self._setup_cluster(tls_mode=tls_mode)
-
-    def _run(self, command: Iterable[str], check: bool = True) -> None:
+    def _run(self, command: Iterable[str], cwd: Optional[Path] = None) -> None:
         """Execute a command with optional check and fail loudly if needed."""
-        logging.info(f"Running: {' '.join(command)}")
+        cmd_list = list(command)
+        cmd_str = " ".join(command)
+        logging.info(f"Running: {cmd_str}")
         try:
-            subprocess.run(command, check=check)
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Command failed: {e}")
-            raise
-        except Exception as e:
-            logging.error(f"Unexpected error running command: {e}")
-            raise
+            subprocess.run(cmd_list, check=True, cwd=cwd)
+        except subprocess.CalledProcessError:
+            logging.exception(
+                f"Command failed with CalledProcessError while running: {cmd_str}"
+            )
+        except Exception:
+            logging.exception(f"Unexpected error while running: {cmd_str}")
 
     def _wait_for_server_ready(self, tls_mode: bool, timeout: int = 15) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
@@ -80,34 +76,32 @@ class ServerLauncher:
 
     def _launch_server(self, tls_mode: bool, cluster_mode: bool) -> None:
         """Start Valkey server."""
-        log_file = f"results/{self.commit_id}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}.log"
+        log_file = f"{Path.cwd()}/{self.results_dir}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}_tls_{'enabled' if tls_mode else 'disabled'}.log"
 
-        base = []
+        cmd = []
         if self.cores:
-            base += ["taskset", "-c", self.cores]
+            cmd += ["taskset", "-c", self.cores]
 
-        base.append(self.valkey_server)
-
-        args = []
-        # Add TLS args or standard port
+        cmd.append(VALKEY_SERVER)
+        # Add TLS args or standard port args
         if tls_mode:
-            args += ["--tls-port", "6379"]
-            args += ["--port", "0"]
-            args += ["--tls-cert-file", f"{self.valkey_path}/tests/tls/valkey.crt"]
-            args += ["--tls-key-file", f"{self.valkey_path}/tests/tls/valkey.key"]
-            args += ["--tls-ca-cert-file", f"{self.valkey_path}/tests/tls/ca.crt"]
+            cmd += ["--tls-port", "6379"]
+            cmd += ["--port", "0"]
+            cmd += ["--tls-cert-file", f"{self.valkey_path}/tests/tls/valkey.crt"]
+            cmd += ["--tls-key-file", f"{self.valkey_path}/tests/tls/valkey.key"]
+            cmd += ["--tls-ca-cert-file", f"{self.valkey_path}/tests/tls/ca.crt"]
         else:
-            args += ["--port", "6379"]
+            cmd += ["--port", "6379"]
 
         # Add common base server args
-        args += ["--cluster-enabled", "yes" if cluster_mode else "no"]
-        args += ["--daemonize", "yes"]
-        args += ["--maxmemory-policy", "allkeys-lru"]
-        args += ["--appendonly", "no"]
-        args += ["--logfile", log_file]
-        args += ["--save", "''"]
+        cmd += ["--cluster-enabled", "yes" if cluster_mode else "no"]
+        cmd += ["--daemonize", "yes"]
+        cmd += ["--maxmemory-policy", "allkeys-lru"]
+        cmd += ["--appendonly", "no"]
+        cmd += ["--logfile", log_file]
+        cmd += ["--save", "''"]
 
-        self._run(base + args)
+        self._run(cmd, cwd=self.valkey_path)
         logging.info(
             f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode}"
         )
@@ -117,9 +111,12 @@ class ServerLauncher:
         """Setup cluster on single primary."""
         logging.info("Setting up cluster configuration...")
         client = self._create_client(tls_mode)
-        for cmd in (
-            ["CLUSTER", "RESET", "HARD"],
-            ["CLUSTER", "ADDSLOTSRANGE", "0", "16383"],
-        ):
-            client.execute_command(*cmd)
+        cmd = ["CLUSTER", "ADDSLOTSRANGE", "0", "16383"]
+        client.execute_command(cmd)
         client.close()
+
+    def launch(self, cluster_mode: bool, tls_mode: bool) -> None:
+        """Launch Valkey server and setup cluster if needed."""
+        self._launch_server(tls_mode=tls_mode, cluster_mode=cluster_mode)
+        if cluster_mode:
+            self._setup_cluster(tls_mode=tls_mode)

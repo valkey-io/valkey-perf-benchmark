@@ -118,6 +118,14 @@ Example:
 | `tls_mode` | Whether to enable TLS | String ("yes"/"no") | No |
 | `warmup` | Warmup time in seconds before benchmarking | Integer | No |
 
+When `warmup` is provided for read commands, the benchmark performs three
+stages:
+1. A data injection pass using the corresponding write command with
+   `--sequential` to seed the keyspace.
+2. A warmup run of the read command (without `--sequential`) for the specified
+   duration.
+3. The main benchmark run of the read command.
+
 Supported commands:
 ```
 "SET", "GET", "RPUSH", "LPUSH", "LPOP", "SADD", "SPOP", "HSET", "GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"

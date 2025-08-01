@@ -19,16 +19,18 @@ class ServerBuilder:
         self.valkey_dir = Path(valkey_path)
 
     def _run(self, command: Iterable[str], cwd: Optional[Path] = None) -> None:
+        """Execute a command with optional check and fail loudly if needed."""
         cmd_list = list(command)
-        logging.info(f"Running: {' '.join(cmd_list)}")
+        cmd_str = " ".join(command)
+        logging.info(f"Running: {cmd_str}")
         try:
             subprocess.run(cmd_list, check=True, cwd=cwd)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Command '{' '.join(cmd_list)}' failed with exit code {e.returncode}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(f"Error running {' '.join(cmd_list)}: {e}") from e
+        except subprocess.CalledProcessError:
+            logging.exception(
+                f"Command failed with CalledProcessError while running: {cmd_str}"
+            )
+        except Exception:
+            logging.exception(f"Unexpected error while running: {cmd_str}")
 
     def clone_and_checkout(self) -> None:
         if not self.valkey_dir.exists():

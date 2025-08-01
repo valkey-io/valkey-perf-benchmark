@@ -217,7 +217,7 @@ def run_benchmark_matrix(
     # ---- server section -----------------
     if (not args.use_running_server) and args.mode in ("server", "both"):
         launcher = ServerLauncher(
-            commit_id=commit_id,
+            results_dir=results_dir,
             valkey_path=args.valkey_path,
             cores=server_core_range,
         )

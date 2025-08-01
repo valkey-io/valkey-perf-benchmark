@@ -61,7 +61,6 @@ class ClientRunner:
         self.target_ip = target_ip
         self.results_dir = results_dir
         self.valkey_path = valkey_path
-        self.valkey_benchmark = f"{valkey_path}/{VALKEY_BENCHMARK}"
         self.cores = cores
 
         self.tls_cli_args = [
@@ -92,13 +91,34 @@ class ClientRunner:
             )
         return valkey.Valkey(**kwargs)
 
-    def _run(self, cmd: Iterable[str]) -> None:
-        logging.info(f"Running: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
+    def _run(
+        self,
+        command: Iterable[str],
+        cwd: Optional[Path] = None,
+        capture_output: bool = False,
+        text: bool = True,
+    ) -> Optional[subprocess.CompletedProcess]:
+        """Execute a command, optionally capture output, and raise on error."""
+        cmd_list = list(command)
+        cmd_str = " ".join(cmd_list)
+        logging.info(f"Running: {cmd_str}")
+        try:
+            result = subprocess.run(
+                cmd_list, cwd=cwd, capture_output=capture_output, text=text, check=True
+            )
+            return result if capture_output else None
+        except subprocess.CalledProcessError:
+            logging.exception(
+                f"Command failed with CalledProcessError while running: {cmd_str}"
+            )
+        except Exception:
+            logging.exception(f"Unexpected error while running: {cmd_str}")
 
     def wait_for_server_ready(self, timeout: int = 30) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
-        logging.info("Waiting for Valkey server to be ready...")
+        logging.info(
+            "Waiting for Valkey server to be ready from the benchmark client..."
+        )
         start = time.time()
         while time.time() - start < timeout:
             try:
@@ -114,22 +134,27 @@ class ClientRunner:
         raise RuntimeError("Server failed to start in time.")
 
     def get_commit_time(self, commit_id: str) -> str:
-        """Return ISO8601 timestamp for a commit."""
+        """Return timestamp for a commit."""
         try:
-            commit_time = subprocess.run(
+            commit_time = self._run(
                 ["git", "show", "-s", "--format=%cI", commit_id],
-                capture_output=True,
-                text=True,
-                check=True,
                 cwd=self.valkey_path,
+                capture_output=True,
             )
             return commit_time.stdout.strip()
         except Exception as e:
-            logging.warning(f"Failed to get commit time for {commit_id}: {e}")
-            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            logging.exception(f"Failed to get commit time for {commit_id}: {e}")
+            raise
 
     def _populate_keyspace(
-        self, read_command: str, requests: int, keyspacelen: int, data_size: int
+        self,
+        read_command: str,
+        requests: int,
+        keyspacelen: int,
+        data_size: int,
+        pipeline: int,
+        clients: int,
+        seed_val: int,
     ) -> None:
         """Populate keyspace for a read command using its write equivalent."""
         write_cmd = READ_POPULATE_MAP.get(read_command)
@@ -139,19 +164,19 @@ class ClientRunner:
 
         logging.info(f"Populating keyspace for {read_command} using {write_cmd}")
 
-        seed_val = random.randint(0, 1000000)
         bench_cmd = self._build_benchmark_command(
             tls=self.tls_mode,
             requests=requests,
             keyspacelen=keyspacelen,
             data_size=data_size,
-            pipeline=1,
-            clients=1,
+            pipeline=pipeline,
+            clients=clients,
             command=write_cmd,
             seed_val=seed_val,
+            sequential=True,
         )
 
-        self._run(bench_cmd)
+        self._run(command=bench_cmd, cwd=self.valkey_path)
         logging.info(f"Keyspace populated for {read_command} with {requests} keys")
 
     def run_benchmark_config(self) -> None:
@@ -193,12 +218,20 @@ class ClientRunner:
                 f"requests={requests}, keyspacelen={keyspacelen}, warmup={warmup}"
             )
 
-            # Populate keyspace if read command
-            if command in READ_COMMANDS:
-                self._populate_keyspace(command, requests, keyspacelen, data_size)
-
             seed_val = random.randint(0, 1000000)
             logging.info(f"Using seed value: {seed_val}")
+
+            # Data injection for read commands
+            if command in READ_COMMANDS:
+                self._populate_keyspace(
+                    command,
+                    requests,
+                    keyspacelen,
+                    data_size,
+                    pipeline,
+                    clients,
+                    seed_val,
+                )
             bench_cmd = self._build_benchmark_command(
                 self.tls_mode,
                 requests,
@@ -208,31 +241,26 @@ class ClientRunner:
                 clients,
                 command,
                 seed_val,
+                sequential=False,
             )
 
-            # Warmup for write commands if needed
-            if command in WRITE_COMMANDS and warmup:
-                logging.info("Flushing keyspace before warmup...")
-                client = self._create_client()
-                client.execute_command("FLUSHALL", "SYNC")
-                client.close()
+            if command in READ_COMMANDS and warmup:
                 logging.info(f"Starting warmup for {warmup}s...")
                 proc = subprocess.Popen(
                     bench_cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    cwd=self.valkey_path,
                 )
                 time.sleep(warmup)
-
-                # Otherwise terminate as before
                 proc.terminate()
                 proc.wait(timeout=5)
                 logging.info("Warmup phase complete.")
 
             # Run actual benchmark
-            logging.info("Running main benchmark...")
-            proc = subprocess.run(bench_cmd, capture_output=True, text=True, check=True)
+            logging.info("Running main benchmark command")
+            proc = self._run(bench_cmd, cwd=self.valkey_path, capture_output=True)
             logging.info(f"Benchmark output:\n{proc.stdout}")
             if proc.stderr:
                 logging.warning(f"Benchmark stderr:\n{proc.stderr}")
@@ -279,11 +307,13 @@ class ClientRunner:
         clients: int,
         command: str,
         seed_val: int,
+        *,
+        sequential: bool = True,
     ) -> List[str]:
         cmd = []
         if self.cores:
             cmd += ["taskset", "-c", self.cores]
-        cmd.append(self.valkey_benchmark)
+        cmd.append(VALKEY_BENCHMARK)
         if tls:
             cmd += self.tls_cli_args
         cmd += ["-h", self.target_ip]
@@ -294,7 +324,8 @@ class ClientRunner:
         cmd += ["-P", str(pipeline)]
         cmd += ["-c", str(clients)]
         cmd += ["-t", command]
-        cmd += ["--sequential"]
+        if sequential:
+            cmd += ["--sequential"]
         cmd += ["--seed", str(seed_val)]
         cmd += ["--csv"]
         return cmd
