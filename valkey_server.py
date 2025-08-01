@@ -111,8 +111,7 @@ class ServerLauncher:
         """Setup cluster on single primary."""
         logging.info("Setting up cluster configuration...")
         client = self._create_client(tls_mode)
-        cmd = ["CLUSTER", "ADDSLOTSRANGE", "0", "16383"]
-        client.execute_command(cmd)
+        client.execute_command("CLUSTER", "ADDSLOTSRANGE", "0", "16383")
         client.close()
 
     def launch(self, cluster_mode: bool, tls_mode: bool) -> None:
