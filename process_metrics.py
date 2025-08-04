@@ -57,59 +57,99 @@ class MetricsProcessor:
         requests : int
             Total number of requests issued.
         """
-        lines = output.strip().split("\n")
-        if len(lines) < 2:
-            logging.warning("Unexpected CSV format in benchmark output.")
+        if not output or not output.strip():
+            logging.warning("Empty benchmark output received")
             return None
+            
+        try:
+            lines = output.strip().split("\n")
+            if len(lines) < 2:
+                logging.warning(f"Unexpected CSV format in benchmark output: {output}")
+                return None
 
-        labels = lines[0].replace('"', "").split(",")
-        values = lines[1].replace('"', "").split(",")
+            labels = [label.strip().replace('"', '') for label in lines[0].split(",")]
+            values = [value.strip().replace('"', '') for value in lines[1].split(",")]
 
-        if len(values) != len(labels):
-            logging.warning("Mismatch between CSV labels and values")
+            if len(values) != len(labels):
+                logging.warning(f"Mismatch between CSV labels ({len(labels)}) and values ({len(values)})")
+                logging.debug(f"Labels: {labels}")
+                logging.debug(f"Values: {values}")
+                return None
+
+            data = dict(zip(labels, values))
+
+            # Helper function to safely convert to float
+            def safe_float(value, default=0.0):
+                try:
+                    return float(value) if value else default
+                except (ValueError, TypeError):
+                    logging.warning(f"Could not convert '{value}' to float, using {default}")
+                    return default
+
+            return {
+                "timestamp": self.commit_time,
+                "commit": self.commit_id,
+                "command": command,
+                "data_size": int(data_size),
+                "pipeline": int(pipeline),
+                "clients": int(clients),
+                "requests": int(requests),
+                "rps": safe_float(data.get("rps")),
+                "avg_latency_ms": safe_float(data.get("avg_latency_ms")),
+                "min_latency_ms": safe_float(data.get("min_latency_ms")),
+                "p50_latency_ms": safe_float(data.get("p50_latency_ms")),
+                "p95_latency_ms": safe_float(data.get("p95_latency_ms")),
+                "p99_latency_ms": safe_float(data.get("p99_latency_ms")),
+                "max_latency_ms": safe_float(data.get("max_latency_ms")),
+                "cluster_mode": self.cluster_mode,
+                "tls": self.tls_mode,
+            }
+        except Exception:
+            logging.exception(f"Error parsing CSV output")
+            logging.debug(f"Raw output: {output}")
             return None
-
-        data = dict(zip(labels, values))
-
-        return {
-            "timestamp": self.commit_time,
-            "commit": self.commit_id,
-            "command": command,
-            "data_size": int(data_size),
-            "pipeline": int(pipeline),
-            "clients": int(clients),
-            "requests": int(requests),
-            "rps": float(data.get("rps", 0)),
-            "avg_latency_ms": float(data.get("avg_latency_ms", 0)),
-            "min_latency_ms": float(data.get("min_latency_ms", 0)),
-            "p50_latency_ms": float(data.get("p50_latency_ms", 0)),
-            "p95_latency_ms": float(data.get("p95_latency_ms", 0)),
-            "p99_latency_ms": float(data.get("p99_latency_ms", 0)),
-            "max_latency_ms": float(data.get("max_latency_ms", 0)),
-            "cluster_mode": self.cluster_mode,
-            "tls": self.tls_mode,
-        }
 
     def write_metrics(
         self, results_dir: Path, new_metrics: List[Dict[str, object]]
     ) -> None:
         """Append metrics to ``results_dir/metrics.json``."""
+        if not new_metrics:
+            logging.warning("No metrics to write")
+            return
+            
         metrics_file = results_dir / "metrics.json"
         metrics = []
 
+        # Ensure results directory exists
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load existing metrics if file exists
         if metrics_file.exists() and metrics_file.stat().st_size > 0:
             try:
                 with metrics_file.open("r", encoding="utf-8") as f:
                     metrics = json.load(f)
-            except json.JSONDecodeError:
-                logging.warning(
-                    f"Could not decode JSON from {metrics_file}, starting fresh."
-                )
+                if not isinstance(metrics, list):
+                    logging.warning(f"Existing metrics file contains non-list data, starting fresh")
+                    metrics = []
+            except json.JSONDecodeError as e:
+                logging.warning(f"Could not decode JSON from {metrics_file}: {e}, starting fresh.")
+                metrics = []
+            except Exception as e:
+                logging.error(f"Error reading existing metrics file: {e}")
+                raise
 
-        # Extend metrics with new_metrics as it's a list.
+        # Extend metrics with new_metrics
         metrics.extend(new_metrics)
 
-        with metrics_file.open("w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=4)
-
-        logging.info(f"Metrics written to {metrics_file}")
+        # Write metrics with atomic operation
+        temp_file = metrics_file.with_suffix('.tmp')
+        try:
+            with temp_file.open("w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=4, ensure_ascii=False)
+            temp_file.replace(metrics_file)
+            logging.info(f"Successfully wrote {len(new_metrics)} metrics to {metrics_file}")
+        except Exception as e:
+            logging.error(f"Error writing metrics to {metrics_file}: {e}")
+            if temp_file.exists():
+                temp_file.unlink()
+            raise

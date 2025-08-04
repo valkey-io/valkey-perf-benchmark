@@ -1,8 +1,10 @@
 """Client-side benchmark execution logic."""
 
+import logging
 import random
 import subprocess
 import time
+from contextlib import contextmanager
 from itertools import product
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -10,9 +12,11 @@ from typing import Iterable, List, Optional
 import valkey
 
 from process_metrics import MetricsProcessor
-import logging
 
+# Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
+DEFAULT_PORT = 6379
+DEFAULT_TIMEOUT = 30
 
 # Supported Valkey benchmark commands
 READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"]
@@ -63,23 +67,43 @@ class ClientRunner:
         self.valkey_path = valkey_path
         self.cores = cores
 
-    def _create_client(self):
+    def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
         kwargs = {
             "host": self.target_ip,
-            "port": 6379,
+            "port": DEFAULT_PORT,
             "decode_responses": True,
+            "socket_timeout": 10,
+            "socket_connect_timeout": 10,
         }
         if self.tls_mode:
+            tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
+            if not tls_cert_path.exists():
+                raise FileNotFoundError(f"TLS certificates not found at {tls_cert_path}")
+            
             kwargs.update(
                 {
                     "ssl": True,
-                    "ssl_certfile": f"{self.valkey_path}/tests/tls/valkey.crt",
-                    "ssl_keyfile": f"{self.valkey_path}/tests/tls/valkey.key",
-                    "ssl_ca_certs": f"{self.valkey_path}/tests/tls/ca.crt",
+                    "ssl_certfile": str(tls_cert_path / "valkey.crt"),
+                    "ssl_keyfile": str(tls_cert_path / "valkey.key"),
+                    "ssl_ca_certs": str(tls_cert_path / "ca.crt"),
                 }
             )
         return valkey.Valkey(**kwargs)
+
+    @contextmanager
+    def _client_context(self):
+        """Context manager for Valkey client connections."""
+        client = None
+        try:
+            client = self._create_client()
+            yield client
+        finally:
+            if client:
+                try:
+                    client.close()
+                except Exception as e:
+                    logging.warning(f"Error closing client connection: {e}")
 
     def _run(
         self,
@@ -87,41 +111,59 @@ class ClientRunner:
         cwd: Optional[Path] = None,
         capture_output: bool = False,
         text: bool = True,
+        timeout: int = 300,
     ) -> Optional[subprocess.CompletedProcess]:
-        """Execute a command, optionally capture output, and raise on error."""
+        """Execute a command with proper error handling and timeout."""
         cmd_list = list(command)
         cmd_str = " ".join(cmd_list)
         logging.info(f"Running: {cmd_str}")
+        
         try:
             result = subprocess.run(
-                cmd_list, cwd=cwd, capture_output=capture_output, text=text, check=True
+                cmd_list, 
+                cwd=cwd, 
+                capture_output=capture_output, 
+                text=text, 
+                check=True,
+                timeout=timeout
             )
+            if result and result.stderr:
+                logging.warning(f"Command stderr: {result.stderr}")
             return result if capture_output else None
-        except subprocess.CalledProcessError:
-            logging.exception(
-                f"Command failed with CalledProcessError while running: {cmd_str}"
-            )
-        except Exception:
-            logging.exception(f"Unexpected error while running: {cmd_str}")
+        except subprocess.TimeoutExpired as e:
+            logging.error(f"Command timed out after {timeout}s: {cmd_str}")
+            raise RuntimeError(f"Command timed out: {cmd_str}") from e
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Command failed with exit code {e.returncode}: {cmd_str}")
+            if e.stderr:
+                logging.error(f"Command stderr: {e.stderr}")
+            raise RuntimeError(f"Command failed: {cmd_str}") from e
+        except Exception as e:
+            logging.error(f"Unexpected error while running: {cmd_str}")
+            raise RuntimeError(f"Unexpected error: {cmd_str}") from e
 
-    def wait_for_server_ready(self, timeout: int = 30) -> None:
+    def wait_for_server_ready(self, timeout: int = DEFAULT_TIMEOUT) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
         logging.info(
             "Waiting for Valkey server to be ready from the benchmark client..."
         )
         start = time.time()
+        last_error = None
+        
         while time.time() - start < timeout:
             try:
-                client = self._create_client()
-                client.ping()
-                client.close()
-                logging.info("Valkey server is ready.")
-                return
-            except Exception:
+                with self._client_context() as client:
+                    client.ping()
+                    logging.info("Valkey server is ready.")
+                    return
+            except Exception as e:
+                last_error = e
                 time.sleep(1)
 
         logging.error(f"Valkey server did not become ready within {timeout} seconds.")
-        raise RuntimeError("Server failed to start in time.")
+        if last_error:
+            logging.error(f"Last connection error: {last_error}")
+        raise RuntimeError(f"Server failed to start in time. Last error: {last_error}")
 
     def get_commit_time(self, commit_id: str) -> str:
         """Return timestamp for a commit."""

@@ -120,11 +120,34 @@ def parse_args() -> argparse.Namespace:
 
 
 # ---------- Helpers ----------------------------------------------------------
+
 def validate_config(cfg: dict) -> None:
-    """Ensure all required keys exist in ``cfg``."""
+    """Ensure all required keys exist and have valid values in ``cfg``."""
     for k in REQUIRED_KEYS:
         if k not in cfg:
             raise ValueError(f"Missing required config key: {k}")
+    
+    # Validate data types and ranges
+    if not isinstance(cfg["requests"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["requests"]):
+        raise ValueError("'requests' must be a list of positive integers")
+    
+    if not isinstance(cfg["keyspacelen"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["keyspacelen"]):
+        raise ValueError("'keyspacelen' must be a list of positive integers")
+    
+    if not isinstance(cfg["data_sizes"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["data_sizes"]):
+        raise ValueError("'data_sizes' must be a list of positive integers")
+    
+    if not isinstance(cfg["pipelines"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["pipelines"]):
+        raise ValueError("'pipelines' must be a list of positive integers")
+    
+    if not isinstance(cfg["clients"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["clients"]):
+        raise ValueError("'clients' must be a list of positive integers")
+    
+    if not isinstance(cfg["commands"], list) or not cfg["commands"] or not all(isinstance(x, str) and x.strip() for x in cfg["commands"]):
+        raise ValueError("'commands' must be a non-empty list of non-empty strings")
+    
+    if not isinstance(cfg["warmup"], int) or cfg["warmup"] < 0:
+        raise ValueError("'warmup' must be a non-negative integer")
 
 
 def load_configs(path: str) -> List[dict]:
@@ -164,10 +187,27 @@ def parse_core_range(range_str: str) -> List[int]:
     ``range_str`` can be a simple range like ``"0-3"`` or a comma separated
     list such as ``"0,2,4"``.
     """
-    if "-" in range_str:
-        start, end = range_str.split("-", 1)
-        return list(range(int(start), int(end) + 1))
-    return [int(c) for c in range_str.split(",") if c]
+    if not range_str or not isinstance(range_str, str):
+        raise ValueError("Core range must be a non-empty string")
+    
+    try:
+        if "-" in range_str:
+            parts = range_str.split("-")
+            if len(parts) != 2:
+                raise ValueError("Range format should be 'start-end'")
+            start, end = int(parts[0]), int(parts[1])
+            if start < 0 or end < 0 or start > end:
+                raise ValueError("Invalid core range values")
+            return list(range(start, end + 1))
+        else:
+            cores = [int(c.strip()) for c in range_str.split(",") if c.strip()]
+            if not cores or any(c < 0 for c in cores):
+                raise ValueError("Core numbers must be non-negative")
+            return cores
+    except ValueError as e:
+        if "invalid literal" in str(e):
+            raise ValueError(f"Invalid core range format: {range_str}")
+        raise
 
 
 def parse_bool(value) -> bool:
