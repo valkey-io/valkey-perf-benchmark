@@ -210,7 +210,7 @@ class ClientRunner:
             sequential=True,
         )
 
-        self._run(command=bench_cmd, cwd=self.valkey_path)
+        self._run(command=bench_cmd, cwd=self.valkey_path, timeout=None)
         logging.info(f"Keyspace populated for {read_command} with {requests} keys")
 
     def run_benchmark_config(self) -> None:
@@ -291,7 +291,7 @@ class ClientRunner:
 
             # Run actual benchmark
             logging.info("Running main benchmark command")
-            proc = self._run(bench_cmd, cwd=self.valkey_path, capture_output=True)
+            proc = self._run(bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None)
             logging.info(f"Benchmark output:\n{proc.stdout}")
             if proc.stderr:
                 logging.warning(f"Benchmark stderr:\n{proc.stderr}")

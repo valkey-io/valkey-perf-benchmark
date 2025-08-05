@@ -1,2 +1,24 @@
+# Python
 *.pyc
-results
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Runtime files - automatically created during benchmarking
+results/
+completed_commits.json

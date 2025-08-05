@@ -11,6 +11,9 @@ A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valk
 - Detailed performance metrics collection and reporting
 - Compare performance between different Valkey versions/commits
 - Optional CPU pinning via `taskset` using `--server-cpu-range` and `--client-cpu-range`
+- Continuous benchmarking via GitHub Actions workflow
+- Automated commit tracking and progress management
+- S3 integration for storing results and hosting dashboard
 
 ## Prerequisites
 
@@ -24,15 +27,29 @@ A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valk
 
 ```
 valkey-perf-benchmark/
+├── .github/workflows/        # GitHub Actions workflows
+│   ├── valkey_benchmark.yml  # Continuous benchmarking workflow
+│   ├── dashboard_sync.yml    # Dashboard deployment to S3
+│   ├── basic.yml            # Basic validation tests
+│   ├── check_format.yml     # Code formatting checks
+│   └── cluster_tls.yml      # Cluster and TLS specific tests
 ├── configs/                  # Benchmark configuration files
-│   └── benchmark-configs.json
-├── results/                  # Benchmark results stored here
-├── benchmark.py              # Main entry point
-├── valkey_build.py           # Handles building Valkey from source
-├── valkey_server.py          # Manages Valkey server instances
-├── valkey_benchmark.py       # Runs benchmark tests
-├── process_metrics.py        # Processes and formats benchmark results
-└── logger.py                 # Logging utilities
+│   ├── benchmark-configs.json
+│   └── benchmark-configs-cluster-tls.json
+├── dashboard/               # Web dashboard for visualizing results
+│   ├── index.html
+│   ├── app.js
+│   └── README.md
+├── results/                 # Benchmark results stored here
+├── utils/                   # Utility scripts
+│   ├── workflow_commits.py  # Commit tracking and management
+│   └── compare_benchmark_results.py  # Result comparison utilities
+├── benchmark.py             # Main entry point
+├── valkey_build.py          # Handles building Valkey from source
+├── valkey_server.py         # Manages Valkey server instances
+├── valkey_benchmark.py      # Runs benchmark tests
+├── process_metrics.py       # Processes and formats benchmark results
+└── requirements.txt         # Python dependencies
 ```
 
 Each benchmark run clones a fresh copy of the Valkey repository for the
@@ -88,6 +105,9 @@ python benchmark.py --log-level DEBUG
 
 # Pin server and client processes to different CPUs
 python benchmark.py --server-cpu-range 0-1 --client-cpu-range 2-3
+
+# Specify custom completed commits file location
+python benchmark.py --completed-file ./my-completed-commits.json
 ```
 
 ## Configuration
@@ -175,23 +195,91 @@ Sample metrics.json
 ]
 ```
 
-## Dashboard Hosted on S3
+## Continuous Benchmarking & CI/CD
 
-The `dashboard/` directory contains a small JavaScript application for visualizing
-benchmark metrics. Changes to this directory trigger the `dashboard_sync.yml`
-workflow which uploads the files to an Amazon S3 bucket configured for static
-website hosting. Metrics files (`completed_commits.json` and the `results/`
-folder) are stored in the same bucket so the dashboard can fetch them directly.
-`completed_commits.json` now stores objects containing the commit SHA, the
-original commit timestamp, and the benchmark status. The dashboard ignores
-entries with the status `in_progress`.
+### GitHub Actions Workflows
+
+The project includes several GitHub Actions workflows for automated testing and deployment:
+
+- **`valkey_benchmark.yml`**: Continuous benchmarking workflow that runs on self-hosted EC2 runners
+  - Automatically benchmarks new commits from the Valkey unstable branch
+  - Manages commit tracking via `completed_commits.json`
+  - Uploads results to S3 for dashboard consumption
+  - Supports manual triggering with configurable commit limits
+
+- **`dashboard_sync.yml`**: Automatically deploys dashboard changes to S3
+- **`basic.yml`**: Basic validation and testing
+- **`check_format.yml`**: Code formatting validation
+- **`cluster_tls.yml`**: Specialized tests for cluster and TLS configurations
+
+### Commit Tracking
+
+The system uses `completed_commits.json` to track benchmarking progress. This file is automatically create
 
 ```json
-[ { "sha": "abcdef123", "timestamp": "2024-01-02T15:04:05Z", "status": "complete" } ]
+[
+  {
+    "sha": "abcdef123456",
+    "timestamp": "2024-01-02T15:04:05Z",
+    "status": "complete"
+  },
+  {
+    "sha": "789xyz456def",
+    "timestamp": "2024-01-02T16:30:22Z", 
+    "status": "in_progress"
+  }
+]
 ```
 
-Open `dashboard/index.html` from your bucket to view the latest benchmark
-results. See `dashboard/README.md` for more details.
+Status values:
+- `complete`: Benchmark finished successfully
+- `in_progress`: Currently being benchmarked
+- Failed benchmarks are cleaned up automatically
+
+### Dashboard
+
+The `dashboard/` directory contains a JavaScript application for visualizing benchmark metrics. The dashboard:
+- Fetches data directly from S3 (results and completed_commits.json)
+- Ignores commits with `in_progress` status
+- Provides interactive charts and performance comparisons
+- Updates automatically when new results are uploaded
+
+**Deployment Options:**
+- **S3 Hosted**: Access via your S3 bucket's static website URL (automatically deployed via `dashboard_sync.yml`)
+- **Local Development**: Serve the dashboard locally using any HTTP server:
+  ```bash
+  # Using Python's built-in server
+  cd dashboard
+  python -m http.server 8000
+  # Then open http://localhost:8000
+  
+  # Or using Node.js
+  npx serve .
+  ```
+
+Note: For local development, you'll need to configure CORS on your S3 bucket or copy the results locally.
+
+## Utilities
+
+### Commit Management
+- `utils/workflow_commits.py`: Manages commit tracking, status updates, and cleanup operations
+- `utils/compare_benchmark_results.py`: Utilities for comparing benchmark results across commits
+
+### Configuration Files
+- `configs/benchmark-configs.json`: Standard benchmark configurations
+- `configs/benchmark-configs-cluster-tls.json`: Specialized configurations for cluster and TLS testing
+
+## Development
+
+### Local Development
+The tool automatically creates `completed_commits.json` if it doesn't exist, making local development straightforward. Simply run:
+
+```bash
+python benchmark.py --commits HEAD
+```
+
+### Adding New Configurations
+Create new JSON configuration files in the `configs/` directory following the existing format. Each configuration object represents a complete benchmark scenario.
 
 ## License
 
