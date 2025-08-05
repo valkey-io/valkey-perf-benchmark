@@ -68,30 +68,30 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
       - name: Download completed_commits.json from S3
-        working-directory: valkey
+        working-directory: valkey-perf-benchmark
         run: |
           aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json completed_commits.json \
             || echo '[]' > completed_commits.json
 
       - name: Determine commits to benchmark
         id: determine_commits
-        working-directory: valkey
+        working-directory: valkey-perf-benchmark
         run: |
-          commits=$(python ../valkey-perf-benchmark/utils/workflow_commits.py \
+          commits=$(python utils/workflow_commits.py \
             determine \
-            --repo . \
+            --repo ../valkey \
             --branch "$BRANCH" \
             --completed-file completed_commits.json \
             --max-commits "$MAX_COMMITS")
           echo "commit_ids=$commits" >> "$GITHUB_OUTPUT"
 
       - name: Mark commits as in progress
-        working-directory: valkey
+        working-directory: valkey-perf-benchmark
         run: |
           COMMIT_IDS="${{ steps.determine_commits.outputs.commit_ids }}"
-          python ../valkey-perf-benchmark/utils/workflow_commits.py \
+          python utils/workflow_commits.py \
             mark \
-            --repo . \
+            --repo ../valkey \
             --completed-file completed_commits.json \
             --status in_progress \
             $COMMIT_IDS
@@ -106,7 +106,7 @@ jobs:
           python benchmark.py \
             --commits ${{ steps.determine_commits.outputs.commit_ids }} \
             --config ./configs/benchmark-configs.json \
-            --completed-file ../valkey/completed_commits.json
+            --completed-file completed_commits.json
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -126,10 +126,6 @@ jobs:
           done
 
       - name: Upload updated completed_commits.json to S3
-        working-directory: valkey
+        working-directory: valkey-perf-benchmark
         run: |
-          python ../valkey-perf-benchmark/utils/workflow_commits.py \
-            from-results \
-            --results-dir ../valkey-perf-benchmark/results \
-            --output completed_commits.json
           aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
