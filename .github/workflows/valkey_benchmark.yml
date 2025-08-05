@@ -1,0 +1,137 @@
+name: Valkey Continuous Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_commits:
+        description: "Maximum number of commits to benchmark"
+        required: false
+        default: '3'
+        type: string
+  # schedule:
+  #   - cron: '*/25 * * * *'
+
+# Prevent concurrent workflow runs to avoid conflicts and resource contention
+# - group: All workflow runs share the same concurrency group
+# - cancel-in-progress: false: Queue new runs instead of canceling existing ones
+concurrency:
+  group: valkey-benchmark
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: 'bash -Eeuo pipefail -x {0}'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  valkey_continuous_benchmark:
+    env:
+      BRANCH: unstable     
+      MAX_COMMITS: ${{ inputs.max_commits || '3' }}  
+
+    runs-on: [self-hosted, ec2-ubuntu-24]
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Checkout Valkey
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: valkey-io/valkey
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0  # Fetch all history for the branch
+          path: valkey
+        
+      - name: Checkout Valkey Benchmark
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: valkey-perf-benchmark
+      
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Download completed_commits.json from S3
+        working-directory: valkey-perf-benchmark
+        run: |
+          aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json completed_commits.json \
+            || echo '[]' > completed_commits.json
+
+      - name: Determine commits to benchmark
+        id: determine_commits
+        working-directory: valkey-perf-benchmark
+        run: |
+          commits=$(python utils/workflow_commits.py \
+            determine \
+            --repo ../valkey \
+            --branch "$BRANCH" \
+            --completed-file completed_commits.json \
+            --max-commits "$MAX_COMMITS")
+          echo "commit_ids=$commits" >> "$GITHUB_OUTPUT"
+
+      - name: Mark commits as in progress
+        working-directory: valkey-perf-benchmark
+        run: |
+          COMMIT_IDS="${{ steps.determine_commits.outputs.commit_ids }}"
+          python utils/workflow_commits.py \
+            mark \
+            --repo ../valkey \
+            --completed-file completed_commits.json \
+            --status in_progress \
+            $COMMIT_IDS
+          aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
+  
+      - name: benchmark_commits
+        working-directory: valkey-perf-benchmark
+        run: |
+          echo "===== BENCHMARKING ${{ steps.determine_commits.outputs.commit_ids }} ====="
+
+          # -- run benchmark
+          python benchmark.py \
+            --commits ${{ steps.determine_commits.outputs.commit_ids }} \
+            --config ./configs/benchmark-configs.json \
+            --completed-file completed_commits.json
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: valkey-perf-benchmark/results
+      
+      - name: Re-auth with AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+      
+      - name: Upload metrics to S3  
+        env:
+          COMMITS: ${{ steps.determine_commits.outputs.commit_ids }}
+        run: |
+          ROOT_DIR="valkey-perf-benchmark/results"
+          for sha in $COMMITS; do
+            echo "Uploading metrics for $sha"
+            aws s3 cp "$ROOT_DIR/$sha/metrics.json" \
+              "s3://${{ secrets.AWS_S3_BUCKET }}/results/$sha/metrics.json"
+          done
+
+      - name: Upload updated completed_commits.json to S3
+        working-directory: valkey-perf-benchmark
+        run: |
+          aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
