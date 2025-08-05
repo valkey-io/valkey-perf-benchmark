@@ -38,9 +38,7 @@ valkey-perf-benchmark/
 │   └── benchmark-configs-cluster-tls.json
 ├── dashboard/               # Web dashboard for visualizing results
 │   ├── index.html
-│   ├── app.js
-│   └── README.md
-├── results/                 # Benchmark results stored here
+│   └── app.js
 ├── utils/                   # Utility scripts
 │   ├── workflow_commits.py  # Commit tracking and management
 │   └── compare_benchmark_results.py  # Result comparison utilities
