@@ -121,31 +121,46 @@ def parse_args() -> argparse.Namespace:
 
 # ---------- Helpers ----------------------------------------------------------
 
+
 def validate_config(cfg: dict) -> None:
     """Ensure all required keys exist and have valid values in ``cfg``."""
     for k in REQUIRED_KEYS:
         if k not in cfg:
             raise ValueError(f"Missing required config key: {k}")
-    
+
     # Validate data types and ranges
-    if not isinstance(cfg["requests"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["requests"]):
+    if not isinstance(cfg["requests"], list) or not all(
+        isinstance(x, int) and x > 0 for x in cfg["requests"]
+    ):
         raise ValueError("'requests' must be a list of positive integers")
-    
-    if not isinstance(cfg["keyspacelen"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["keyspacelen"]):
+
+    if not isinstance(cfg["keyspacelen"], list) or not all(
+        isinstance(x, int) and x > 0 for x in cfg["keyspacelen"]
+    ):
         raise ValueError("'keyspacelen' must be a list of positive integers")
-    
-    if not isinstance(cfg["data_sizes"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["data_sizes"]):
+
+    if not isinstance(cfg["data_sizes"], list) or not all(
+        isinstance(x, int) and x > 0 for x in cfg["data_sizes"]
+    ):
         raise ValueError("'data_sizes' must be a list of positive integers")
-    
-    if not isinstance(cfg["pipelines"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["pipelines"]):
+
+    if not isinstance(cfg["pipelines"], list) or not all(
+        isinstance(x, int) and x > 0 for x in cfg["pipelines"]
+    ):
         raise ValueError("'pipelines' must be a list of positive integers")
-    
-    if not isinstance(cfg["clients"], list) or not all(isinstance(x, int) and x > 0 for x in cfg["clients"]):
+
+    if not isinstance(cfg["clients"], list) or not all(
+        isinstance(x, int) and x > 0 for x in cfg["clients"]
+    ):
         raise ValueError("'clients' must be a list of positive integers")
-    
-    if not isinstance(cfg["commands"], list) or not cfg["commands"] or not all(isinstance(x, str) and x.strip() for x in cfg["commands"]):
+
+    if (
+        not isinstance(cfg["commands"], list)
+        or not cfg["commands"]
+        or not all(isinstance(x, str) and x.strip() for x in cfg["commands"])
+    ):
         raise ValueError("'commands' must be a non-empty list of non-empty strings")
-    
+
     if not isinstance(cfg["warmup"], int) or cfg["warmup"] < 0:
         raise ValueError("'warmup' must be a non-negative integer")
 
@@ -189,7 +204,7 @@ def parse_core_range(range_str: str) -> List[int]:
     """
     if not range_str or not isinstance(range_str, str):
         raise ValueError("Core range must be a non-empty string")
-    
+
     try:
         if "-" in range_str:
             parts = range_str.split("-")

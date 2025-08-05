@@ -1,6 +1,7 @@
 import argparse
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List, Dict
 
@@ -52,7 +53,28 @@ def _git_commit_time(repo: Path, sha: str) -> str:
 def determine_commits_to_benchmark(
     repo: Path, branch: str, completed_file: Path, max_commits: int
 ) -> List[str]:
-    """Return up to ``max_commits`` SHAs not present in ``completed_file``."""
+    """Return up to ``max_commits`` SHAs not present in ``completed_file``.
+
+    This will also automatically clean up any dangling 'in_progress' commits
+    before determining which commits need to be benchmarked. This ensures that
+    commits left in 'in_progress' state by failed benchmark processes are
+    properly reset and can be re-processed.
+
+    Args:
+        repo: Path to the git repository
+        branch: Git branch to examine
+        completed_file: Path to completed_commits.json tracking file
+        max_commits: Maximum number of commits to return
+
+    Returns:
+        List of commit SHAs that need to be benchmarked
+    """
+    cleaned_count = cleanup_in_progress_commits(completed_file)
+    if cleaned_count > 0:
+        logging.info(
+            f"Cleaned up {cleaned_count} in_progress commits before determining commits to benchmark"
+        )
+
     seen = set(completed_shas(completed_file))
     commits = []
     for sha in _git_rev_list(repo, branch):
@@ -86,6 +108,50 @@ def mark_commits(
             commits.append({"sha": sha, "timestamp": ts, "status": status})
         print(f"Marked {sha} as {status} with timestamp {ts}")
     save_commits(completed_file, commits)
+
+
+def cleanup_in_progress_commits(completed_file: Path) -> int:
+    """Remove all 'in_progress' entries from completed_commits.json.
+    This return the number of "in_progress" entries that were cleaned up.
+    """
+    try:
+        # Load existing commits
+        commits = load_commits(completed_file)
+
+        # Count in_progress entries before cleanup
+        in_progress_count = sum(
+            1 for commit in commits if commit.get("status") == "in_progress"
+        )
+
+        if in_progress_count == 0:
+            logging.info("No in_progress commits found to clean up")
+            return 0
+
+        # Filter out in_progress entries, keeping only complete ones
+        cleaned_commits = [
+            commit for commit in commits if commit.get("status") != "in_progress"
+        ]
+
+        # Save the cleaned commits back to file
+        save_commits(completed_file, cleaned_commits)
+
+        logging.info(
+            f"Cleaned up {in_progress_count} in_progress commits from {completed_file}"
+        )
+        return in_progress_count
+
+    except FileNotFoundError:
+        logging.warning(f"Completed commits file not found: {completed_file}")
+        return 0
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to parse JSON from {completed_file}: {e}")
+        return 0
+    except PermissionError as e:
+        logging.error(f"Permission denied accessing {completed_file}: {e}")
+        return 0
+    except Exception as e:
+        logging.error(f"Unexpected error during cleanup of {completed_file}: {e}")
+        return 0
 
 
 def completed_from_results(results_root: Path) -> List[Dict[str, str]]:

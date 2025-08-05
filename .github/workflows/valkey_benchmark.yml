@@ -11,6 +11,13 @@ on:
   # schedule:
   #   - cron: '*/25 * * * *'
 
+# Prevent concurrent workflow runs to avoid conflicts and resource contention
+# - group: All workflow runs share the same concurrency group
+# - cancel-in-progress: false: Queue new runs instead of canceling existing ones
+concurrency:
+  group: valkey-benchmark
+  cancel-in-progress: false
+
 defaults:
   run:
     shell: 'bash -Eeuo pipefail -x {0}'

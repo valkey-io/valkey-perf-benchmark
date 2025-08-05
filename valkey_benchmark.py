@@ -79,8 +79,10 @@ class ClientRunner:
         if self.tls_mode:
             tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
             if not tls_cert_path.exists():
-                raise FileNotFoundError(f"TLS certificates not found at {tls_cert_path}")
-            
+                raise FileNotFoundError(
+                    f"TLS certificates not found at {tls_cert_path}"
+                )
+
             kwargs.update(
                 {
                     "ssl": True,
@@ -117,15 +119,15 @@ class ClientRunner:
         cmd_list = list(command)
         cmd_str = " ".join(cmd_list)
         logging.info(f"Running: {cmd_str}")
-        
+
         try:
             result = subprocess.run(
-                cmd_list, 
-                cwd=cwd, 
-                capture_output=capture_output, 
-                text=text, 
+                cmd_list,
+                cwd=cwd,
+                capture_output=capture_output,
+                text=text,
                 check=True,
-                timeout=timeout
+                timeout=timeout,
             )
             if result and result.stderr:
                 logging.warning(f"Command stderr: {result.stderr}")
@@ -149,7 +151,7 @@ class ClientRunner:
         )
         start = time.time()
         last_error = None
-        
+
         while time.time() - start < timeout:
             try:
                 with self._client_context() as client:

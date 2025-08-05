@@ -60,18 +60,20 @@ class MetricsProcessor:
         if not output or not output.strip():
             logging.warning("Empty benchmark output received")
             return None
-            
+
         try:
             lines = output.strip().split("\n")
             if len(lines) < 2:
                 logging.warning(f"Unexpected CSV format in benchmark output: {output}")
                 return None
 
-            labels = [label.strip().replace('"', '') for label in lines[0].split(",")]
-            values = [value.strip().replace('"', '') for value in lines[1].split(",")]
+            labels = [label.strip().replace('"', "") for label in lines[0].split(",")]
+            values = [value.strip().replace('"', "") for value in lines[1].split(",")]
 
             if len(values) != len(labels):
-                logging.warning(f"Mismatch between CSV labels ({len(labels)}) and values ({len(values)})")
+                logging.warning(
+                    f"Mismatch between CSV labels ({len(labels)}) and values ({len(values)})"
+                )
                 logging.debug(f"Labels: {labels}")
                 logging.debug(f"Values: {values}")
                 return None
@@ -83,7 +85,9 @@ class MetricsProcessor:
                 try:
                     return float(value) if value else default
                 except (ValueError, TypeError):
-                    logging.warning(f"Could not convert '{value}' to float, using {default}")
+                    logging.warning(
+                        f"Could not convert '{value}' to float, using {default}"
+                    )
                     return default
 
             return {
@@ -116,7 +120,7 @@ class MetricsProcessor:
         if not new_metrics:
             logging.warning("No metrics to write")
             return
-            
+
         metrics_file = results_dir / "metrics.json"
         metrics = []
 
@@ -129,10 +133,14 @@ class MetricsProcessor:
                 with metrics_file.open("r", encoding="utf-8") as f:
                     metrics = json.load(f)
                 if not isinstance(metrics, list):
-                    logging.warning(f"Existing metrics file contains non-list data, starting fresh")
+                    logging.warning(
+                        f"Existing metrics file contains non-list data, starting fresh"
+                    )
                     metrics = []
             except json.JSONDecodeError as e:
-                logging.warning(f"Could not decode JSON from {metrics_file}: {e}, starting fresh.")
+                logging.warning(
+                    f"Could not decode JSON from {metrics_file}: {e}, starting fresh."
+                )
                 metrics = []
             except Exception as e:
                 logging.error(f"Error reading existing metrics file: {e}")
@@ -142,12 +150,14 @@ class MetricsProcessor:
         metrics.extend(new_metrics)
 
         # Write metrics with atomic operation
-        temp_file = metrics_file.with_suffix('.tmp')
+        temp_file = metrics_file.with_suffix(".tmp")
         try:
             with temp_file.open("w", encoding="utf-8") as f:
                 json.dump(metrics, f, indent=4, ensure_ascii=False)
             temp_file.replace(metrics_file)
-            logging.info(f"Successfully wrote {len(new_metrics)} metrics to {metrics_file}")
+            logging.info(
+                f"Successfully wrote {len(new_metrics)} metrics to {metrics_file}"
+            )
         except Exception as e:
             logging.error(f"Error writing metrics to {metrics_file}: {e}")
             if temp_file.exists():

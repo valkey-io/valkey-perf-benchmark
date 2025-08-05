@@ -41,8 +41,10 @@ class ServerLauncher:
         if tls_mode:
             tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
             if not tls_cert_path.exists():
-                raise FileNotFoundError(f"TLS certificates not found at {tls_cert_path}")
-            
+                raise FileNotFoundError(
+                    f"TLS certificates not found at {tls_cert_path}"
+                )
+
             kwargs.update(
                 {
                     "ssl": True,
@@ -53,20 +55,22 @@ class ServerLauncher:
             )
         return valkey.Valkey(**kwargs)
 
-    def _run(self, command: Iterable[str], cwd: Optional[Path] = None, timeout: int = 60) -> subprocess.CompletedProcess:
+    def _run(
+        self, command: Iterable[str], cwd: Optional[Path] = None, timeout: int = 60
+    ) -> subprocess.CompletedProcess:
         """Execute a command with proper error handling and timeout."""
         cmd_list = list(command)
         cmd_str = " ".join(cmd_list)
         logging.info(f"Running: {cmd_str}")
-        
+
         try:
             result = subprocess.run(
-                cmd_list, 
-                check=True, 
-                cwd=cwd, 
+                cmd_list,
+                check=True,
+                cwd=cwd,
                 timeout=timeout,
                 capture_output=True,
-                text=True
+                text=True,
             )
             if result.stderr:
                 logging.warning(f"Command stderr: {result.stderr}")
@@ -83,12 +87,14 @@ class ServerLauncher:
             logging.error(f"Unexpected error while running: {cmd_str}")
             raise RuntimeError(f"Unexpected error: {cmd_str}") from e
 
-    def _wait_for_server_ready(self, tls_mode: bool, timeout: int = DEFAULT_TIMEOUT) -> None:
+    def _wait_for_server_ready(
+        self, tls_mode: bool, timeout: int = DEFAULT_TIMEOUT
+    ) -> None:
         """Poll until the Valkey server responds to PING or timeout expires."""
         logging.info("Waiting for Valkey server to be ready...")
         start = time.time()
         last_error = None
-        
+
         while time.time() - start < timeout:
             try:
                 with self._client_context(tls_mode) as client:
@@ -189,6 +195,6 @@ class ServerLauncher:
                 logging.info("Valkey server process killed.")
             except Exception as kill_error:
                 logging.error(f"Failed to kill Valkey server process: {kill_error}")
-        
+
         # Wait for process to actually stop
         time.sleep(2)
