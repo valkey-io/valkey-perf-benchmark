@@ -291,7 +291,9 @@ class ClientRunner:
 
             # Run actual benchmark
             logging.info("Running main benchmark command")
-            proc = self._run(bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None)
+            proc = self._run(
+                bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None
+            )
             logging.info(f"Benchmark output:\n{proc.stdout}")
             if proc.stderr:
                 logging.warning(f"Benchmark stderr:\n{proc.stderr}")
