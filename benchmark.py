@@ -338,6 +338,7 @@ def main() -> None:
 
     for cfg in load_configs(args.config):
         for commit in commits:
+            print(f"=== Processing commit: {commit} ===")
             run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
 
 
