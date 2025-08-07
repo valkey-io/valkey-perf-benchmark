@@ -32,9 +32,14 @@ class ServerBuilder:
             logging.exception(f"Unexpected error while running: {cmd_str}")
 
     def clone_and_checkout(self) -> None:
-        if self.valkey_dir.exists():
-            logging.info(f"Removing existing {self.valkey_dir} for a clean build...")
-            shutil.rmtree(self.valkey_dir)
+        # If valkey_path exists, assume it has all the commits we need and skip cloning
+        if self.valkey_dir.exists() and (self.valkey_dir / ".git").exists():
+            logging.info(
+                f"Using existing Valkey repository at {self.valkey_dir} - skipping clone and checkout"
+            )
+            return
+
+        # Only clone if directory doesn't exist
         logging.info(f"Cloning Valkey repo into {self.valkey_dir}...")
         self._run(["git", "clone", self.repo_url, str(self.valkey_dir)])
 
