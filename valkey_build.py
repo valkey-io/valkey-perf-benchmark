@@ -63,7 +63,17 @@ class ServerBuilder:
     def cleanup_terminate(self) -> None:
         """Terminate all valkey processes and delete the cloned Valkey directory."""
         logging.info("Terminating any running Valkey server processes...")
-        self._run(["pkill", "-f", "valkey"])
+        try:
+            self._run(["pkill", "-f", "valkey-server"])
+            logging.info("Valkey processes terminated.")
+        except subprocess.CalledProcessError as e:
+            if e.returncode == 1:
+                logging.info("No Valkey processes found to terminate.")
+            else:
+                logging.warning(f"pkill failed with exit code {e.returncode}")
+        except Exception as e:
+            logging.warning(f"Failed to terminate Valkey processes: {e}")
+
         time.sleep(2)
         if self.valkey_dir.exists():
             logging.info(f"Removing Valkey directory {self.valkey_dir}")
