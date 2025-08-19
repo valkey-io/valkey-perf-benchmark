@@ -117,35 +117,10 @@ def main():
     ]
 
     lines = ["# Benchmark Comparison by Command\n"]
-
-    for command in all_commands:
-        lines.append(f"## {command}\n")
-        lines.append("| Metric | Baseline | PR | Diff | % Change |")
-        lines.append("| --- | --- | --- | --- | --- |")
-
-        baseline_items = baseline_by_command.get(command, [])
-        new_items = new_by_command.get(command, [])
-
-        baseline_summary = summarize(baseline_items)
-        new_summary = summarize(new_items)
-
-        for metric in metrics:
-            baseline_value = baseline_summary.get(metric, 0.0)
-            new_value = new_summary.get(metric, 0.0)
-            diff = new_value - baseline_value
-            change = pct_change(new_value, baseline_value)
-
-            lines.append(
-                f"| {metric} | {baseline_value:.2f} | {new_value:.2f} | {diff:.2f} | {change:+.2f}% |"
-            )
-
-        lines.append("")
-
-    lines.append("# Benchmark Comparison by Command, Cluster and TLS\n")
     all_keys = sorted(set(baseline_by_modes.keys()) | set(new_by_modes.keys()))
     for command, cluster, tls in all_keys:
         lines.append(
-            f"## {command} | cluster {'enabled' if cluster else 'off'} | tls {'enabled' if tls else 'off'}\n"
+            f"## {command} | cluster {'enabled' if cluster else 'disabled'} | tls {'enabled' if tls else 'disabled'}\n"
         )
         lines.append("| Metric | Baseline | PR | Diff | % Change |")
         lines.append("| --- | --- | --- | --- | --- |")
