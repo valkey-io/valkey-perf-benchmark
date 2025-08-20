@@ -60,8 +60,8 @@ class ServerBuilder:
         else:
             self._run(["make", "-j"], cwd=self.valkey_dir)
 
-    def cleanup_terminate(self) -> None:
-        """Terminate all valkey processes and delete the cloned Valkey directory."""
+    def terminate_server(self) -> None:
+        """Terminate all valkey processes."""
         logging.info("Terminating any running Valkey server processes...")
         try:
             self._run(["pkill", "-f", "valkey-server"])
@@ -73,8 +73,11 @@ class ServerBuilder:
                 logging.warning(f"pkill failed with exit code {e.returncode}")
         except Exception as e:
             logging.warning(f"Failed to terminate Valkey processes: {e}")
-
         time.sleep(2)
+
+    def cleanup_terminate(self) -> None:
+        """Terminate all valkey processes and delete the cloned Valkey directory."""
+        self.terminate_server()
         if self.valkey_dir.exists():
             logging.info(f"Removing Valkey directory {self.valkey_dir}")
             shutil.rmtree(self.valkey_dir)
