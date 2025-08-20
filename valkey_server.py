@@ -162,6 +162,7 @@ class ServerLauncher:
         logging.info("Setting up cluster configuration...")
         try:
             with self._client_context(tls_mode) as client:
+                client.execute_command("CLUSTER", "RESET", "HARD")
                 client.execute_command("CLUSTER", "ADDSLOTSRANGE", "0", "16383")
                 logging.info("Cluster configuration completed successfully.")
         except Exception as e:
