@@ -34,21 +34,21 @@ class ServerBuilder:
     def clone_and_checkout(self) -> None:
         # If valkey_path exists, assume it has all the commits we need and skip cloning
         if self.valkey_dir.exists() and (self.valkey_dir / ".git").exists():
-            logging.info(
-                f"Using existing Valkey repository at {self.valkey_dir} - skipping clone and checkout"
-            )
-            return
-
-        # Only clone if directory doesn't exist
-        logging.info(f"Cloning Valkey repo into {self.valkey_dir}...")
-        self._run(["git", "clone", self.repo_url, str(self.valkey_dir)])
+            logging.info(f"Using existing Valkey repository at {self.valkey_dir}")
+        else:
+            # Only clone if directory doesn't exist
+            logging.info(f"Cloning Valkey repo into {self.valkey_dir}...")
+            self._run(["git", "clone", self.repo_url, str(self.valkey_dir)])
 
         if self.commit_id == "HEAD":
             return
 
-        # Checkout specific commit
+        # Checkout the commit_id
         logging.info(f"Checking out commit: {self.commit_id}")
-        self._run(["git", "checkout", self.commit_id], cwd=self.valkey_dir)
+        try:
+            self._run(["git", "checkout", self.commit_id], cwd=self.valkey_dir)
+        except subprocess.CalledProcessError:
+            logging.warning(f"Failed to checkout {self.commit_id}")
 
     def build(self) -> None:
         self.clone_and_checkout()
