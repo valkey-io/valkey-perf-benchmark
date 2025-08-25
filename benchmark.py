@@ -314,9 +314,9 @@ def run_benchmark_matrix(
 
         if not args.use_running_server:
             if args.valkey_path:
-                builder.terminate_server()
+                builder.terminate_valkey()
             else:
-                builder.cleanup_terminate()
+                builder.terminate_and_clean_valkey()
 
 
 # ---------- Entry point ------------------------------------------------------

@@ -60,7 +60,7 @@ class ServerBuilder:
         else:
             self._run(["make", "-j"], cwd=self.valkey_dir)
 
-    def terminate_server(self) -> None:
+    def terminate_valkey(self) -> None:
         """Terminate all valkey processes."""
         logging.info("Terminating any running Valkey server processes...")
         try:
@@ -75,9 +75,9 @@ class ServerBuilder:
             logging.warning(f"Failed to terminate Valkey processes: {e}")
         time.sleep(2)
 
-    def cleanup_terminate(self) -> None:
+    def terminate_and_clean_valkey(self) -> None:
         """Terminate all valkey processes and delete the cloned Valkey directory."""
-        self.terminate_server()
+        self.terminate_valkey()
         if self.valkey_dir.exists():
             logging.info(f"Removing Valkey directory {self.valkey_dir}")
             shutil.rmtree(self.valkey_dir)
