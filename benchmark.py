@@ -255,8 +255,6 @@ def run_benchmark_matrix(
         parse_core_range(args.client_cpu_range)
         bench_core_range = args.client_cpu_range
 
-    cleanup_required = not args.valkey_path or not args.use_running_server
-
     valkey_dir = (
         Path(args.valkey_path) if args.valkey_path else Path(f"../valkey_{commit_id}")
     )
@@ -314,8 +312,11 @@ def run_benchmark_matrix(
         except Exception as exc:
             logging.warning(f"Failed to update completed_commits.json: {exc}")
 
-        if cleanup_required:
-            builder.cleanup_terminate()
+        if not args.use_running_server:
+            if args.valkey_path:
+                builder.terminate_valkey()
+            else:
+                builder.terminate_and_clean_valkey()
 
 
 # ---------- Entry point ------------------------------------------------------
