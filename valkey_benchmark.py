@@ -19,7 +19,7 @@ DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
 
 # Supported Valkey benchmark commands
-READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"]
+READ_COMMANDS = ["GET", "MGET", "LRANGE", "SISMEMBER", "ZSCORE", "ZRANGE"]
 WRITE_COMMANDS = [
     "SET",
     "MSET",
@@ -32,6 +32,8 @@ WRITE_COMMANDS = [
     "HSET",
     "ZADD",
     "XADD",
+    "SPOP",
+    "ZPOPMIN",
 ]
 
 # Map for read commands to populate equivalents
@@ -39,8 +41,9 @@ READ_POPULATE_MAP = {
     "GET": "SET",
     "MGET": "MSET",
     "LRANGE": "LPUSH",
-    "SPOP": "SADD",
-    "ZPOPMIN": "ZADD",
+    "SISMEMBER": "SADD",
+    "ZSCORE": "ZADD",
+    "ZRANGE": "ZADD",
 }
 
 
