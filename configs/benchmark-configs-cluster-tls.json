@@ -21,6 +21,6 @@
     "cluster_mode": true,
     "tls_mode": true,
     "warmup": 10,
-    "io-threads": 3
+    "io-threads": 2
   }
 ]

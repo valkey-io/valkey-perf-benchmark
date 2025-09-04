@@ -20,7 +20,6 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 10,
-    "io-threads": 3
+    "warmup": 10
   }
 ]
