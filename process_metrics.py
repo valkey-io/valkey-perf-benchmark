@@ -24,7 +24,12 @@ class MetricsProcessor:
     """
 
     def __init__(
-        self, commit_id: str, cluster_mode: bool, tls_mode: bool, commit_time: str, io_threads: Optional[int] = None
+        self,
+        commit_id: str,
+        cluster_mode: bool,
+        tls_mode: bool,
+        commit_time: str,
+        io_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
@@ -109,11 +114,11 @@ class MetricsProcessor:
                 "cluster_mode": self.cluster_mode,
                 "tls": self.tls_mode,
             }
-            
+
             # Add io_threads to metrics if it was specified
             if self.io_threads is not None:
                 metrics_dict["io_threads"] = self.io_threads
-                
+
             return metrics_dict
         except Exception:
             logging.exception(f"Error parsing CSV output")

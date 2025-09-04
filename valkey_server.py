@@ -124,7 +124,9 @@ class ServerLauncher:
                 except Exception as e:
                     logging.warning(f"Error closing client connection: {e}")
 
-    def _launch_server(self, tls_mode: bool, cluster_mode: bool, io_threads: Optional[int] = None) -> None:
+    def _launch_server(
+        self, tls_mode: bool, cluster_mode: bool, io_threads: Optional[int] = None
+    ) -> None:
         """Start Valkey server."""
         log_file = f"{Path.cwd()}/{self.results_dir}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}_tls_{'enabled' if tls_mode else 'disabled'}.log"
 
@@ -173,10 +175,14 @@ class ServerLauncher:
             logging.error(f"Failed to setup cluster: {e}")
             raise RuntimeError(f"Cluster setup failed: {e}") from e
 
-    def launch(self, cluster_mode: bool, tls_mode: bool, io_threads: Optional[int] = None) -> None:
+    def launch(
+        self, cluster_mode: bool, tls_mode: bool, io_threads: Optional[int] = None
+    ) -> None:
         """Launch Valkey server and setup cluster if needed."""
         try:
-            self._launch_server(tls_mode=tls_mode, cluster_mode=cluster_mode, io_threads=io_threads)
+            self._launch_server(
+                tls_mode=tls_mode, cluster_mode=cluster_mode, io_threads=io_threads
+            )
             if cluster_mode:
                 self._setup_cluster(tls_mode=tls_mode)
             logging.info("Valkey server launched successfully.")

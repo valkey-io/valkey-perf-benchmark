@@ -169,7 +169,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("'warmup' must be a non-negative integer")
 
     for k in OPTIONAL_CONF_KEYS:
-        if k in cfg :
+        if k in cfg:
             # Validate optional io-threads
             if k == "io-threads":
                 if not isinstance(cfg["io-threads"], int) or cfg["io-threads"] <= 0:

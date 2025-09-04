@@ -219,7 +219,11 @@ class ClientRunner:
         """Run benchmark for all config combinations."""
         commit_time = self.get_commit_time(self.commit_id)
         metrics_processor = MetricsProcessor(
-            self.commit_id, self.cluster_mode, self.tls_mode, commit_time, self.io_threads
+            self.commit_id,
+            self.cluster_mode,
+            self.tls_mode,
+            commit_time,
+            self.io_threads,
         )
         metric_json = []
 
