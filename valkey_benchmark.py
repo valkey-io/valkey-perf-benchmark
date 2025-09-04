@@ -57,6 +57,7 @@ class ClientRunner:
         results_dir: Path,
         valkey_path: str,
         cores: Optional[str] = None,
+        io_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -66,6 +67,7 @@ class ClientRunner:
         self.results_dir = results_dir
         self.valkey_path = valkey_path
         self.cores = cores
+        self.io_threads = io_threads
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -217,7 +219,7 @@ class ClientRunner:
         """Run benchmark for all config combinations."""
         commit_time = self.get_commit_time(self.commit_id)
         metrics_processor = MetricsProcessor(
-            self.commit_id, self.cluster_mode, self.tls_mode, commit_time
+            self.commit_id, self.cluster_mode, self.tls_mode, commit_time, self.io_threads
         )
         metric_json = []
 

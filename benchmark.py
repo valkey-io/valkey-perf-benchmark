@@ -28,6 +28,10 @@ REQUIRED_KEYS = [
     "warmup",
 ]
 
+OPTIONAL_CONF_KEYS = [
+    "io-threads",
+]
+
 
 # ---------- CLI --------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
@@ -164,6 +168,13 @@ def validate_config(cfg: dict) -> None:
     if not isinstance(cfg["warmup"], int) or cfg["warmup"] < 0:
         raise ValueError("'warmup' must be a non-negative integer")
 
+    for k in OPTIONAL_CONF_KEYS:
+        if k in cfg :
+            # Validate optional io-threads
+            if k == "io-threads":
+                if not isinstance(cfg["io-threads"], int) or cfg["io-threads"] <= 0:
+                    raise ValueError("'io-threads' must be a positive integer")
+
 
 def load_configs(path: str) -> List[dict]:
     """Load benchmark configurations from a JSON file."""
@@ -284,6 +295,7 @@ def run_benchmark_matrix(
         launcher.launch(
             cluster_mode=cfg["cluster_mode"],
             tls_mode=cfg["tls_mode"],
+            io_threads=cfg.get("io-threads"),
         )
 
     # ---- benchmarking client section -----------------
@@ -297,6 +309,7 @@ def run_benchmark_matrix(
             results_dir=results_dir,
             valkey_path=str(valkey_dir),
             cores=bench_core_range,
+            io_threads=cfg.get("io-threads"),
         )
         runner.wait_for_server_ready()
         runner.run_benchmark_config()

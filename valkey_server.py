@@ -124,7 +124,7 @@ class ServerLauncher:
                 except Exception as e:
                     logging.warning(f"Error closing client connection: {e}")
 
-    def _launch_server(self, tls_mode: bool, cluster_mode: bool) -> None:
+    def _launch_server(self, tls_mode: bool, cluster_mode: bool, io_threads: Optional[int] = None) -> None:
         """Start Valkey server."""
         log_file = f"{Path.cwd()}/{self.results_dir}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}_tls_{'enabled' if tls_mode else 'disabled'}.log"
 
@@ -143,6 +143,10 @@ class ServerLauncher:
         else:
             cmd += ["--port", "6379"]
 
+        # Add io-threads if specified
+        if io_threads is not None:
+            cmd += ["--io-threads", str(io_threads)]
+
         # Add common base server args
         cmd += ["--cluster-enabled", "yes" if cluster_mode else "no"]
         cmd += ["--daemonize", "yes"]
@@ -153,7 +157,7 @@ class ServerLauncher:
 
         self._run(cmd, cwd=self.valkey_path)
         logging.info(
-            f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode}"
+            f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode} | IO Threads: {io_threads} '"
         )
         self._wait_for_server_ready(tls_mode=tls_mode)
 
@@ -169,10 +173,10 @@ class ServerLauncher:
             logging.error(f"Failed to setup cluster: {e}")
             raise RuntimeError(f"Cluster setup failed: {e}") from e
 
-    def launch(self, cluster_mode: bool, tls_mode: bool) -> None:
+    def launch(self, cluster_mode: bool, tls_mode: bool, io_threads: Optional[int] = None) -> None:
         """Launch Valkey server and setup cluster if needed."""
         try:
-            self._launch_server(tls_mode=tls_mode, cluster_mode=cluster_mode)
+            self._launch_server(tls_mode=tls_mode, cluster_mode=cluster_mode, io_threads=io_threads)
             if cluster_mode:
                 self._setup_cluster(tls_mode=tls_mode)
             logging.info("Valkey server launched successfully.")

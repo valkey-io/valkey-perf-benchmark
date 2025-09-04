@@ -4,9 +4,9 @@ const COMPLETED_URL = "../completed_commits.json";
 const RESULT_URL = sha => `../results/${sha}/metrics.json`;
 const COMMIT_URL = sha => `https://github.com/valkey-io/valkey/commit/${sha}`;
 
-async function fetchJSON(url){
+async function fetchJSON(url) {
   const r = await fetch(url);
-  if(!r.ok) throw new Error(`${url}: ${r.status}`);
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }
 
@@ -16,6 +16,7 @@ const state = {
   metrics: [],       // raw metric rows
   cluster: 'all',
   tls: 'all',
+  ioThreads: 'all',
   metricKey: 'rps',
   pipeline: 'all',
   dataSize: 'all',
@@ -25,59 +26,74 @@ const state = {
 };
 
 // DOM helpers --------------------------------------------------------------
-function el(tag, attrs={}, children=[]){
+function el(tag, attrs = {}, children = []) {
   const e = document.createElement(tag);
-  Object.entries(attrs).forEach(([k,v])=>{
-    if(k.startsWith('on') && typeof v === 'function'){
+  Object.entries(attrs).forEach(([k, v]) => {
+    if (k.startsWith('on') && typeof v === 'function') {
       e.addEventListener(k.slice(2).toLowerCase(), v);
-    } else if(k==='class') {
+    } else if (k === 'class') {
       e.className = v;
     } else {
-      e.setAttribute(k,v);
+      e.setAttribute(k, v);
     }
   });
-  children.forEach(c=>{ if(typeof c==='string') e.appendChild(document.createTextNode(c));
-                       else if(c) e.appendChild(c); });
+  children.forEach(c => {
+    if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+    else if (c) e.appendChild(c);
+  });
   return e;
 }
 
-function buildControls(){
-  const controls = el('div', {class:'flex flex-wrap gap-4 justify-center text-center mb-4'});
-  const selectCluster = el('select', {class:'border rounded p-1 ml-2',
-    onchange:e=>{state.cluster=e.target.value; updateChart();}},
-    ['all','true','false'].map(o=>el('option',{value:o},[o])));
-  const selectTLS = el('select', {class:'border rounded p-1 ml-2',
-    onchange:e=>{state.tls=e.target.value; updateChart();}},
-    ['all','true','false'].map(o=>el('option',{value:o},[o])));
-  const selectPipeline = el('select', {class:'border rounded p-1 ml-2'});
-  selectPipeline.addEventListener('change', e=>{state.pipeline=e.target.value; updateChart();});
-  const selectSize = el('select', {class:'border rounded p-1 ml-2'});
-  selectSize.addEventListener('change', e=>{state.dataSize=e.target.value; updateChart();});
-  const selectMetric = el('select', {class:'border rounded p-1 ml-2',
-    onchange:e=>{state.metricKey=e.target.value; updateChart();}},
-    ['rps','avg_latency_ms','p95_latency_ms','p99_latency_ms','p50_latency_ms'].map(o=>el('option',{value:o},[o])));
-  const inputFrom = el('input', {type:'date', class:'border rounded p-1 ml-2',
-    onchange:e=>{state.fromDate=e.target.value; updateChart();}});
-  const inputTo = el('input', {type:'date', class:'border rounded p-1 ml-2',
-    onchange:e=>{state.toDate=e.target.value; updateChart();}});
+function buildControls() {
+  const controls = el('div', { class: 'flex flex-wrap gap-4 justify-center text-center mb-4' });
+  const selectCluster = el('select', {
+    class: 'border rounded p-1 ml-2',
+    onchange: e => { state.cluster = e.target.value; updateChart(); }
+  },
+    ['all', 'true', 'false'].map(o => el('option', { value: o }, [o])));
+  const selectTLS = el('select', {
+    class: 'border rounded p-1 ml-2',
+    onchange: e => { state.tls = e.target.value; updateChart(); }
+  },
+    ['all', 'true', 'false'].map(o => el('option', { value: o }, [o])));
+  const selectIOThreads = el('select', { class: 'border rounded p-1 ml-2' });
+  selectIOThreads.addEventListener('change', e => { state.ioThreads = e.target.value; updateChart(); });
+  const selectPipeline = el('select', { class: 'border rounded p-1 ml-2' });
+  selectPipeline.addEventListener('change', e => { state.pipeline = e.target.value; updateChart(); });
+  const selectSize = el('select', { class: 'border rounded p-1 ml-2' });
+  selectSize.addEventListener('change', e => { state.dataSize = e.target.value; updateChart(); });
+  const selectMetric = el('select', {
+    class: 'border rounded p-1 ml-2',
+    onchange: e => { state.metricKey = e.target.value; updateChart(); }
+  },
+    ['rps', 'avg_latency_ms', 'p95_latency_ms', 'p99_latency_ms', 'p50_latency_ms'].map(o => el('option', { value: o }, [o])));
+  const inputFrom = el('input', {
+    type: 'date', class: 'border rounded p-1 ml-2',
+    onchange: e => { state.fromDate = e.target.value; updateChart(); }
+  });
+  const inputTo = el('input', {
+    type: 'date', class: 'border rounded p-1 ml-2',
+    onchange: e => { state.toDate = e.target.value; updateChart(); }
+  });
 
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Cluster:',selectCluster]));
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['TLS:',selectTLS]));
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Pipeline:',selectPipeline]));
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Data Size:',selectSize]));
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['Metric:',selectMetric]));
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['From:',inputFrom]));
-  controls.appendChild(el('label',{class:'font-medium inline-flex items-center'},['To:',inputTo]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['Cluster:', selectCluster]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['TLS:', selectTLS]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['IO Threads:', selectIOThreads]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['Pipeline:', selectPipeline]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['Data Size:', selectSize]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['Metric:', selectMetric]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['From:', inputFrom]));
+  controls.appendChild(el('label', { class: 'font-medium inline-flex items-center' }, ['To:', inputTo]));
 
-  return {controls, selectPipeline, selectSize, inputFrom, inputTo};
+  return { controls, selectPipeline, selectSize, selectIOThreads, inputFrom, inputTo };
 }
 
-function buildCommandChecks(commands){
-  const wrap = el('div', {class:'flex flex-wrap gap-2 justify-center text-center mb-4'});
-  commands.forEach(cmd=>{
-    const cb = el('input',{type:'checkbox',class:'mr-1',checked:true});
-    cb.addEventListener('change',()=>{
-      if(cb.checked) {
+function buildCommandChecks(commands) {
+  const wrap = el('div', { class: 'flex flex-wrap gap-2 justify-center text-center mb-4' });
+  commands.forEach(cmd => {
+    const cb = el('input', { type: 'checkbox', class: 'mr-1', checked: true });
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
         state.selectedCommands.add(cmd);
       } else {
         state.selectedCommands.delete(cmd);
@@ -85,7 +101,7 @@ function buildCommandChecks(commands){
       updateChart();
     });
     state.selectedCommands.add(cmd);
-    wrap.appendChild(el('label',{class:'flex items-center'},[cb,cmd]));
+    wrap.appendChild(el('label', { class: 'flex items-center' }, [cb, cmd]));
   });
   return wrap;
 }
@@ -95,17 +111,17 @@ let charts = [];
 // Store original command order
 let originalCommandOrder = [];
 
-function updateChart(){
-  if(!state.metrics.length) return;
+function updateChart() {
+  if (!state.metrics.length) return;
   // filter commits by date range
-  const allowedShas = state.commits.filter(sha=>{
+  const allowedShas = state.commits.filter(sha => {
     const ts = state.commitTimes[sha];
-    if(!ts) return false;
-    if(state.fromDate && new Date(ts) < new Date(state.fromDate)) return false;
-    if(state.toDate && new Date(ts) > new Date(state.toDate)) return false;
+    if (!ts) return false;
+    if (state.fromDate && new Date(ts) < new Date(state.fromDate)) return false;
+    if (state.toDate && new Date(ts) > new Date(state.toDate)) return false;
     return true;
   });
-  
+
   // Sort commits by date (oldest to newest)
   allowedShas.sort((a, b) => {
     const dateA = new Date(state.commitTimes[a]);
@@ -114,68 +130,69 @@ function updateChart(){
   });
 
   // Create shortened labels for display
-  const labels = allowedShas.map(s=>s.slice(0,8));
-  
+  const labels = allowedShas.map(s => s.slice(0, 8));
+
   // Use commands in their original order, filtered by selected commands
   const commands = originalCommandOrder.filter(cmd => state.selectedCommands.has(cmd));
-  
+
   // Clean up existing charts
   charts.forEach(chart => {
-    if(chart) chart.destroy();
+    if (chart) chart.destroy();
   });
   charts = [];
-  
+
   // Clear existing chart containers
   const chartRoot = document.getElementById('chartRoot');
   const chartContainers = document.querySelectorAll('.chart-container');
   chartContainers.forEach(container => container.remove());
-  
+
   // Create a chart for each command
   commands.forEach((cmd, i) => {
-    const rows = state.metrics.filter(r=>
-      r.command===cmd &&
-      (state.cluster==='all' || r.cluster_mode === (state.cluster==='true')) &&
-      (state.tls==='all'     || r.tls          === (state.tls==='true')) &&
-      (state.pipeline==='all'|| r.pipeline     === Number(state.pipeline)) &&
-      (state.dataSize==='all'|| r.data_size    === Number(state.dataSize))
+    const rows = state.metrics.filter(r =>
+      r.command === cmd &&
+      (state.cluster === 'all' || r.cluster_mode === (state.cluster === 'true')) &&
+      (state.tls === 'all' || r.tls === (state.tls === 'true')) &&
+      (state.ioThreads === 'all' || (r.io_threads !== undefined && r.io_threads === Number(state.ioThreads)) || (r.io_threads === undefined && state.ioThreads === 'none')) &&
+      (state.pipeline === 'all' || r.pipeline === Number(state.pipeline)) &&
+      (state.dataSize === 'all' || r.data_size === Number(state.dataSize))
     );
-    
-    const data = allowedShas.map(sha=>{
-      const row = rows.find(r=>r.sha===sha);
+
+    const data = allowedShas.map(sha => {
+      const row = rows.find(r => r.sha === sha);
       return row ? row[state.metricKey] : null;
     });
-    
+
     // Skip if no data
     if (data.every(d => d === null || d === undefined)) return;
-    
+
     // Create container for this chart
-    const container = el('div', {class: 'chart-container bg-white rounded shadow p-2 w-full max-w-4xl mb-4'});
-    const title = el('h3', {class: 'text-lg font-bold mb-2'}, [cmd]);
-    const canvas = el('canvas', {id: `chart-${cmd}`, style: 'cursor: pointer;'});
+    const container = el('div', { class: 'chart-container bg-white rounded shadow p-2 w-full max-w-4xl mb-4' });
+    const title = el('h3', { class: 'text-lg font-bold mb-2' }, [cmd]);
+    const canvas = el('canvas', { id: `chart-${cmd}`, style: 'cursor: pointer;' });
     container.appendChild(title);
     container.appendChild(canvas);
     chartRoot.appendChild(container);
-    
-    const color = `hsl(${(i*50)%360},70%,50%)`;
-    const dataset = {label:cmd, data, borderColor:color, backgroundColor:color, fill:false};
-    
+
+    const color = `hsl(${(i * 50) % 360},70%,50%)`;
+    const dataset = { label: cmd, data, borderColor: color, backgroundColor: color, fill: false };
+
     const ctx = canvas.getContext('2d');
     const chart = new Chart(ctx, {
-      type:'line',
-      data:{labels, datasets:[dataset]},
-      options:{
-        responsive:true,
-        interaction:{mode:'index',intersect:false},
-        scales:{
-          x:{
-            display:true,
+      type: 'line',
+      data: { labels, datasets: [dataset] },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: {
+            display: true,
             ticks: {
-              callback: function(value, index) {
+              callback: function (value, index) {
                 return labels[index];
               }
             }
           },
-          y:{display:true}
+          y: { display: true }
         },
         maintainAspectRatio: true,
         aspectRatio: 3,
@@ -186,16 +203,16 @@ function updateChart(){
           tooltip: {
             padding: 8,
             callbacks: {
-              title: function(tooltipItems) {
+              title: function (tooltipItems) {
                 const value = tooltipItems[0].formattedValue;
                 return `${cmd.toUpperCase()}: ${value} ${state.metricKey}`;
               },
-              label: function(tooltipItem) {
+              label: function (tooltipItem) {
                 const index = tooltipItem.dataIndex;
                 const sha = allowedShas[index];
-                return `Commit: ${sha.slice(0,8)}`;
+                return `Commit: ${sha.slice(0, 8)}`;
               },
-              afterLabel: function(tooltipItem) {
+              afterLabel: function (tooltipItem) {
                 const index = tooltipItem.dataIndex;
                 const sha = allowedShas[index];
                 const timestamp = state.commitTimes[sha];
@@ -204,10 +221,28 @@ function updateChart(){
                   const date = new Date(timestamp);
                   dateStr = `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
                 }
-                return [
+
+                // Find the metric row for this data point to get io_threads info
+                const metricRow = state.metrics.find(r =>
+                  r.sha === sha &&
+                  r.command === cmd &&
+                  (state.cluster === 'all' || r.cluster_mode === (state.cluster === 'true')) &&
+                  (state.tls === 'all' || r.tls === (state.tls === 'true')) &&
+                  (state.ioThreads === 'all' || (r.io_threads !== undefined && r.io_threads === Number(state.ioThreads)) || (r.io_threads === undefined && state.ioThreads === 'none')) &&
+                  (state.pipeline === 'all' || r.pipeline === Number(state.pipeline)) &&
+                  (state.dataSize === 'all' || r.data_size === Number(state.dataSize))
+                );
+
+                const result = [
                   `Date: ${dateStr || 'Unknown'}`,
-                  'Click to view on GitHub'
                 ];
+
+                if (metricRow && metricRow.io_threads !== undefined) {
+                  result.push(`IO Threads: ${metricRow.io_threads}`);
+                }
+
+                result.push('Click to view on GitHub');
+                return result;
               }
             },
             displayColors: false,
@@ -224,7 +259,7 @@ function updateChart(){
             padding: { top: 8, bottom: 8, left: 12, right: 12 }
           }
         },
-        onClick: function(event, elements) {
+        onClick: function (event, elements) {
           if (elements && elements.length > 0) {
             const index = elements[0].index;
             const sha = allowedShas[index];
@@ -233,52 +268,62 @@ function updateChart(){
         }
       }
     });
-    
+
     charts.push(chart);
   });
-  
+
   // Log for debugging
   console.log(`Updated charts for ${commands.length} commands`);
 }
 
-async function init(){
+async function init() {
   const root = document.getElementById('chartRoot');
-  const {controls,selectPipeline,selectSize,inputFrom,inputTo} = buildControls();
+  const { controls, selectPipeline, selectSize, selectIOThreads, inputFrom, inputTo } = buildControls();
   root.appendChild(controls);
 
   try {
     const raw = await fetchJSON(COMPLETED_URL);
-    const shas=[]; const times={};
-    raw.forEach(c=>{
-      if(typeof c==='object' && c.status==='in_progress') return;
-      const sha = typeof c==='string'? c : (c.sha||c.commit||c.full);
-      if(!sha) return;
+    const shas = []; const times = {};
+    raw.forEach(c => {
+      if (typeof c === 'object' && c.status === 'in_progress') return;
+      const sha = typeof c === 'string' ? c : (c.sha || c.commit || c.full);
+      if (!sha) return;
       shas.push(sha);
-      if(c.timestamp) times[sha]=c.timestamp;
+      if (c.timestamp) times[sha] = c.timestamp;
     });
-    state.commits=shas; state.commitTimes=times;
-  } catch(err){ console.error('Failed to load commit list',err); return; }
+    state.commits = shas; state.commitTimes = times;
+  } catch (err) { console.error('Failed to load commit list', err); return; }
 
   try {
-    const all=[]; const times={...state.commitTimes};
-    await Promise.all(state.commits.map(async sha=>{
+    const all = []; const times = { ...state.commitTimes };
+    await Promise.all(state.commits.map(async sha => {
       try {
-        const rows=await fetchJSON(RESULT_URL(sha));
-        rows.forEach(r=>all.push({...r,sha}));
-        if(rows[0]&&rows[0].timestamp&&!times[sha]) times[sha]=rows[0].timestamp;
-      } catch(err){ console.error('Failed to load metrics for',sha,err); }
+        const rows = await fetchJSON(RESULT_URL(sha));
+        rows.forEach(r => all.push({ ...r, sha }));
+        if (rows[0] && rows[0].timestamp && !times[sha]) times[sha] = rows[0].timestamp;
+      } catch (err) { console.error('Failed to load metrics for', sha, err); }
     }));
-    state.metrics=all; state.commitTimes=times;
-    // update pipelines and data sizes
-    const pipelines=[...new Set(all.map(r=>r.pipeline))].sort((a,b)=>a-b);
-    pipelines.forEach(p=>selectPipeline.appendChild(el('option',{value:String(p)},[String(p)])));
-    const sizes=[...new Set(all.map(r=>r.data_size))].sort((a,b)=>a-b);
-    sizes.forEach(s=>selectSize.appendChild(el('option',{value:String(s)},[String(s)])));
+    state.metrics = all; state.commitTimes = times;
+    // update pipelines, data sizes, and io_threads
+    const pipelines = [...new Set(all.map(r => r.pipeline))].sort((a, b) => a - b);
+    pipelines.forEach(p => selectPipeline.appendChild(el('option', { value: String(p) }, [String(p)])));
+    const sizes = [...new Set(all.map(r => r.data_size))].sort((a, b) => a - b);
+    sizes.forEach(s => selectSize.appendChild(el('option', { value: String(s) }, [String(s)])));
+
+    // Add io_threads options
+    selectIOThreads.appendChild(el('option', { value: 'all' }, ['all']));
+    const ioThreadsValues = [...new Set(all.map(r => r.io_threads).filter(v => v !== undefined))].sort((a, b) => a - b);
+    ioThreadsValues.forEach(t => selectIOThreads.appendChild(el('option', { value: String(t) }, [String(t)])));
+    // Add "none" option for metrics without io_threads
+    const hasMetricsWithoutIOThreads = all.some(r => r.io_threads === undefined);
+    if (hasMetricsWithoutIOThreads) {
+      selectIOThreads.appendChild(el('option', { value: 'none' }, ['none']));
+    }
     // Clear any existing command selections
     state.selectedCommands.clear();
-    
+
     // Get unique commands and store original order
-    originalCommandOrder = [...new Set(all.map(r=>r.command))].sort();
+    originalCommandOrder = [...new Set(all.map(r => r.command))].sort();
     const cmdChecks = buildCommandChecks(originalCommandOrder);
     root.appendChild(cmdChecks);
     const tVals = Object.values(times)
@@ -287,13 +332,13 @@ async function init(){
     if (tVals.length) {
       const min = new Date(Math.min(...tVals));
       const max = new Date(Math.max(...tVals));
-      inputFrom.value = min.toISOString().slice(0,10);
-      inputTo.value = max.toISOString().slice(0,10);
+      inputFrom.value = min.toISOString().slice(0, 10);
+      inputTo.value = max.toISOString().slice(0, 10);
       state.fromDate = inputFrom.value;
       state.toDate = inputTo.value;
     }
     updateChart();
-  } catch(err){ console.error('Failed to load metrics',err); }
+  } catch (err) { console.error('Failed to load metrics', err); }
 }
 
 document.addEventListener('DOMContentLoaded', init);
