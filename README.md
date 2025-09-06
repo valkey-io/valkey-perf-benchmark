@@ -10,7 +10,7 @@ A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valk
 - Automatic server setup and teardown
 - Detailed performance metrics collection and reporting
 - Compare performance between different Valkey versions/commits
-- Optional CPU pinning via `taskset` using `--server-cpu-range` and `--client-cpu-range`
+- Optional CPU pinning via `taskset` using configuration file settings
 - Continuous benchmarking via GitHub Actions workflow
 - Automated commit tracking and progress management
 - S3 integration for storing results and hosting dashboard
@@ -101,8 +101,6 @@ python benchmark.py --results-dir ./my-results
 # Set logging level
 python benchmark.py --log-level DEBUG
 
-# Pin server and client processes to different CPUs
-python benchmark.py --server-cpu-range 0-1 --client-cpu-range 2-3
 
 # Specify custom completed commits file location
 python benchmark.py --completed-file ./my-completed-commits.json
@@ -124,7 +122,9 @@ Example:
     "commands": ["SET", "GET"],
     "cluster_mode": "yes",
     "tls_mode": "yes",
-    "warmup": 10
+    "warmup": 10,
+    "server_cpu_range": "0-1",
+    "client_cpu_range": "2-3"
   }
 ]
 ```
@@ -142,6 +142,8 @@ Example:
 | `cluster_mode` | Whether to enable cluster mode | String ("yes"/"no") | No |
 | `tls_mode` | Whether to enable TLS | String ("yes"/"no") | No |
 | `warmup` | Warmup time in seconds before benchmarking | Integer | No |
+| `server_cpu_range` | CPU cores for server (e.g. "0-3" or "0,2,4") | String | No |
+| `client_cpu_range` | CPU cores for client (e.g. "4-7" or "1,3,5") | String | No |
 
 When `warmup` is provided for read commands, the benchmark performs three
 stages:

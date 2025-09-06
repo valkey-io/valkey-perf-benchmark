@@ -182,6 +182,17 @@ class ClientRunner:
             logging.exception(f"Failed to get commit time for {commit_id}: {e}")
             raise
 
+    def _flush_database(self) -> None:
+        """Flush all data from the database before benchmark runs."""
+        logging.info("Flushing database before benchmark run")
+        try:
+            with self._client_context() as client:
+                client.flushall(asynchronous=False)
+                logging.info("Database flushed successfully")
+        except Exception as e:
+            logging.error(f"Failed to flush database: {e}")
+            raise RuntimeError(f"Database flush failed: {e}")
+
     def _populate_keyspace(
         self,
         read_command: str,
@@ -257,6 +268,9 @@ class ClientRunner:
 
             seed_val = random.randint(0, 1000000)
             logging.info(f"Using seed value: {seed_val}")
+
+            # Flush database before each benchmark run for clean state
+            self._flush_database()
 
             # Data injection for read commands
             if command in READ_COMMANDS:

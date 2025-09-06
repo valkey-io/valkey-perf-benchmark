@@ -30,6 +30,8 @@ REQUIRED_KEYS = [
 
 OPTIONAL_CONF_KEYS = [
     "io-threads",
+    "server_cpu_range",
+    "client_cpu_range",
 ]
 
 
@@ -94,22 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
     )
-    parser.add_argument(
-        "--server-cpu-range",
-        metavar="RANGE",
-        help=(
-            "Pin the Valkey server to the given CPU cores, e.g. '0-3'. "
-            "If omitted the server is not pinned."
-        ),
-    )
-    parser.add_argument(
-        "--client-cpu-range",
-        metavar="RANGE",
-        help=(
-            "Pin the benchmark client to the given CPU cores, e.g. '4-7'. "
-            "If omitted the client is not pinned."
-        ),
-    )
+
     parser.add_argument(
         "--completed-file",
         type=Path,
@@ -174,6 +161,14 @@ def validate_config(cfg: dict) -> None:
             if k == "io-threads":
                 if not isinstance(cfg["io-threads"], int) or cfg["io-threads"] <= 0:
                     raise ValueError("'io-threads' must be a positive integer")
+            # Validate optional CPU ranges
+            elif k in ["server_cpu_range", "client_cpu_range"]:
+                if not isinstance(cfg[k], str):
+                    raise ValueError(f"'{k}' must be a string")
+                try:
+                    parse_core_range(cfg[k])
+                except ValueError as e:
+                    raise ValueError(f"Invalid {k}: {e}")
 
 
 def load_configs(path: str) -> List[dict]:
@@ -207,8 +202,8 @@ def init_logging(log_path: Path) -> None:
     )
 
 
-def parse_core_range(range_str: str) -> List[int]:
-    """Return a list of CPU cores from ``range_str``.
+def parse_core_range(range_str: str) -> None:
+    """Validate CPU core range string format.
 
     ``range_str`` can be a simple range like ``"0-3"`` or a comma separated
     list such as ``"0,2,4"``.
@@ -224,12 +219,10 @@ def parse_core_range(range_str: str) -> List[int]:
             start, end = int(parts[0]), int(parts[1])
             if start < 0 or end < 0 or start > end:
                 raise ValueError("Invalid core range values")
-            return list(range(start, end + 1))
         else:
             cores = [int(c.strip()) for c in range_str.split(",") if c.strip()]
             if not cores or any(c < 0 for c in cores):
                 raise ValueError("Core numbers must be non-negative")
-            return cores
     except ValueError as e:
         if "invalid literal" in str(e):
             raise ValueError(f"Invalid core range format: {range_str}")
@@ -257,14 +250,8 @@ def run_benchmark_matrix(
     init_logging(results_dir / "logs.txt")
     logging.info(f"Loaded config: {cfg}")
 
-    server_core_range = None
-    bench_core_range = None
-    if args.server_cpu_range:
-        parse_core_range(args.server_cpu_range)
-        server_core_range = args.server_cpu_range
-    if args.client_cpu_range:
-        parse_core_range(args.client_cpu_range)
-        bench_core_range = args.client_cpu_range
+    server_core_range = cfg.get("server_cpu_range")
+    bench_core_range = cfg.get("client_cpu_range")
 
     valkey_dir = (
         Path(args.valkey_path) if args.valkey_path else Path(f"../valkey_{commit_id}")
