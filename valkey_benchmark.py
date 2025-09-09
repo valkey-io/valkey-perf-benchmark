@@ -57,6 +57,7 @@ class ClientRunner:
         results_dir: Path,
         valkey_path: str,
         cores: Optional[str] = None,
+        io_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -66,6 +67,7 @@ class ClientRunner:
         self.results_dir = results_dir
         self.valkey_path = valkey_path
         self.cores = cores
+        self.io_threads = io_threads
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -180,6 +182,17 @@ class ClientRunner:
             logging.exception(f"Failed to get commit time for {commit_id}: {e}")
             raise
 
+    def _flush_database(self) -> None:
+        """Flush all data from the database before benchmark runs."""
+        logging.info("Flushing database before benchmark run")
+        try:
+            with self._client_context() as client:
+                client.flushall(asynchronous=False)
+                logging.info("Database flushed successfully")
+        except Exception as e:
+            logging.error(f"Failed to flush database: {e}")
+            raise RuntimeError(f"Database flush failed: {e}")
+
     def _populate_keyspace(
         self,
         read_command: str,
@@ -217,7 +230,11 @@ class ClientRunner:
         """Run benchmark for all config combinations."""
         commit_time = self.get_commit_time(self.commit_id)
         metrics_processor = MetricsProcessor(
-            self.commit_id, self.cluster_mode, self.tls_mode, commit_time
+            self.commit_id,
+            self.cluster_mode,
+            self.tls_mode,
+            commit_time,
+            self.io_threads,
         )
         metric_json = []
 
@@ -251,6 +268,9 @@ class ClientRunner:
 
             seed_val = random.randint(0, 1000000)
             logging.info(f"Using seed value: {seed_val}")
+
+            # Flush database before each benchmark run for clean state
+            self._flush_database()
 
             # Data injection for read commands
             if command in READ_COMMANDS:

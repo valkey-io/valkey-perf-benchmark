@@ -24,12 +24,18 @@ class MetricsProcessor:
     """
 
     def __init__(
-        self, commit_id: str, cluster_mode: bool, tls_mode: bool, commit_time: str
+        self,
+        commit_id: str,
+        cluster_mode: bool,
+        tls_mode: bool,
+        commit_time: str,
+        io_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
         self.tls_mode = tls_mode
         self.commit_time = commit_time
+        self.io_threads = io_threads
 
     def parse_csv_output(
         self,
@@ -90,7 +96,7 @@ class MetricsProcessor:
                     )
                     return default
 
-            return {
+            metrics_dict = {
                 "timestamp": self.commit_time,
                 "commit": self.commit_id,
                 "command": command,
@@ -108,6 +114,12 @@ class MetricsProcessor:
                 "cluster_mode": self.cluster_mode,
                 "tls": self.tls_mode,
             }
+
+            # Add io_threads to metrics if it was specified
+            if self.io_threads is not None:
+                metrics_dict["io_threads"] = self.io_threads
+
+            return metrics_dict
         except Exception:
             logging.exception(f"Error parsing CSV output")
             logging.debug(f"Raw output: {output}")
