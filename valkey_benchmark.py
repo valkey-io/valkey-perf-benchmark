@@ -58,6 +58,7 @@ class ClientRunner:
         valkey_path: str,
         cores: Optional[str] = None,
         io_threads: Optional[int] = None,
+        valkey_benchmark_path: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -68,6 +69,7 @@ class ClientRunner:
         self.valkey_path = valkey_path
         self.cores = cores
         self.io_threads = io_threads
+        self.valkey_benchmark_path = valkey_benchmark_path or VALKEY_BENCHMARK
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -366,7 +368,7 @@ class ClientRunner:
         cmd = []
         if self.cores:
             cmd += ["taskset", "-c", self.cores]
-        cmd.append(VALKEY_BENCHMARK)
+        cmd.append(self.valkey_benchmark_path)
         if tls:
             cmd += ["--tls"]
             cmd += ["--cert", "./tests/tls/valkey.crt"]
