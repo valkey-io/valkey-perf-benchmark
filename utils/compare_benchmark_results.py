@@ -120,6 +120,19 @@ def pct_change(new_v, old_v):
     return ((new_v - old_v) / old_v * 100.0) if old_v else 0.0
 
 
+def sort_config_tuples(config_tuple):
+    """Custom sorting key function that handles None values and mixed types in config tuples."""
+    # Convert all values to strings for consistent sorting
+    # This ensures all types can be compared
+    def convert_item(item):
+        if item is None:
+            return ''  # None values sort first
+        else:
+            return str(item)  # Convert everything else to string
+    
+    return tuple(convert_item(item) for item in config_tuple)
+
+
 def main():
     if len(sys.argv) < 3:
         print(
@@ -147,7 +160,7 @@ def main():
     ]
 
     lines = ["# Benchmark Comparison by Configuration\n"]
-    all_configs = sorted(set(baseline_by_config.keys()) | set(new_by_config.keys()))
+    all_configs = sorted(set(baseline_by_config.keys()) | set(new_by_config.keys()), key=sort_config_tuples)
     
     for config_sig in all_configs:
         baseline_group = baseline_by_config.get(config_sig, {'items': [], 'config_keys': []})
