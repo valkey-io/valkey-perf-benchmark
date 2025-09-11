@@ -304,7 +304,9 @@ def run_benchmark_matrix(
             valkey_path=str(valkey_dir),
             cores=bench_core_range,
             io_threads=cfg.get("io-threads"),
-            valkey_benchmark_path=str(args.valkey_benchmark_path) if args.valkey_benchmark_path else None,
+            valkey_benchmark_path=(
+                str(args.valkey_benchmark_path) if args.valkey_benchmark_path else None
+            ),
         )
         runner.wait_for_server_ready()
         runner.run_benchmark_config()
