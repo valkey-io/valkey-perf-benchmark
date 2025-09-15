@@ -121,7 +121,7 @@ class MetricsProcessor:
             # Add io_threads to metrics if it was specified
             if self.io_threads is not None:
                 metrics_dict["io_threads"] = self.io_threads
-            
+
             # Add warmup to metrics if it was specified
             if warmup is not None:
                 metrics_dict["warmup"] = warmup
