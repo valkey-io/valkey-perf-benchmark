@@ -320,13 +320,14 @@ class ClientRunner:
             if proc.stderr:
                 logging.warning(f"Benchmark stderr:\n{proc.stderr}")
 
-            metrics = metrics_processor.parse_csv_output(
+            metrics = metrics_processor.create_metrics(
                 proc.stdout,
                 command,
                 data_size,
                 pipeline,
                 clients,
                 requests,
+                warmup,
             )
             if metrics:
                 logging.info(f"Parsed metrics: {metrics}")
