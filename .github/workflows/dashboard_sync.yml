@@ -1,11 +1,11 @@
 name: Sync Dashboard Files
 
 on:
-  push:
-    paths:
-      - 'dashboard/**'
-    branches:
-      - main
+  # push:
+  #   paths:
+  #     - 'dashboard/**'
+  #   branches:
+  #     - main
   workflow_dispatch:  # Allow manual triggering
 
 permissions:

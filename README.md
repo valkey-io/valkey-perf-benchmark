@@ -80,6 +80,9 @@ python benchmark.py --valkey-path /path/to/valkey
 
 # Without --valkey-path a directory named valkey_<commit> is cloned and later removed
 
+# Use a custom valkey-benchmark executable
+python benchmark.py --valkey-benchmark-path /path/to/custom/valkey-benchmark
+
 # Use a pre-running Valkey Server
 python benchmark.py --valkey-path /path/to/valkey --use-running-server
 
@@ -104,7 +107,27 @@ python benchmark.py --log-level DEBUG
 
 # Specify custom completed commits file location
 python benchmark.py --completed-file ./my-completed-commits.json
+
+# Use a custom valkey-benchmark executable (useful for testing modified versions)
+python benchmark.py --valkey-benchmark-path /path/to/custom/valkey-benchmark
 ```
+
+### Custom Valkey-Benchmark Executable
+
+The `--valkey-benchmark-path` option allows you to specify a custom path to the `valkey-benchmark` executable. This is useful when:
+
+- Testing a modified version of `valkey-benchmark`
+- Using a pre-built binary from a different location
+- Benchmarking with a specific version of the tool
+
+If not specified, the tool uses the default `src/valkey-benchmark` relative to the Valkey source directory.
+
+```bash
+# Example: Use a custom benchmark tool
+python benchmark.py --valkey-benchmark-path /usr/local/bin/valkey-benchmark
+
+# Example: Use with custom Valkey path
+python benchmark.py --valkey-path /custom/valkey --valkey-benchmark-path /custom/valkey/src/valkey-benchmark
 
 ## Configuration
 

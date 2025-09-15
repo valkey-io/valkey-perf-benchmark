@@ -63,6 +63,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to an existing Valkey checkout. If omitted a fresh clone is created per commit.",
     )
     parser.add_argument(
+        "--valkey-benchmark-path",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to a custom valkey-benchmark executable. If omitted, uses the default 'src/valkey-benchmark' relative to valkey-path.",
+    )
+    parser.add_argument(
         "--baseline",
         default=None,
         metavar="REF",
@@ -297,6 +304,9 @@ def run_benchmark_matrix(
             valkey_path=str(valkey_dir),
             cores=bench_core_range,
             io_threads=cfg.get("io-threads"),
+            valkey_benchmark_path=(
+                str(args.valkey_benchmark_path) if args.valkey_benchmark_path else None
+            ),
         )
         runner.wait_for_server_ready()
         runner.run_benchmark_config()

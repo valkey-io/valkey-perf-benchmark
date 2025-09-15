@@ -37,7 +37,7 @@ class MetricsProcessor:
         self.commit_time = commit_time
         self.io_threads = io_threads
 
-    def parse_csv_output(
+    def create_metrics(
         self,
         output: str,
         command: str,
@@ -45,8 +45,9 @@ class MetricsProcessor:
         pipeline: int,
         clients: int,
         requests: int,
+        warmup: Optional[int] = None,
     ) -> Optional[Dict[str, object]]:
-        """Return a metrics dictionary parsed from CSV output.
+        """Create a complete metrics dictionary from CSV output and benchmark parameters.
 
         Parameters
         ----------
@@ -62,6 +63,8 @@ class MetricsProcessor:
             Concurrent client connections used.
         requests : int
             Total number of requests issued.
+        warmup : int, optional
+            Warmup time in seconds.
         """
         if not output or not output.strip():
             logging.warning("Empty benchmark output received")
@@ -118,6 +121,10 @@ class MetricsProcessor:
             # Add io_threads to metrics if it was specified
             if self.io_threads is not None:
                 metrics_dict["io_threads"] = self.io_threads
+
+            # Add warmup to metrics if it was specified
+            if warmup is not None:
+                metrics_dict["warmup"] = warmup
 
             return metrics_dict
         except Exception:
