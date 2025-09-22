@@ -11,7 +11,11 @@ from typing import Iterable, Optional
 class BenchmarkBuilder:
     """Clone and compile latest Valkey unstable for valkey-benchmark binary."""
 
-    def __init__(self, benchmark_dir: str = "../valkey-benchmark-latest", tls_enabled: bool = False) -> None:
+    def __init__(
+        self,
+        benchmark_dir: str = "../valkey-benchmark-latest",
+        tls_enabled: bool = False,
+    ) -> None:
         self.repo_url = "https://github.com/SoftlyRaining/valkey.git"
         self.repo_branch = "valkey-benchmark-duration"
         self.benchmark_dir = Path(benchmark_dir)
@@ -71,7 +75,9 @@ class BenchmarkBuilder:
                 f"Failed to build valkey-benchmark at {self.benchmark_binary}"
             )
 
-        logging.info(f"Successfully built valkey-benchmark {tls_status} at {self.benchmark_binary}")
+        logging.info(
+            f"Successfully built valkey-benchmark {tls_status} at {self.benchmark_binary}"
+        )
         return str(self.benchmark_binary)
 
     def get_benchmark_path(self) -> str:
