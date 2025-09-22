@@ -17,7 +17,6 @@ from utils.workflow_commits import mark_commits
 # ---------- Constants --------------------------------------------------------
 DEFAULT_RESULTS_ROOT = Path("results")
 REQUIRED_KEYS = [
-    "requests",
     "keyspacelen",
     "data_sizes",
     "pipelines",
@@ -33,6 +32,8 @@ OPTIONAL_CONF_KEYS = [
     "server_cpu_range",
     "client_cpu_range",
     "benchmark-threads",
+    "requests",
+    "duration",
 ]
 
 
@@ -66,9 +67,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--valkey-benchmark-path",
         type=Path,
-        default=None,
+        default=Path("../valkey-benchmark-latest/src/valkey-benchmark"),
         metavar="PATH",
-        help="Path to a custom valkey-benchmark executable. If omitted, uses the default 'src/valkey-benchmark' relative to valkey-path.",
+        help="Path to a custom valkey-benchmark executable. If omitted, uses the latest valkey-benchmark from '../valkey-benchmark-latest/src/valkey-benchmark'.",
     )
     parser.add_argument(
         "--baseline",
@@ -127,12 +128,17 @@ def validate_config(cfg: dict) -> None:
         if k not in cfg:
             raise ValueError(f"Missing required config key: {k}")
 
-    # Validate data types and ranges
-    if not isinstance(cfg["requests"], list) or not all(
-        isinstance(x, int) and x > 0 for x in cfg["requests"]
-    ):
-        raise ValueError("'requests' must be a list of positive integers")
+    # Validate that either requests or duration is provided
+    has_requests = "requests" in cfg and cfg["requests"] is not None
+    has_duration = "duration" in cfg and cfg["duration"] is not None
+    
+    if not has_requests and not has_duration:
+        raise ValueError("Either 'requests' or 'duration' must be provided")
+    
+    if has_requests and has_duration:
+        raise ValueError("Cannot specify both 'requests' and 'duration' - use only one")
 
+    # Validate required data types and ranges
     if not isinstance(cfg["keyspacelen"], list) or not all(
         isinstance(x, int) and x > 0 for x in cfg["keyspacelen"]
     ):
@@ -173,6 +179,18 @@ def validate_config(cfg: dict) -> None:
             elif k == "benchmark-threads":
                 if not isinstance(cfg["benchmark-threads"], int) or cfg["benchmark-threads"] <= 0:
                     raise ValueError("'benchmark-threads' must be a positive integer")
+            # Validate optional requests
+            elif k == "requests":
+                if cfg["requests"] is not None:
+                    if not isinstance(cfg["requests"], list) or not all(
+                        isinstance(x, int) and x > 0 for x in cfg["requests"]
+                    ):
+                        raise ValueError("'requests' must be a list of positive integers or null")
+            # Validate optional duration
+            elif k == "duration":
+                if cfg["duration"] is not None:
+                    if not isinstance(cfg["duration"], int) or cfg["duration"] <= 0:
+                        raise ValueError("'duration' must be a positive integer or null")
             # Validate optional CPU ranges
             elif k in ["server_cpu_range", "client_cpu_range"]:
                 if not isinstance(cfg[k], str):

@@ -255,6 +255,7 @@ class ClientRunner:
             clients,
             command,
             warmup,
+            duration,
         ) in self._generate_combinations():
 
             if command not in READ_COMMANDS + WRITE_COMMANDS:
@@ -267,8 +268,14 @@ class ClientRunner:
                 )
                 continue
 
+            # Show either requests or duration, not both
+            if duration is not None:
+                mode_info = f"duration={duration}s"
+            else:
+                mode_info = f"requests={requests}"
+            
             logging.info(
-                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | requests={requests} | keyspacelen={keyspacelen} | warmup={warmup}"
+                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | {mode_info} | keyspacelen={keyspacelen} | warmup={warmup}"
             )
 
             seed_val = random.randint(0, 1000000)
@@ -279,9 +286,11 @@ class ClientRunner:
 
             # Data injection for read commands
             if command in READ_COMMANDS:
+                # For duration mode, use keyspacelen as the number of keys to populate
+                populate_requests = requests if requests is not None else keyspacelen
                 self._populate_keyspace(
                     command,
-                    requests,
+                    populate_requests,
                     keyspacelen,
                     data_size,
                     pipeline,
@@ -298,21 +307,9 @@ class ClientRunner:
                 command,
                 seed_val,
                 sequential=False,
+                duration=duration,
+                warmup=warmup,
             )
-
-            if warmup:
-                logging.info(f"Starting warmup for {warmup}s...")
-                proc = subprocess.Popen(
-                    bench_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    cwd=self.valkey_path,
-                )
-                time.sleep(warmup)
-                proc.terminate()
-                proc.wait(timeout=5)
-                logging.info("Warmup phase complete.")
 
             # Run actual benchmark
             logging.info("Running main benchmark command")
@@ -344,15 +341,19 @@ class ClientRunner:
 
     def _generate_combinations(self) -> List[tuple]:
         """Cartesian product of parameters within a single config item."""
+        # Use requests if available, otherwise None for duration mode
+        requests_list = self.config.get("requests", [None])
+        
         return list(
             product(
-                self.config["requests"],
+                requests_list,
                 self.config["keyspacelen"],
                 self.config["data_sizes"],
                 self.config["pipelines"],
                 self.config["clients"],
                 self.config["commands"],
                 [self.config["warmup"]],
+                [self.config.get("duration")],
             )
         )
 
@@ -368,6 +369,8 @@ class ClientRunner:
         seed_val: int,
         *,
         sequential: bool = True,
+        duration: Optional[int] = None,
+        warmup: Optional[int] = None,
     ) -> List[str]:
         cmd = []
         if self.cores:
@@ -380,7 +383,11 @@ class ClientRunner:
             cmd += ["--cacert", "./tests/tls/ca.crt"]
         cmd += ["-h", self.target_ip]
         cmd += ["-p", "6379"]
-        cmd += ["-n", str(requests)]
+        # Use --duration if specified, otherwise use -n (requests)
+        if duration is not None:
+            cmd += ["--duration", str(duration)]
+        else:
+            cmd += ["-n", str(requests)]
         cmd += ["-r", str(keyspacelen)]
         cmd += ["-d", str(data_size)]
         cmd += ["-P", str(pipeline)]
@@ -388,6 +395,8 @@ class ClientRunner:
         cmd += ["-t", command]
         if self.benchmark_threads is not None:
             cmd += ["--threads", str(self.benchmark_threads)]
+        if warmup is not None and warmup > 0:
+            cmd += ["--warmup", str(warmup)]
         if sequential:
             cmd += ["--sequential"]
         cmd += ["--seed", str(seed_val)]
