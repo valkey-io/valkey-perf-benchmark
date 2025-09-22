@@ -12,6 +12,7 @@ import sys
 from valkey_build import ServerBuilder
 from valkey_server import ServerLauncher
 from valkey_benchmark import ClientRunner
+from benchmark_build import BenchmarkBuilder
 from utils.workflow_commits import mark_commits
 
 # ---------- Constants --------------------------------------------------------
@@ -67,9 +68,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--valkey-benchmark-path",
         type=Path,
-        default=Path("../valkey-benchmark-latest/src/valkey-benchmark"),
+        default=None,
         metavar="PATH",
-        help="Path to a custom valkey-benchmark executable. If omitted, uses the latest valkey-benchmark from '../valkey-benchmark-latest/src/valkey-benchmark'.",
+        help="Path to a custom valkey-benchmark executable. If omitted, automatically clones and builds the latest valkey-benchmark from unstable branch.",
     )
     parser.add_argument(
         "--baseline",
@@ -317,6 +318,16 @@ def run_benchmark_matrix(
 
     # ---- benchmarking client section -----------------
     if args.mode in ("client", "both"):
+        # Determine valkey-benchmark path
+        if args.valkey_benchmark_path:
+            benchmark_path = str(args.valkey_benchmark_path)
+            logging.info(f"Using custom valkey-benchmark path: {benchmark_path}")
+        else:
+            logging.info("No custom valkey-benchmark path provided, building latest unstable...")
+            benchmark_builder = BenchmarkBuilder()
+            benchmark_path = benchmark_builder.build_benchmark()
+            logging.info(f"Built fresh valkey-benchmark at: {benchmark_path}")
+        
         runner = ClientRunner(
             commit_id=commit_id,
             config=cfg,
@@ -327,9 +338,7 @@ def run_benchmark_matrix(
             valkey_path=str(valkey_dir),
             cores=bench_core_range,
             io_threads=cfg.get("io-threads"),
-            valkey_benchmark_path=(
-                str(args.valkey_benchmark_path) if args.valkey_benchmark_path else None
-            ),
+            valkey_benchmark_path=benchmark_path,
             benchmark_threads=cfg.get("benchmark-threads"),
         )
         runner.wait_for_server_ready()
