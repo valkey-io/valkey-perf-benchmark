@@ -333,7 +333,7 @@ def run_benchmark_matrix(
             logging.info(
                 "No custom valkey-benchmark path provided, building latest unstable..."
             )
-            benchmark_builder = BenchmarkBuilder()
+            benchmark_builder = BenchmarkBuilder(tls_enabled=cfg["tls_mode"])
             benchmark_path = benchmark_builder.build_benchmark()
             logging.info(f"Built fresh valkey-benchmark at: {benchmark_path}")
 
