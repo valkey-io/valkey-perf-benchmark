@@ -38,22 +38,34 @@ class BenchmarkBuilder:
         if self.benchmark_dir.exists():
             logging.info(f"Removing existing benchmark directory: {self.benchmark_dir}")
             shutil.rmtree(self.benchmark_dir)
-        
+
         logging.info(f"Cloning latest Valkey unstable into {self.benchmark_dir}...")
-        self._run(["git", "clone", "--branch", str(self.repo_branch), "--depth", "1", 
-                  self.repo_url, str(self.benchmark_dir)])
+        self._run(
+            [
+                "git",
+                "clone",
+                "--branch",
+                str(self.repo_branch),
+                "--depth",
+                "1",
+                self.repo_url,
+                str(self.benchmark_dir),
+            ]
+        )
 
     def build_benchmark(self) -> str:
         """Build valkey-benchmark and return path to binary."""
         self.clone_latest_unstable()
-        
+
         logging.info("Building valkey-benchmark from latest unstable...")
         self._run(["make", "distclean"], cwd=self.benchmark_dir)
         self._run(["make", "-j"], cwd=self.benchmark_dir)
-        
+
         if not self.benchmark_binary.exists():
-            raise RuntimeError(f"Failed to build valkey-benchmark at {self.benchmark_binary}")
-        
+            raise RuntimeError(
+                f"Failed to build valkey-benchmark at {self.benchmark_binary}"
+            )
+
         logging.info(f"Successfully built valkey-benchmark at {self.benchmark_binary}")
         return str(self.benchmark_binary)
 

@@ -132,10 +132,10 @@ def validate_config(cfg: dict) -> None:
     # Validate that either requests or duration is provided
     has_requests = "requests" in cfg and cfg["requests"] is not None
     has_duration = "duration" in cfg and cfg["duration"] is not None
-    
+
     if not has_requests and not has_duration:
         raise ValueError("Either 'requests' or 'duration' must be provided")
-    
+
     if has_requests and has_duration:
         raise ValueError("Cannot specify both 'requests' and 'duration' - use only one")
 
@@ -178,7 +178,10 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError("'io-threads' must be a positive integer")
             # Validate optional benchmark-threads
             elif k == "benchmark-threads":
-                if not isinstance(cfg["benchmark-threads"], int) or cfg["benchmark-threads"] <= 0:
+                if (
+                    not isinstance(cfg["benchmark-threads"], int)
+                    or cfg["benchmark-threads"] <= 0
+                ):
                     raise ValueError("'benchmark-threads' must be a positive integer")
             # Validate optional requests
             elif k == "requests":
@@ -186,12 +189,16 @@ def validate_config(cfg: dict) -> None:
                     if not isinstance(cfg["requests"], list) or not all(
                         isinstance(x, int) and x > 0 for x in cfg["requests"]
                     ):
-                        raise ValueError("'requests' must be a list of positive integers or null")
+                        raise ValueError(
+                            "'requests' must be a list of positive integers or null"
+                        )
             # Validate optional duration
             elif k == "duration":
                 if cfg["duration"] is not None:
                     if not isinstance(cfg["duration"], int) or cfg["duration"] <= 0:
-                        raise ValueError("'duration' must be a positive integer or null")
+                        raise ValueError(
+                            "'duration' must be a positive integer or null"
+                        )
             # Validate optional CPU ranges
             elif k in ["server_cpu_range", "client_cpu_range"]:
                 if not isinstance(cfg[k], str):
@@ -323,11 +330,13 @@ def run_benchmark_matrix(
             benchmark_path = str(args.valkey_benchmark_path)
             logging.info(f"Using custom valkey-benchmark path: {benchmark_path}")
         else:
-            logging.info("No custom valkey-benchmark path provided, building latest unstable...")
+            logging.info(
+                "No custom valkey-benchmark path provided, building latest unstable..."
+            )
             benchmark_builder = BenchmarkBuilder()
             benchmark_path = benchmark_builder.build_benchmark()
             logging.info(f"Built fresh valkey-benchmark at: {benchmark_path}")
-        
+
         runner = ClientRunner(
             commit_id=commit_id,
             config=cfg,
