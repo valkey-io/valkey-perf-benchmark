@@ -273,7 +273,7 @@ class ClientRunner:
                 mode_info = f"duration={duration}s"
             else:
                 mode_info = f"requests={requests}"
-            
+
             logging.info(
                 f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | {mode_info} | keyspacelen={keyspacelen} | warmup={warmup}"
             )
@@ -343,7 +343,7 @@ class ClientRunner:
         """Cartesian product of parameters within a single config item."""
         # Use requests if available, otherwise None for duration mode
         requests_list = self.config.get("requests", [None])
-        
+
         return list(
             product(
                 requests_list,
