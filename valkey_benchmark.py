@@ -328,6 +328,7 @@ class ClientRunner:
                 clients,
                 requests,
                 warmup,
+                duration,
             )
             if metrics:
                 logging.info(f"Parsed metrics: {metrics}")
