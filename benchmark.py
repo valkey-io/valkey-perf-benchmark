@@ -32,6 +32,7 @@ OPTIONAL_CONF_KEYS = [
     "io-threads",
     "server_cpu_range",
     "client_cpu_range",
+    "benchmark-threads",
 ]
 
 
@@ -168,6 +169,10 @@ def validate_config(cfg: dict) -> None:
             if k == "io-threads":
                 if not isinstance(cfg["io-threads"], int) or cfg["io-threads"] <= 0:
                     raise ValueError("'io-threads' must be a positive integer")
+            # Validate optional benchmark-threads
+            elif k == "benchmark-threads":
+                if not isinstance(cfg["benchmark-threads"], int) or cfg["benchmark-threads"] <= 0:
+                    raise ValueError("'benchmark-threads' must be a positive integer")
             # Validate optional CPU ranges
             elif k in ["server_cpu_range", "client_cpu_range"]:
                 if not isinstance(cfg[k], str):
@@ -307,6 +312,7 @@ def run_benchmark_matrix(
             valkey_benchmark_path=(
                 str(args.valkey_benchmark_path) if args.valkey_benchmark_path else None
             ),
+            benchmark_threads=cfg.get("benchmark-threads"),
         )
         runner.wait_for_server_ready()
         runner.run_benchmark_config()

@@ -30,12 +30,14 @@ class MetricsProcessor:
         tls_mode: bool,
         commit_time: str,
         io_threads: Optional[int] = None,
+        benchmark_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
         self.tls_mode = tls_mode
         self.commit_time = commit_time
         self.io_threads = io_threads
+        self.benchmark_threads = benchmark_threads
 
     def create_metrics(
         self,
@@ -121,6 +123,10 @@ class MetricsProcessor:
             # Add io_threads to metrics if it was specified
             if self.io_threads is not None:
                 metrics_dict["io_threads"] = self.io_threads
+
+            # Add benchmark_threads to metrics if it was specified
+            if self.benchmark_threads is not None:
+                metrics_dict["valkey-benchmark-threads"] = self.benchmark_threads
 
             # Add warmup to metrics if it was specified
             if warmup is not None:

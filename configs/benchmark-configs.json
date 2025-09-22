@@ -20,6 +20,7 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 10
+    "warmup": 10,
+    "benchmark-threads": 2
   }
 ]

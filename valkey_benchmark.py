@@ -59,6 +59,7 @@ class ClientRunner:
         cores: Optional[str] = None,
         io_threads: Optional[int] = None,
         valkey_benchmark_path: Optional[str] = None,
+        benchmark_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -70,6 +71,7 @@ class ClientRunner:
         self.cores = cores
         self.io_threads = io_threads
         self.valkey_benchmark_path = valkey_benchmark_path or VALKEY_BENCHMARK
+        self.benchmark_threads = benchmark_threads
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -237,6 +239,7 @@ class ClientRunner:
             self.tls_mode,
             commit_time,
             self.io_threads,
+            self.benchmark_threads,
         )
         metric_json = []
 
@@ -383,6 +386,8 @@ class ClientRunner:
         cmd += ["-P", str(pipeline)]
         cmd += ["-c", str(clients)]
         cmd += ["-t", command]
+        if self.benchmark_threads is not None:
+            cmd += ["--threads", str(self.benchmark_threads)]
         if sequential:
             cmd += ["--sequential"]
         cmd += ["--seed", str(seed_val)]
