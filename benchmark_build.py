@@ -11,11 +11,12 @@ from typing import Iterable, Optional
 class BenchmarkBuilder:
     """Clone and compile latest Valkey unstable for valkey-benchmark binary."""
 
-    def __init__(self, benchmark_dir: str = "../valkey-benchmark-latest") -> None:
+    def __init__(self, benchmark_dir: str = "../valkey-benchmark-latest", tls_enabled: bool = False) -> None:
         self.repo_url = "https://github.com/SoftlyRaining/valkey.git"
         self.repo_branch = "valkey-benchmark-duration"
         self.benchmark_dir = Path(benchmark_dir)
         self.benchmark_binary = self.benchmark_dir / "src" / "valkey-benchmark"
+        self.tls_enabled = tls_enabled
 
     def _run(self, command: Iterable[str], cwd: Optional[Path] = None) -> None:
         """Execute a command with optional check and fail loudly if needed."""
@@ -57,16 +58,20 @@ class BenchmarkBuilder:
         """Build valkey-benchmark and return path to binary."""
         self.clone_latest_unstable()
 
-        logging.info("Building valkey-benchmark from latest unstable...")
         self._run(["make", "distclean"], cwd=self.benchmark_dir)
-        self._run(["make", "-j"], cwd=self.benchmark_dir)
+        if self.tls_enabled:
+            self._run(["make", "BUILD_TLS=yes", "-j"], cwd=self.benchmark_dir)
+            tls_status = "with TLS"
+        else:
+            self._run(["make", "BUILD_TLS=no", "-j"], cwd=self.benchmark_dir)
+            tls_status = "without TLS"
 
         if not self.benchmark_binary.exists():
             raise RuntimeError(
                 f"Failed to build valkey-benchmark at {self.benchmark_binary}"
             )
 
-        logging.info(f"Successfully built valkey-benchmark at {self.benchmark_binary}")
+        logging.info(f"Successfully built valkey-benchmark {tls_status} at {self.benchmark_binary}")
         return str(self.benchmark_binary)
 
     def get_benchmark_path(self) -> str:
