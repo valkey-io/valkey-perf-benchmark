@@ -170,6 +170,8 @@ class ServerLauncher:
             with self._client_context(tls_mode) as client:
                 client.execute_command("CLUSTER", "RESET", "HARD")
                 client.execute_command("CLUSTER", "ADDSLOTSRANGE", "0", "16383")
+                # Wait for cluster to stabilize after reset
+                time.sleep(2)
                 logging.info("Cluster configuration completed successfully.")
         except Exception as e:
             logging.error(f"Failed to setup cluster: {e}")
