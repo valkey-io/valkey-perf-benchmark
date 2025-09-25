@@ -165,8 +165,8 @@ Example:
 | `cluster_mode` | Whether to enable cluster mode | String ("yes"/"no") | No |
 | `tls_mode` | Whether to enable TLS | String ("yes"/"no") | No |
 | `warmup` | Warmup time in seconds before benchmarking | Integer | No |
-| `server_cpu_range` | CPU cores for server (e.g. "0-3" or "0,2,4") | String | No |
-| `client_cpu_range` | CPU cores for client (e.g. "4-7" or "1,3,5") | String | No |
+| `server_cpu_range` | CPU cores for server (e.g. "0-3", "0,2,4", or "144-191,48-95") | String | No |
+| `client_cpu_range` | CPU cores for client (e.g. "4-7", "1,3,5", or "0-3,8-11") | String | No |
 
 When `warmup` is provided for read commands, the benchmark performs three
 stages:

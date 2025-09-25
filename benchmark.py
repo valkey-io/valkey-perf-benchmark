@@ -243,24 +243,41 @@ def init_logging(log_path: Path) -> None:
 def parse_core_range(range_str: str) -> None:
     """Validate CPU core range string format.
 
-    ``range_str`` can be a simple range like ``"0-3"`` or a comma separated
-    list such as ``"0,2,4"``.
+    ``range_str`` can be:
+    - A simple range like ``"0-3"``
+    - A comma separated list such as ``"0,2,4"``
+    - Multiple ranges like ``"0-3,8-11"`` or ``"144-191,48-95"``
     """
     if not range_str or not isinstance(range_str, str):
         raise ValueError("Core range must be a non-empty string")
 
+    # Check for leading/trailing commas or empty parts
+    if range_str.startswith(",") or range_str.endswith(","):
+        raise ValueError("Core range cannot start or end with comma")
+    
+    if ",," in range_str:
+        raise ValueError("Core range cannot contain consecutive commas")
+
     try:
-        if "-" in range_str:
-            parts = range_str.split("-")
-            if len(parts) != 2:
-                raise ValueError("Range format should be 'start-end'")
-            start, end = int(parts[0]), int(parts[1])
-            if start < 0 or end < 0 or start > end:
-                raise ValueError("Invalid core range values")
-        else:
-            cores = [int(c.strip()) for c in range_str.split(",") if c.strip()]
-            if not cores or any(c < 0 for c in cores):
-                raise ValueError("Core numbers must be non-negative")
+        # Split by comma to handle multiple ranges or individual cores
+        parts = [part.strip() for part in range_str.split(",")]
+        if not parts or any(not part for part in parts):
+            raise ValueError("Core range must contain at least one core or range")
+        
+        for part in parts:
+            if "-" in part:
+                # Handle range format like "0-3" or "144-191"
+                range_parts = part.split("-")
+                if len(range_parts) != 2:
+                    raise ValueError(f"Range format should be 'start-end', got: {part}")
+                start, end = int(range_parts[0]), int(range_parts[1])
+                if start < 0 or end < 0 or start > end:
+                    raise ValueError(f"Invalid core range values in: {part}")
+            else:
+                # Handle individual core number
+                core = int(part)
+                if core < 0:
+                    raise ValueError(f"Core numbers must be non-negative, got: {core}")
     except ValueError as e:
         if "invalid literal" in str(e):
             raise ValueError(f"Invalid core range format: {range_str}")
