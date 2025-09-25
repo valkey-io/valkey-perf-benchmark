@@ -75,6 +75,7 @@ class ClientRunner:
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
+        print(f"Connecting to {self.target_ip}")
         kwargs = {
             "host": self.target_ip,
             "port": DEFAULT_PORT,
