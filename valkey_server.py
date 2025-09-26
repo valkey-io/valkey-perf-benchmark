@@ -154,6 +154,7 @@ class ServerLauncher:
         cmd += ["--daemonize", "yes"]
         cmd += ["--maxmemory-policy", "allkeys-lru"]
         cmd += ["--appendonly", "no"]
+        cmd += ["--protected-mode", "no"]
         cmd += ["--logfile", log_file]
         cmd += ["--save", "''"]
 
