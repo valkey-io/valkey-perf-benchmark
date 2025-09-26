@@ -2,6 +2,7 @@
 """Command-line interface to run Valkey benchmarks."""
 
 import argparse
+import ipaddress
 import json
 import logging
 from pathlib import Path
@@ -284,6 +285,25 @@ def parse_core_range(range_str: str) -> None:
         raise
 
 
+def validate_target_ip(ip_address: str) -> bool:
+    """Validate if the target IP is a valid IP address format.
+    
+    Args:
+        ip_address: The IP address to validate
+        
+    Returns:
+        bool: True if IP format is valid, False otherwise
+        
+    Raises:
+        ValueError: If the IP address format is invalid
+    """
+    try:
+        ipaddress.ip_address(ip_address)
+        return True
+    except ValueError as e:
+        raise ValueError(f"Invalid IP address format '{ip_address}': {e}")
+
+
 def parse_bool(value) -> bool:
     """Return ``value`` converted to ``bool``.
 
@@ -401,6 +421,15 @@ def main() -> None:
             "so --mode must be 'client' and `valkey_path` must be provided."
         )
         sys.exit(1)
+
+    # Validate target IP format if running in client mode
+    if args.mode in ("client", "both"):
+        try:
+            validate_target_ip(args.target_ip)
+            print(f"✓ Target IP {args.target_ip} has valid format")
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
 
     commits = args.commits.copy()
     if args.baseline and args.baseline not in commits:
