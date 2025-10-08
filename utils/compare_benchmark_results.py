@@ -74,6 +74,12 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
         "p50_latency_ms_stdev",
         "p95_latency_ms_stdev",
         "p99_latency_ms_stdev",
+        # Coefficient of variation fields
+        "rps_cv",
+        "avg_latency_ms_cv",
+        "p50_latency_ms_cv",
+        "p95_latency_ms_cv",
+        "p99_latency_ms_cv",
     }
 
     for item in data:
@@ -217,10 +223,19 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 ],
             }
 
-            # Calculate means and standard deviations
+            # Calculate means, standard deviations, and coefficient of variation
             for metric, values in metric_values.items():
-                averaged_item[metric] = calculate_mean(values)
-                averaged_item[f"{metric}_stdev"] = calculate_stdev(values)
+                mean_val = calculate_mean(values)
+                stdev_val = calculate_stdev(values)
+
+                averaged_item[metric] = mean_val
+                averaged_item[f"{metric}_stdev"] = stdev_val
+
+                # Calculate CV directly from already computed mean and stdev
+                if mean_val == 0.0 or stdev_val == 0.0:
+                    averaged_item[f"{metric}_cv"] = 0.0
+                else:
+                    averaged_item[f"{metric}_cv"] = (stdev_val / mean_val) * 100.0
 
             # Preserve the most recent timestamp and commit
             timestamps = [run.get("timestamp") for run in runs if run.get("timestamp")]
@@ -466,6 +481,8 @@ def _generate_table_rows_for_config(
                             f"{metric_key}_stdev", 0.0
                         ),
                         "new_stdev": new_stats.get(f"{metric_key}_stdev", 0.0),
+                        "baseline_cv": baseline_stats.get(f"{metric_key}_cv", 0.0),
+                        "new_cv": new_stats.get(f"{metric_key}_cv", 0.0),
                     }
                 )
 
@@ -486,7 +503,7 @@ def _group_by_table_parameters(
 
 
 def _extract_run_statistics(items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Extract run count and standard deviation statistics from benchmark items."""
+    """Extract run count, standard deviation, and coefficient of variation statistics from benchmark items."""
     if not items:
         return {"run_count": 0}
 
@@ -495,23 +512,37 @@ def _extract_run_statistics(items: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     stats = {"run_count": run_count}
 
-    # Extract standard deviations if available
-    for stdev_key in [
-        "rps_stdev",
-        "avg_latency_ms_stdev",
-        "p50_latency_ms_stdev",
-        "p95_latency_ms_stdev",
-        "p99_latency_ms_stdev",
+    # Extract standard deviations and coefficient of variations if available
+    for metric_base in [
+        "rps",
+        "avg_latency_ms",
+        "p50_latency_ms",
+        "p95_latency_ms",
+        "p99_latency_ms",
     ]:
+        stdev_key = f"{metric_base}_stdev"
+        cv_key = f"{metric_base}_cv"
+
         if stdev_key in items[0]:
+            # Use pre-calculated values
             stats[stdev_key] = items[0][stdev_key]
+            stats[cv_key] = items[0].get(cv_key, 0.0)
         elif run_count > 1:
             # Calculate from raw data if not pre-calculated
-            metric_key = stdev_key.replace("_stdev", "")
-            values = [item.get(metric_key, 0.0) for item in items]
-            stats[stdev_key] = calculate_stdev(values)
+            values = [item.get(metric_base, 0.0) for item in items]
+            mean_val = calculate_mean(values)
+            stdev_val = calculate_stdev(values)
+
+            stats[stdev_key] = stdev_val
+
+            # Calculate CV directly from computed mean and stdev
+            if mean_val == 0.0 or stdev_val == 0.0:
+                stats[cv_key] = 0.0
+            else:
+                stats[cv_key] = (stdev_val / mean_val) * 100.0
         else:
             stats[stdev_key] = 0.0
+            stats[cv_key] = 0.0
 
     return stats
 
@@ -542,7 +573,8 @@ def format_comparison_report(
         report_lines.append("**Configuration:**")
         for key in sorted(config_keys):
             value = config_dict.get(key)
-            if value is not None:
+            # Exclude CV fields from configuration display (they are statistical results, not config parameters)
+            if value is not None and not key.endswith("_cv"):
                 report_lines.append(f"- {key}: {value}")
         report_lines.append("")
 
@@ -560,10 +592,14 @@ def format_comparison_report(
                 row["baseline_value"],
                 row.get("baseline_run_count", 0),
                 row.get("baseline_stdev", 0.0),
+                row.get("baseline_cv", 0.0),
             )
 
             new_display = _format_metric_value(
-                row["new_value"], row.get("new_run_count", 0), row.get("new_stdev", 0.0)
+                row["new_value"],
+                row.get("new_run_count", 0),
+                row.get("new_stdev", 0.0),
+                row.get("new_cv", 0.0),
             )
 
             # Create table row
@@ -578,13 +614,15 @@ def format_comparison_report(
     return "\n".join(report_lines)
 
 
-def _format_metric_value(value: float, run_count: int, stdev: float) -> str:
-    """Format a metric value with optional run count and standard deviation."""
+def _format_metric_value(
+    value: float, run_count: int, stdev: float, cv: float = 0.0
+) -> str:
+    """Format a metric value with optional run count, standard deviation, and coefficient of variation."""
     formatted_value = f"{value:.2f}"
 
     # Add statistical information for multiple runs
     if run_count > 1:
-        formatted_value += f" (n={run_count}, σ={stdev:.2f})"
+        formatted_value += f" (n={run_count}, σ={stdev:.2f}, CV={cv:.1f}%)"
 
     return formatted_value
 
@@ -1210,7 +1248,7 @@ def main():
         f"{len(baseline_data)} configurations (avg {baseline_avg_runs:.1f} runs per config)\n"
         f"- {new_version}: {original_new_count} total runs, "
         f"{len(new_data)} configurations (avg {new_avg_runs:.1f} runs per config)\n\n"
-        f"*Note: Values with (n=X, σ=Y) indicate averages from X runs with standard deviation Y*"
+        f"*Note: Values with (n=X, σ=Y, CV=Z%) indicate averages from X runs with standard deviation Y and coefficient of variation Z%*"
     )
 
     final_report = (

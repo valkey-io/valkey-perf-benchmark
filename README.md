@@ -118,13 +118,32 @@ python utils/compare_benchmark_results.py --baseline results/commit1/metrics.jso
 ### Comparison Tool Features
 
 - **Automatic Run Averaging**: Intelligently groups and averages multiple benchmark runs with identical configurations
-- **Statistical Analysis**: Calculates means and standard deviations with proper sample standard deviation (n-1)
+- **Statistical Analysis**: Calculates means, standard deviations, and Coefficient of Variation (CV) with proper sample standard deviation (n-1)
+- **Coefficient of Variation**: Provides normalized variability metrics (CV = σ/μ × 100%) for scale-independent comparison across different performance metrics
 - **Graph Generation**: Comprehensive matplotlib-based visualization including:
   - Consolidated comparison graphs for all metrics
   - Variance line graphs showing individual run values with error bars
   - RPS-focused filtering for integration purposes
 - **Metrics Filtering**: Support for filtering by metric type (all, rps, latency)
-- **Standardized Output**: Generates markdown reports with statistical information
+- **Standardized Output**: Generates markdown reports with comprehensive statistical information including CV
+
+### Statistical Display Format
+
+When multiple runs are available, the comparison tool displays comprehensive statistical information:
+
+```
+Metric Value (n=X, σ=Y, CV=Z%)
+```
+
+Where:
+- `n`: Number of runs
+- `σ`: Standard deviation
+- `CV`: Coefficient of Variation as a percentage
+
+The Coefficient of Variation (CV) is particularly useful for:
+- **Scale-independent comparison**: Compare variability across metrics with different units (e.g., RPS vs latency)
+- **Performance consistency assessment**: Lower CV indicates more consistent performance
+- **Benchmark reliability evaluation**: High CV may indicate unstable test conditions
 
 ### Graph Types
 
