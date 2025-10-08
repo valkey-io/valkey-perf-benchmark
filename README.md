@@ -90,7 +90,46 @@ python benchmark.py --valkey-path /path/to/valkey --use-running-server
 
 # Compare with baseline
 python benchmark.py --commits HEAD --baseline unstable
+
+# Run multiple benchmark runs for statistical reliability
+python benchmark.py --commits HEAD --runs 5
 ```
+
+## Benchmark Comparison and Analysis
+
+The project includes a powerful comparison tool for analyzing benchmark results with statistical rigor and graph generation.
+
+### Compare Benchmark Results
+
+```bash
+# Basic comparison between two result files
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md
+
+# Generate graphs along with comparison
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md --graphs --graph-dir graphs/
+
+# Filter to show only RPS metrics
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md --metrics rps --graphs
+
+# Filter to show only latency metrics
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md --metrics latency --graphs
+```
+
+### Comparison Tool Features
+
+- **Automatic Run Averaging**: Intelligently groups and averages multiple benchmark runs with identical configurations
+- **Statistical Analysis**: Calculates means and standard deviations with proper sample standard deviation (n-1)
+- **Graph Generation**: Comprehensive matplotlib-based visualization including:
+  - Consolidated comparison graphs for all metrics
+  - Variance line graphs showing individual run values with error bars
+  - RPS-focused filtering for integration purposes
+- **Metrics Filtering**: Support for filtering by metric type (all, rps, latency)
+- **Standardized Output**: Generates markdown reports with statistical information
+
+### Graph Types
+
+1. **Consolidated Comparison Graphs**: Single comprehensive graphs showing all metrics with proper legend format `{commit}-P{pipeline}/IO{io_threads}`
+2. **Variance Line Graphs**: Individual run values with standard deviation visualization and error bars
 
 ### Advanced Options
 
