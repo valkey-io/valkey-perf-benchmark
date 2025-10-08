@@ -911,30 +911,51 @@ def main():
     """
     if len(sys.argv) < 3:
         print(
-            "Usage: compare_benchmark_results.py BASELINE NEW [OUT_FILE] [--metrics {all,rps,latency}] [--graphs] [--graph-dir DIR]",
+            "Usage: compare_benchmark_results.py --baseline FILE --new FILE [OPTIONS]",
             file=sys.stderr,
         )
         print("\nOptions:")
-        print("  BASELINE    Path to baseline benchmark results JSON file")
-        print("  NEW         Path to new benchmark results JSON file") 
-        print("  OUT_FILE    Optional output file path (prints to stdout if not specified)")
+        print("  --baseline  Path to baseline benchmark results JSON file")
+        print("  --new       Path to new benchmark results JSON file") 
+        print("  --output    Optional output file path (prints to stdout if not specified)")
         print("  --metrics   Filter metrics to display: 'all' (default), 'rps', or 'latency'")
         print("  --graphs    Generate comparison graphs")
         print("  --graph-dir Directory to save graphs (default: current directory)")
         sys.exit(1)
 
-    baseline_file = sys.argv[1]
-    new_file = sys.argv[2]
+    baseline_file = None
+    new_file = None
     out_file = None
     metrics_filter = "all"
     generate_graphs = False
     graph_dir = "."
     
-    # Parse optional arguments
-    i = 3
+    # Parse arguments
+    i = 1
     while i < len(sys.argv):
         arg = sys.argv[i]
-        if arg == "--metrics":
+        if arg == "--baseline":
+            if i + 1 < len(sys.argv):
+                baseline_file = sys.argv[i + 1]
+                i += 1  # Skip the file argument
+            else:
+                print("ERROR: --baseline requires a file path", file=sys.stderr)
+                sys.exit(1)
+        elif arg == "--new":
+            if i + 1 < len(sys.argv):
+                new_file = sys.argv[i + 1]
+                i += 1  # Skip the file argument
+            else:
+                print("ERROR: --new requires a file path", file=sys.stderr)
+                sys.exit(1)
+        elif arg == "--output":
+            if i + 1 < len(sys.argv):
+                out_file = sys.argv[i + 1]
+                i += 1  # Skip the file argument
+            else:
+                print("ERROR: --output requires a file path", file=sys.stderr)
+                sys.exit(1)
+        elif arg == "--metrics":
             if i + 1 < len(sys.argv):
                 metrics_filter = sys.argv[i + 1]
                 if metrics_filter not in ["all", "rps", "latency"]:
@@ -954,9 +975,18 @@ def main():
             else:
                 print("ERROR: --graph-dir requires a directory path", file=sys.stderr)
                 sys.exit(1)
-        elif not out_file:
-            out_file = arg
+        else:
+            print(f"ERROR: Unknown argument '{arg}'", file=sys.stderr)
+            sys.exit(1)
         i += 1
+
+    # Validate required arguments
+    if not baseline_file:
+        print("ERROR: --baseline is required", file=sys.stderr)
+        sys.exit(1)
+    if not new_file:
+        print("ERROR: --new is required", file=sys.stderr)
+        sys.exit(1)
 
     # Load benchmark data
     print("Loading benchmark data...")
