@@ -115,6 +115,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to completed_commits.json used for tracking progress",
     )
 
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Number of times to run each benchmark configuration (default: 1)",
+    )
+
     args, unknown = parser.parse_known_args()
     if unknown:
         parser.error(f"Unrecognized arguments: {' '.join(unknown)}")
@@ -431,6 +438,11 @@ def main() -> None:
             print(f"ERROR: {e}")
             sys.exit(1)
 
+    # Validate runs parameter
+    if args.runs < 1:
+        print("ERROR: --runs must be a positive integer")
+        sys.exit(1)
+
     commits = args.commits.copy()
     if args.baseline and args.baseline not in commits:
         commits.append(args.baseline)
@@ -438,7 +450,10 @@ def main() -> None:
     for cfg in load_configs(args.config):
         for commit in commits:
             print(f"=== Processing commit: {commit} ===")
-            run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
+            for run_num in range(args.runs):
+                if args.runs > 1:
+                    print(f"=== Run {run_num + 1}/{args.runs} ===")
+                run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
 
 
 if __name__ == "__main__":
