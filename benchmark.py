@@ -262,7 +262,7 @@ def parse_core_range(range_str: str) -> None:
     # Check for leading/trailing commas or empty parts
     if range_str.startswith(",") or range_str.endswith(","):
         raise ValueError("Core range cannot start or end with comma")
-    
+
     if ",," in range_str:
         raise ValueError("Core range cannot contain consecutive commas")
 
@@ -271,7 +271,7 @@ def parse_core_range(range_str: str) -> None:
         parts = [part.strip() for part in range_str.split(",")]
         if not parts or any(not part for part in parts):
             raise ValueError("Core range must contain at least one core or range")
-        
+
         for part in parts:
             if "-" in part:
                 # Handle range format like "0-3" or "144-191"
@@ -294,13 +294,13 @@ def parse_core_range(range_str: str) -> None:
 
 def validate_target_ip(ip_address: str) -> bool:
     """Validate if the target IP is a valid IP address format.
-    
+
     Args:
         ip_address: The IP address to validate
-        
+
     Returns:
         bool: True if IP format is valid, False otherwise
-        
+
     Raises:
         ValueError: If the IP address format is invalid
     """
