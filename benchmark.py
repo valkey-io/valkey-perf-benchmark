@@ -355,6 +355,7 @@ def run_benchmark_matrix(
         f"Cluster={'on' if cfg['cluster_mode'] else 'off'}"
     )
     # ---- server section -----------------
+    launcher = None
     if (not args.use_running_server) and args.mode in ("server", "both"):
         launcher = ServerLauncher(
             results_dir=results_dir,
@@ -394,6 +395,7 @@ def run_benchmark_matrix(
             valkey_benchmark_path=benchmark_path,
             benchmark_threads=cfg.get("benchmark-threads"),
             runs=args.runs,
+            server_launcher=launcher,
         )
         runner.wait_for_server_ready()
         runner.run_benchmark_config()
