@@ -30,12 +30,14 @@ class MetricsProcessor:
         tls_mode: bool,
         commit_time: str,
         io_threads: Optional[int] = None,
+        benchmark_threads: Optional[int] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
         self.tls_mode = tls_mode
         self.commit_time = commit_time
         self.io_threads = io_threads
+        self.benchmark_threads = benchmark_threads
 
     def create_metrics(
         self,
@@ -44,8 +46,9 @@ class MetricsProcessor:
         data_size: int,
         pipeline: int,
         clients: int,
-        requests: int,
+        requests: Optional[int] = None,
         warmup: Optional[int] = None,
+        duration: Optional[int] = None,
     ) -> Optional[Dict[str, object]]:
         """Create a complete metrics dictionary from CSV output and benchmark parameters.
 
@@ -106,7 +109,6 @@ class MetricsProcessor:
                 "data_size": int(data_size),
                 "pipeline": int(pipeline),
                 "clients": int(clients),
-                "requests": int(requests),
                 "rps": safe_float(data.get("rps")),
                 "avg_latency_ms": safe_float(data.get("avg_latency_ms")),
                 "min_latency_ms": safe_float(data.get("min_latency_ms")),
@@ -118,9 +120,24 @@ class MetricsProcessor:
                 "tls": self.tls_mode,
             }
 
+            # Add requests or duration based on benchmark mode
+            if requests is not None:
+                metrics_dict["requests"] = int(requests)
+                metrics_dict["benchmark_mode"] = "requests"
+            elif duration is not None:
+                metrics_dict["duration"] = int(duration)
+                metrics_dict["benchmark_mode"] = "duration"
+            else:
+                logging.warning("Neither requests nor duration specified")
+                metrics_dict["benchmark_mode"] = "unknown"
+
             # Add io_threads to metrics if it was specified
             if self.io_threads is not None:
                 metrics_dict["io_threads"] = self.io_threads
+
+            # Add benchmark_threads to metrics if it was specified
+            if self.benchmark_threads is not None:
+                metrics_dict["valkey-benchmark-threads"] = self.benchmark_threads
 
             # Add warmup to metrics if it was specified
             if warmup is not None:
