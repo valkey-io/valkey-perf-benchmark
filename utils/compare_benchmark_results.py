@@ -1547,7 +1547,11 @@ def main():
         f"{len(baseline_data)} configurations (avg {baseline_avg_runs:.2f} runs per config)\n"
         f"- {new_version}: {original_new_count} total runs, "
         f"{len(new_data)} configurations (avg {new_avg_runs:.2f} runs per config)\n\n"
-        f"*Note: Values with (n=X, σ=Y, CV=Z%, CI99%=±W%, [A, B]) indicate averages from X runs with standard deviation Y, coefficient of variation Z%, 99% confidence interval margin of error ±W% of the mean, and confidence interval bounds [A, B]*"
+        f"**Statistical Notes:**\n"
+        f"- **CI99%**: 99% Confidence Interval - range where the true population mean is likely to fall\n"
+        f"- **PI99%**: 99% Prediction Interval - range where a single future observation is likely to fall\n"
+        f"- **CV**: Coefficient of Variation - relative variability (σ/μ × 100%)\n\n"
+        f"*Note: Values with (n=X, σ=Y, CV=Z%, CI99%=±W%, PI99%=±V%) indicate averages from X runs with standard deviation Y, coefficient of variation Z%, 99% confidence interval margin of error ±W% of the mean, and 99% prediction interval margin of error ±V% of the mean. CI bounds [A, B] and PI bounds [C, D] show the actual interval ranges.*"
     )
 
     final_report = (
