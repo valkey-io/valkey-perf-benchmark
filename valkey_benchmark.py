@@ -60,6 +60,7 @@ class ClientRunner:
         io_threads: Optional[int] = None,
         valkey_benchmark_path: Optional[str] = None,
         benchmark_threads: Optional[int] = None,
+        runs: int = 1,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -72,6 +73,7 @@ class ClientRunner:
         self.io_threads = io_threads
         self.valkey_benchmark_path = valkey_benchmark_path or VALKEY_BENCHMARK
         self.benchmark_threads = benchmark_threads
+        self.runs = runs
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -275,65 +277,70 @@ class ClientRunner:
             else:
                 mode_info = f"requests={requests}"
 
-            logging.info(
-                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | {mode_info} | keyspacelen={keyspacelen} | warmup={warmup}"
-            )
+            # Run the benchmark multiple times based on self.runs
+            for run_num in range(self.runs):
+                if self.runs > 1:
+                    logging.info(f"=== Run {run_num + 1}/{self.runs} ===")
+                
+                logging.info(
+                    f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | {mode_info} | keyspacelen={keyspacelen} | warmup={warmup}"
+                )
 
-            seed_val = random.randint(0, 1000000)
-            logging.info(f"Using seed value: {seed_val}")
+                seed_val = random.randint(0, 1000000)
+                logging.info(f"Using seed value: {seed_val}")
 
-            # Flush database before each benchmark run for clean state
-            self._flush_database()
+                # Flush database before each benchmark run for clean state
+                self._flush_database()
 
-            # Data injection for read commands
-            if command in READ_COMMANDS:
-                # For duration mode, use keyspacelen as the number of keys to populate
-                populate_requests = requests if requests is not None else keyspacelen
-                self._populate_keyspace(
-                    command,
-                    populate_requests,
+                # Data injection for read commands
+                if command in READ_COMMANDS:
+                    # For duration mode, use keyspacelen as the number of keys to populate
+                    populate_requests = requests if requests is not None else keyspacelen
+                    self._populate_keyspace(
+                        command,
+                        populate_requests,
+                        keyspacelen,
+                        data_size,
+                        pipeline,
+                        clients,
+                        seed_val,
+                    )
+                bench_cmd = self._build_benchmark_command(
+                    self.tls_mode,
+                    requests,
                     keyspacelen,
                     data_size,
                     pipeline,
                     clients,
+                    command,
                     seed_val,
+                    sequential=False,
+                    duration=duration,
+                    warmup=warmup,
                 )
-            bench_cmd = self._build_benchmark_command(
-                self.tls_mode,
-                requests,
-                keyspacelen,
-                data_size,
-                pipeline,
-                clients,
-                command,
-                seed_val,
-                sequential=False,
-                duration=duration,
-                warmup=warmup,
-            )
 
-            # Run actual benchmark
-            logging.info("Running main benchmark command")
-            proc = self._run(
-                bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None
-            )
-            logging.info(f"Benchmark output:\n{proc.stdout}")
-            if proc.stderr:
-                logging.warning(f"Benchmark stderr:\n{proc.stderr}")
+                # Run actual benchmark
+                logging.info("Running main benchmark command")
+                proc = self._run(
+                    bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None
+                )
+                logging.info(f"Benchmark output:\n{proc.stdout}")
+                if proc.stderr:
+                    logging.warning(f"Benchmark stderr:\n{proc.stderr}")
 
-            metrics = metrics_processor.create_metrics(
-                proc.stdout,
-                command,
-                data_size,
-                pipeline,
-                clients,
-                requests,
-                warmup,
-                duration,
-            )
-            if metrics:
-                logging.info(f"Parsed metrics: {metrics}")
-                metric_json.append(metrics)
+                metrics = metrics_processor.create_metrics(
+                    proc.stdout,
+                    command,
+                    data_size,
+                    pipeline,
+                    clients,
+                    requests,
+                    warmup,
+                    duration,
+                )
+                if metrics:
+                    logging.info(f"Parsed metrics: {metrics}")
+                    metric_json.append(metrics)
 
         if not metric_json:
             logging.warning("No metrics collected, skipping write.")

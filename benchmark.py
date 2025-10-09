@@ -393,6 +393,7 @@ def run_benchmark_matrix(
             io_threads=cfg.get("io-threads"),
             valkey_benchmark_path=benchmark_path,
             benchmark_threads=cfg.get("benchmark-threads"),
+            runs=args.runs,
         )
         runner.wait_for_server_ready()
         runner.run_benchmark_config()
@@ -450,10 +451,7 @@ def main() -> None:
     for cfg in load_configs(args.config):
         for commit in commits:
             print(f"=== Processing commit: {commit} ===")
-            for run_num in range(args.runs):
-                if args.runs > 1:
-                    print(f"=== Run {run_num + 1}/{args.runs} ===")
-                run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
+            run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
 
 
 if __name__ == "__main__":
