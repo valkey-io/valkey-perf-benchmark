@@ -12,6 +12,7 @@ from typing import Iterable, List, Optional
 import valkey
 
 from process_metrics import MetricsProcessor
+from valkey_server import ServerLauncher
 
 # Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
@@ -61,6 +62,7 @@ class ClientRunner:
         valkey_benchmark_path: Optional[str] = None,
         benchmark_threads: Optional[int] = None,
         runs: int = 1,
+        server_launcher = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -74,6 +76,7 @@ class ClientRunner:
         self.valkey_benchmark_path = valkey_benchmark_path or VALKEY_BENCHMARK
         self.benchmark_threads = benchmark_threads
         self.runs = runs
+        self.server_launcher = server_launcher
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -289,8 +292,12 @@ class ClientRunner:
                 seed_val = random.randint(0, 1000000)
                 logging.info(f"Using seed value: {seed_val}")
 
-                # Flush database before each benchmark run for clean state
-                self._flush_database()
+                # Restart server before each test for clean state
+                if self.server_launcher:
+                    self._restart_server()
+                else:
+                    # Flush database if server restart is not available
+                    self._flush_database()
 
                 # Data injection for read commands
                 if command in READ_COMMANDS:
@@ -411,3 +418,21 @@ class ClientRunner:
         cmd += ["--seed", str(seed_val)]
         cmd += ["--csv"]
         return cmd
+
+    def _restart_server(self) -> None:
+        """Restart the Valkey server for a clean state."""
+        logging.info("Restarting Valkey server for clean state...")
+        
+        # Shutdown current server
+        self.server_launcher.shutdown(self.tls_mode)
+        
+        # Start fresh server
+        self.server_launcher.launch(
+            cluster_mode=self.cluster_mode,
+            tls_mode=self.tls_mode,
+            io_threads=self.io_threads,
+        )
+        
+        # Wait for server to be ready
+        self.wait_for_server_ready()
+        logging.info("Server restarted successfully")
