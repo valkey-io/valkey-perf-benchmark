@@ -182,8 +182,14 @@ def validate_config(cfg: dict) -> None:
         if k in cfg:
             # Validate optional io-threads
             if k == "io-threads":
-                if not isinstance(cfg["io-threads"], int) or cfg["io-threads"] <= 0:
-                    raise ValueError("'io-threads' must be a positive integer")
+                if isinstance(cfg["io-threads"], int):
+                    if cfg["io-threads"] <= 0:
+                        raise ValueError("'io-threads' must be a positive integer")
+                elif isinstance(cfg["io-threads"], list):
+                    if not all(isinstance(x, int) and x > 0 for x in cfg["io-threads"]):
+                        raise ValueError("'io-threads' must be a list of positive integers")
+                else:
+                    raise ValueError("'io-threads' must be a positive integer or list of positive integers")
             # Validate optional benchmark-threads
             elif k == "benchmark-threads":
                 if (
@@ -354,68 +360,86 @@ def run_benchmark_matrix(
         f"TLS={'on' if cfg['tls_mode'] else 'off'} | "
         f"Cluster={'on' if cfg['cluster_mode'] else 'off'}"
     )
-    # ---- server section -----------------
-    launcher = None
-    if (not args.use_running_server) and args.mode in ("server", "both"):
-        launcher = ServerLauncher(
-            results_dir=results_dir,
-            valkey_path=str(valkey_dir),
-            cores=server_core_range,
-        )
-        launcher.launch(
-            cluster_mode=cfg["cluster_mode"],
-            tls_mode=cfg["tls_mode"],
-            io_threads=cfg.get("io-threads"),
-        )
 
-    # ---- benchmarking client section -----------------
-    if args.mode in ("client", "both"):
-        # Determine valkey-benchmark path
-        if args.valkey_benchmark_path:
-            benchmark_path = str(args.valkey_benchmark_path)
-            logging.info(f"Using custom valkey-benchmark path: {benchmark_path}")
-        else:
-            logging.info(
-                "No custom valkey-benchmark path provided, building latest unstable..."
+    # Get io_threads values - handle both single int and list
+    io_threads_values = cfg.get("io-threads")
+    if io_threads_values is None:
+        io_threads_list = [None]
+    elif isinstance(io_threads_values, int):
+        io_threads_list = [io_threads_values]
+    else:
+        io_threads_list = io_threads_values
+
+    # Run benchmark for each io_threads value
+    for io_threads in io_threads_list:
+        logging.info(f"Running benchmark with io_threads={io_threads}")
+        
+        # ---- server section -----------------
+        launcher = None
+        if (not args.use_running_server) and args.mode in ("server", "both"):
+            launcher = ServerLauncher(
+                results_dir=results_dir,
+                valkey_path=str(valkey_dir),
+                cores=server_core_range,
             )
-            benchmark_builder = BenchmarkBuilder(tls_enabled=cfg["tls_mode"])
-            benchmark_path = benchmark_builder.build_benchmark()
-            logging.info(f"Built fresh valkey-benchmark at: {benchmark_path}")
-
-        runner = ClientRunner(
-            commit_id=commit_id,
-            config=cfg,
-            cluster_mode=cfg["cluster_mode"],
-            tls_mode=cfg["tls_mode"],
-            target_ip=args.target_ip,
-            results_dir=results_dir,
-            valkey_path=str(valkey_dir),
-            cores=bench_core_range,
-            io_threads=cfg.get("io-threads"),
-            valkey_benchmark_path=benchmark_path,
-            benchmark_threads=cfg.get("benchmark-threads"),
-            runs=args.runs,
-            server_launcher=launcher,
-        )
-        runner.wait_for_server_ready()
-        runner.run_benchmark_config()
-
-        # Mark commit as complete when done
-        try:
-            mark_commits(
-                completed_file=Path(args.completed_file),
-                repo=valkey_dir,
-                shas=[commit_id],
-                status="complete",
+            launcher.launch(
+                cluster_mode=cfg["cluster_mode"],
+                tls_mode=cfg["tls_mode"],
+                io_threads=io_threads,
             )
-        except Exception as exc:
-            logging.warning(f"Failed to update completed_commits.json: {exc}")
 
-        if not args.use_running_server:
-            if args.valkey_path:
-                builder.terminate_valkey()
+        # ---- benchmarking client section -----------------
+        if args.mode in ("client", "both"):
+            # Determine valkey-benchmark path
+            if args.valkey_benchmark_path:
+                benchmark_path = str(args.valkey_benchmark_path)
+                logging.info(f"Using custom valkey-benchmark path: {benchmark_path}")
             else:
-                builder.terminate_and_clean_valkey()
+                logging.info(
+                    "No custom valkey-benchmark path provided, building latest unstable..."
+                )
+                benchmark_builder = BenchmarkBuilder(tls_enabled=cfg["tls_mode"])
+                benchmark_path = benchmark_builder.build_benchmark()
+                logging.info(f"Built fresh valkey-benchmark at: {benchmark_path}")
+
+            runner = ClientRunner(
+                commit_id=commit_id,
+                config=cfg,
+                cluster_mode=cfg["cluster_mode"],
+                tls_mode=cfg["tls_mode"],
+                target_ip=args.target_ip,
+                results_dir=results_dir,
+                valkey_path=str(valkey_dir),
+                cores=bench_core_range,
+                io_threads=io_threads,
+                valkey_benchmark_path=benchmark_path,
+                benchmark_threads=cfg.get("benchmark-threads"),
+                runs=args.runs,
+                server_launcher=launcher,
+            )
+            runner.wait_for_server_ready()
+            runner.run_benchmark_config()
+
+        # Shutdown server after each io_threads test 
+        if launcher and not args.use_running_server:
+            launcher.shutdown(cfg["tls_mode"])
+
+    # Mark commit as complete when done
+    try:
+        mark_commits(
+            completed_file=Path(args.completed_file),
+            repo=valkey_dir,
+            shas=[commit_id],
+            status="complete",
+        )
+    except Exception as exc:
+        logging.warning(f"Failed to update completed_commits.json: {exc}")
+
+    if not args.use_running_server:
+        if args.valkey_path:
+            builder.terminate_valkey()
+        else:
+            builder.terminate_and_clean_valkey()
 
 
 # ---------- Entry point ------------------------------------------------------
