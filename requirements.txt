@@ -1,1 +1,4 @@
 valkey
+matplotlib
+numpy
+scipy

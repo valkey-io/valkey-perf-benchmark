@@ -2,6 +2,7 @@
 """Command-line interface to run Valkey benchmarks."""
 
 import argparse
+import ipaddress
 import json
 import logging
 from pathlib import Path
@@ -12,12 +13,12 @@ import sys
 from valkey_build import ServerBuilder
 from valkey_server import ServerLauncher
 from valkey_benchmark import ClientRunner
+from benchmark_build import BenchmarkBuilder
 from utils.workflow_commits import mark_commits
 
 # ---------- Constants --------------------------------------------------------
 DEFAULT_RESULTS_ROOT = Path("results")
 REQUIRED_KEYS = [
-    "requests",
     "keyspacelen",
     "data_sizes",
     "pipelines",
@@ -32,6 +33,9 @@ OPTIONAL_CONF_KEYS = [
     "io-threads",
     "server_cpu_range",
     "client_cpu_range",
+    "benchmark-threads",
+    "requests",
+    "duration",
 ]
 
 
@@ -67,7 +71,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to a custom valkey-benchmark executable. If omitted, uses the default 'src/valkey-benchmark' relative to valkey-path.",
+        help="Path to a custom valkey-benchmark executable. If omitted, automatically clones and builds the latest valkey-benchmark from unstable branch.",
     )
     parser.add_argument(
         "--baseline",
@@ -111,6 +115,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to completed_commits.json used for tracking progress",
     )
 
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="Number of times to run each benchmark configuration (default: 1)",
+    )
+
     args, unknown = parser.parse_known_args()
     if unknown:
         parser.error(f"Unrecognized arguments: {' '.join(unknown)}")
@@ -126,12 +137,17 @@ def validate_config(cfg: dict) -> None:
         if k not in cfg:
             raise ValueError(f"Missing required config key: {k}")
 
-    # Validate data types and ranges
-    if not isinstance(cfg["requests"], list) or not all(
-        isinstance(x, int) and x > 0 for x in cfg["requests"]
-    ):
-        raise ValueError("'requests' must be a list of positive integers")
+    # Validate that either requests or duration is provided
+    has_requests = "requests" in cfg and cfg["requests"] is not None
+    has_duration = "duration" in cfg and cfg["duration"] is not None
 
+    if not has_requests and not has_duration:
+        raise ValueError("Either 'requests' or 'duration' must be provided")
+
+    if has_requests and has_duration:
+        raise ValueError("Cannot specify both 'requests' and 'duration' - use only one")
+
+    # Validate required data types and ranges
     if not isinstance(cfg["keyspacelen"], list) or not all(
         isinstance(x, int) and x > 0 for x in cfg["keyspacelen"]
     ):
@@ -166,8 +182,37 @@ def validate_config(cfg: dict) -> None:
         if k in cfg:
             # Validate optional io-threads
             if k == "io-threads":
-                if not isinstance(cfg["io-threads"], int) or cfg["io-threads"] <= 0:
-                    raise ValueError("'io-threads' must be a positive integer")
+                if isinstance(cfg["io-threads"], int):
+                    if cfg["io-threads"] <= 0:
+                        raise ValueError("'io-threads' must be a positive integer")
+                elif isinstance(cfg["io-threads"], list):
+                    if not all(isinstance(x, int) and x > 0 for x in cfg["io-threads"]):
+                        raise ValueError("'io-threads' must be a list of positive integers")
+                else:
+                    raise ValueError("'io-threads' must be a positive integer or list of positive integers")
+            # Validate optional benchmark-threads
+            elif k == "benchmark-threads":
+                if (
+                    not isinstance(cfg["benchmark-threads"], int)
+                    or cfg["benchmark-threads"] <= 0
+                ):
+                    raise ValueError("'benchmark-threads' must be a positive integer")
+            # Validate optional requests
+            elif k == "requests":
+                if cfg["requests"] is not None:
+                    if not isinstance(cfg["requests"], list) or not all(
+                        isinstance(x, int) and x > 0 for x in cfg["requests"]
+                    ):
+                        raise ValueError(
+                            "'requests' must be a list of positive integers or null"
+                        )
+            # Validate optional duration
+            elif k == "duration":
+                if cfg["duration"] is not None:
+                    if not isinstance(cfg["duration"], int) or cfg["duration"] <= 0:
+                        raise ValueError(
+                            "'duration' must be a positive integer or null"
+                        )
             # Validate optional CPU ranges
             elif k in ["server_cpu_range", "client_cpu_range"]:
                 if not isinstance(cfg[k], str):
@@ -212,28 +257,64 @@ def init_logging(log_path: Path) -> None:
 def parse_core_range(range_str: str) -> None:
     """Validate CPU core range string format.
 
-    ``range_str`` can be a simple range like ``"0-3"`` or a comma separated
-    list such as ``"0,2,4"``.
+    ``range_str`` can be:
+    - A simple range like ``"0-3"``
+    - A comma separated list such as ``"0,2,4"``
+    - Multiple ranges like ``"0-3,8-11"`` or ``"144-191,48-95"``
     """
     if not range_str or not isinstance(range_str, str):
         raise ValueError("Core range must be a non-empty string")
 
+    # Check for leading/trailing commas or empty parts
+    if range_str.startswith(",") or range_str.endswith(","):
+        raise ValueError("Core range cannot start or end with comma")
+
+    if ",," in range_str:
+        raise ValueError("Core range cannot contain consecutive commas")
+
     try:
-        if "-" in range_str:
-            parts = range_str.split("-")
-            if len(parts) != 2:
-                raise ValueError("Range format should be 'start-end'")
-            start, end = int(parts[0]), int(parts[1])
-            if start < 0 or end < 0 or start > end:
-                raise ValueError("Invalid core range values")
-        else:
-            cores = [int(c.strip()) for c in range_str.split(",") if c.strip()]
-            if not cores or any(c < 0 for c in cores):
-                raise ValueError("Core numbers must be non-negative")
+        # Split by comma to handle multiple ranges or individual cores
+        parts = [part.strip() for part in range_str.split(",")]
+        if not parts or any(not part for part in parts):
+            raise ValueError("Core range must contain at least one core or range")
+
+        for part in parts:
+            if "-" in part:
+                # Handle range format like "0-3" or "144-191"
+                range_parts = part.split("-")
+                if len(range_parts) != 2:
+                    raise ValueError(f"Range format should be 'start-end', got: {part}")
+                start, end = int(range_parts[0]), int(range_parts[1])
+                if start < 0 or end < 0 or start > end:
+                    raise ValueError(f"Invalid core range values in: {part}")
+            else:
+                # Handle individual core number
+                core = int(part)
+                if core < 0:
+                    raise ValueError(f"Core numbers must be non-negative, got: {core}")
     except ValueError as e:
         if "invalid literal" in str(e):
             raise ValueError(f"Invalid core range format: {range_str}")
         raise
+
+
+def validate_target_ip(ip_address: str) -> bool:
+    """Validate if the target IP is a valid IP address format.
+
+    Args:
+        ip_address: The IP address to validate
+
+    Returns:
+        bool: True if IP format is valid, False otherwise
+
+    Raises:
+        ValueError: If the IP address format is invalid
+    """
+    try:
+        ipaddress.ip_address(ip_address)
+        return True
+    except ValueError as e:
+        raise ValueError(f"Invalid IP address format '{ip_address}': {e}")
 
 
 def parse_bool(value) -> bool:
@@ -279,54 +360,86 @@ def run_benchmark_matrix(
         f"TLS={'on' if cfg['tls_mode'] else 'off'} | "
         f"Cluster={'on' if cfg['cluster_mode'] else 'off'}"
     )
-    # ---- server section -----------------
-    if (not args.use_running_server) and args.mode in ("server", "both"):
-        launcher = ServerLauncher(
-            results_dir=results_dir,
-            valkey_path=str(valkey_dir),
-            cores=server_core_range,
-        )
-        launcher.launch(
-            cluster_mode=cfg["cluster_mode"],
-            tls_mode=cfg["tls_mode"],
-            io_threads=cfg.get("io-threads"),
-        )
 
-    # ---- benchmarking client section -----------------
-    if args.mode in ("client", "both"):
-        runner = ClientRunner(
-            commit_id=commit_id,
-            config=cfg,
-            cluster_mode=cfg["cluster_mode"],
-            tls_mode=cfg["tls_mode"],
-            target_ip=args.target_ip,
-            results_dir=results_dir,
-            valkey_path=str(valkey_dir),
-            cores=bench_core_range,
-            io_threads=cfg.get("io-threads"),
-            valkey_benchmark_path=(
-                str(args.valkey_benchmark_path) if args.valkey_benchmark_path else None
-            ),
-        )
-        runner.wait_for_server_ready()
-        runner.run_benchmark_config()
+    # Get io_threads values - handle both single int and list
+    io_threads_values = cfg.get("io-threads")
+    if io_threads_values is None:
+        io_threads_list = [None]
+    elif isinstance(io_threads_values, int):
+        io_threads_list = [io_threads_values]
+    else:
+        io_threads_list = io_threads_values
 
-        # Mark commit as complete when done
-        try:
-            mark_commits(
-                completed_file=Path(args.completed_file),
-                repo=valkey_dir,
-                shas=[commit_id],
-                status="complete",
+    # Run benchmark for each io_threads value
+    for io_threads in io_threads_list:
+        logging.info(f"Running benchmark with io_threads={io_threads}")
+        
+        # ---- server section -----------------
+        launcher = None
+        if (not args.use_running_server) and args.mode in ("server", "both"):
+            launcher = ServerLauncher(
+                results_dir=results_dir,
+                valkey_path=str(valkey_dir),
+                cores=server_core_range,
             )
-        except Exception as exc:
-            logging.warning(f"Failed to update completed_commits.json: {exc}")
+            launcher.launch(
+                cluster_mode=cfg["cluster_mode"],
+                tls_mode=cfg["tls_mode"],
+                io_threads=io_threads,
+            )
 
-        if not args.use_running_server:
-            if args.valkey_path:
-                builder.terminate_valkey()
+        # ---- benchmarking client section -----------------
+        if args.mode in ("client", "both"):
+            # Determine valkey-benchmark path
+            if args.valkey_benchmark_path:
+                benchmark_path = str(args.valkey_benchmark_path)
+                logging.info(f"Using custom valkey-benchmark path: {benchmark_path}")
             else:
-                builder.terminate_and_clean_valkey()
+                logging.info(
+                    "No custom valkey-benchmark path provided, building latest unstable..."
+                )
+                benchmark_builder = BenchmarkBuilder(tls_enabled=cfg["tls_mode"])
+                benchmark_path = benchmark_builder.build_benchmark()
+                logging.info(f"Built fresh valkey-benchmark at: {benchmark_path}")
+
+            runner = ClientRunner(
+                commit_id=commit_id,
+                config=cfg,
+                cluster_mode=cfg["cluster_mode"],
+                tls_mode=cfg["tls_mode"],
+                target_ip=args.target_ip,
+                results_dir=results_dir,
+                valkey_path=str(valkey_dir),
+                cores=bench_core_range,
+                io_threads=io_threads,
+                valkey_benchmark_path=benchmark_path,
+                benchmark_threads=cfg.get("benchmark-threads"),
+                runs=args.runs,
+                server_launcher=launcher,
+            )
+            runner.wait_for_server_ready()
+            runner.run_benchmark_config()
+
+        # Shutdown server after each io_threads test 
+        if launcher and not args.use_running_server:
+            launcher.shutdown(cfg["tls_mode"])
+
+    # Mark commit as complete when done
+    try:
+        mark_commits(
+            completed_file=Path(args.completed_file),
+            repo=valkey_dir,
+            shas=[commit_id],
+            status="complete",
+        )
+    except Exception as exc:
+        logging.warning(f"Failed to update completed_commits.json: {exc}")
+
+    if not args.use_running_server:
+        if args.valkey_path:
+            builder.terminate_valkey()
+        else:
+            builder.terminate_and_clean_valkey()
 
 
 # ---------- Entry point ------------------------------------------------------
@@ -341,6 +454,20 @@ def main() -> None:
             "ERROR: --use-running-server implies the valkey is already built and running, "
             "so --mode must be 'client' and `valkey_path` must be provided."
         )
+        sys.exit(1)
+
+    # Validate target IP format if running in client mode
+    if args.mode in ("client", "both"):
+        try:
+            validate_target_ip(args.target_ip)
+            print(f"✓ Target IP {args.target_ip} has valid format")
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+
+    # Validate runs parameter
+    if args.runs < 1:
+        print("ERROR: --runs must be a positive integer")
         sys.exit(1)
 
     commits = args.commits.copy()

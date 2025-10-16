@@ -90,7 +90,65 @@ python benchmark.py --valkey-path /path/to/valkey --use-running-server
 
 # Compare with baseline
 python benchmark.py --commits HEAD --baseline unstable
+
+# Run multiple benchmark runs for statistical reliability
+python benchmark.py --commits HEAD --runs 5
 ```
+
+## Benchmark Comparison and Analysis
+
+The project includes a powerful comparison tool for analyzing benchmark results with statistical rigor and graph generation.
+
+### Compare Benchmark Results
+
+```bash
+# Basic comparison between two result files
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md
+
+# Generate graphs along with comparison
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md --graphs --graph-dir graphs/
+
+# Filter to show only RPS metrics
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md --metrics rps --graphs
+
+# Filter to show only latency metrics
+python utils/compare_benchmark_results.py --baseline results/commit1/metrics.json --new results/commit2/metrics.json --output comparison.md --metrics latency --graphs
+```
+
+### Comparison Tool Features
+
+- **Automatic Run Averaging**: Intelligently groups and averages multiple benchmark runs with identical configurations
+- **Statistical Analysis**: Calculates means, standard deviations, and Coefficient of Variation (CV) with proper sample standard deviation (n-1)
+- **Coefficient of Variation**: Provides normalized variability metrics (CV = σ/μ × 100%) for scale-independent comparison across different performance metrics
+- **Graph Generation**: Comprehensive matplotlib-based visualization including:
+  - Consolidated comparison graphs for all metrics
+  - Variance line graphs showing individual run values with error bars
+  - RPS-focused filtering for integration purposes
+- **Metrics Filtering**: Support for filtering by metric type (all, rps, latency)
+- **Standardized Output**: Generates markdown reports with comprehensive statistical information including CV
+
+### Statistical Display Format
+
+When multiple runs are available, the comparison tool displays comprehensive statistical information:
+
+```
+Metric Value (n=X, σ=Y, CV=Z%)
+```
+
+Where:
+- `n`: Number of runs
+- `σ`: Standard deviation
+- `CV`: Coefficient of Variation as a percentage
+
+The Coefficient of Variation (CV) is particularly useful for:
+- **Scale-independent comparison**: Compare variability across metrics with different units (e.g., RPS vs latency)
+- **Performance consistency assessment**: Lower CV indicates more consistent performance
+- **Benchmark reliability evaluation**: High CV may indicate unstable test conditions
+
+### Graph Types
+
+1. **Consolidated Comparison Graphs**: Single comprehensive graphs showing all metrics with proper legend format `{commit}-P{pipeline}/IO{io_threads}`
+2. **Variance Line Graphs**: Individual run values with standard deviation visualization and error bars
 
 ### Advanced Options
 
@@ -146,6 +204,7 @@ Example:
     "cluster_mode": "yes",
     "tls_mode": "yes",
     "warmup": 10,
+    "io-threads": [1, 4, 8],
     "server_cpu_range": "0-1",
     "client_cpu_range": "2-3"
   }
@@ -165,8 +224,9 @@ Example:
 | `cluster_mode` | Whether to enable cluster mode | String ("yes"/"no") | No |
 | `tls_mode` | Whether to enable TLS | String ("yes"/"no") | No |
 | `warmup` | Warmup time in seconds before benchmarking | Integer | No |
-| `server_cpu_range` | CPU cores for server (e.g. "0-3" or "0,2,4") | String | No |
-| `client_cpu_range` | CPU cores for client (e.g. "4-7" or "1,3,5") | String | No |
+| `io-threads` | Number of I/O threads for server | Integer | Yes |
+| `server_cpu_range` | CPU cores for server (e.g. "0-3", "0,2,4", or "144-191,48-95") | String | No |
+| `client_cpu_range` | CPU cores for client (e.g. "4-7", "1,3,5", or "0-3,8-11") | String | No |
 
 When `warmup` is provided for read commands, the benchmark performs three
 stages:

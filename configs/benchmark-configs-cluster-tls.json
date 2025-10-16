@@ -21,7 +21,7 @@
     "cluster_mode": true,
     "tls_mode": true,
     "warmup": 10,
-    "io-threads": 2,
+    "io-threads": [2],
     "server_cpu_range": "0-1",
     "client_cpu_range": "3"
   }

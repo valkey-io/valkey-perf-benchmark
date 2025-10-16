@@ -237,8 +237,20 @@ function updateChart() {
                   `Date: ${dateStr || 'Unknown'}`,
                 ];
 
-                if (metricRow && metricRow.io_threads !== undefined) {
-                  result.push(`IO Threads: ${metricRow.io_threads}`);
+                if (metricRow) {
+                  if (metricRow.io_threads !== undefined) {
+                    result.push(`IO Threads: ${metricRow.io_threads}`);
+                  }
+                  
+                  // Show benchmark mode information
+                  if (metricRow.benchmark_mode === 'duration' && metricRow.duration !== undefined) {
+                    result.push(`Duration: ${metricRow.duration}s`);
+                  } else if (metricRow.benchmark_mode === 'requests' && metricRow.requests !== undefined) {
+                    result.push(`Requests: ${metricRow.requests}`);
+                  } else if (metricRow.requests !== undefined) {
+                    // Fallback for older metrics without benchmark_mode
+                    result.push(`Requests: ${metricRow.requests}`);
+                  }
                 }
 
                 result.push('Click to view on GitHub');
