@@ -135,3 +135,11 @@ jobs:
         working-directory: valkey-perf-benchmark
         run: |
           aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
+      
+      - name: Push metrics to AWS Managed Prometheus
+        working-directory: valkey-perf-benchmark
+        run: |
+          python utils/push_to_prometheus.py \
+            --results-dir results \
+            --workspace-url "${{ secrets.AWS_PROMETHEUS_WORKSPACE_URL }}" \
+            --region "${{ secrets.AWS_REGION }}"

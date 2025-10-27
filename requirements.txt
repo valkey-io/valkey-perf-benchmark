@@ -2,3 +2,9 @@ valkey
 matplotlib
 numpy
 scipy
+boto3
+requests
+requests-aws4auth
+python-snappy
+prometheus-client
+protobuf

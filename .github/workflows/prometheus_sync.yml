@@ -1,0 +1,47 @@
+name: Sync Results to Prometheus
+
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: 'bash -Eeuo pipefail -x {0}'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  sync_to_prometheus:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Download results from S3
+        run: |
+          aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/results results --recursive
+
+      - name: Push metrics to AWS Managed Prometheus
+        run: |
+          python utils/push_to_prometheus.py \
+            --results-dir results \
+            --workspace-url "${{ secrets.AWS_PROMETHEUS_WORKSPACE_URL }}" \
+            --region "${{ secrets.AWS_REGION }}"
