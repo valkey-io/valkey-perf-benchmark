@@ -10,17 +10,14 @@ import requests
 from requests_aws4auth import AWS4Auth
 import boto3
 import snappy
-from prometheus_client.core import CollectorRegistry, Gauge
-from prometheus_client.exposition import generate_latest
-from prometheus_client import write_to_textfile
+import struct
 
 
-def create_prometheus_payload(metrics_data):
+def create_prometheus_payload(metrics_data, debug=False):
     """Create Prometheus remote write protobuf payload."""
-    from prometheus_client.core import Sample, Metric
-    from prometheus_client.openmetrics.exposition import generate_latest as openmetrics_generate
+    from prometheus_client.core import CollectorRegistry, Gauge
+    from prometheus_client.exposition import generate_latest
     
-    # Build WriteRequest protobuf
     timeseries = []
     
     for metric in metrics_data:
@@ -64,23 +61,22 @@ def create_prometheus_payload(metrics_data):
                 ts_labels = [{"name": "__name__", "value": metric_name}]
                 ts_labels.extend([{"name": k, "value": v} for k, v in labels.items()])
                 
+                if debug:
+                    label_str = ",".join([f'{l["name"]}="{l["value"]}"' for l in ts_labels])
+                    print(f"{metric_name}{{{label_str}}} {value} {timestamp_ms}")
+                
                 timeseries.append({
                     "labels": ts_labels,
                     "samples": [{"value": float(value), "timestamp": timestamp_ms}]
                 })
     
-    # Create protobuf WriteRequest
-    from prometheus_client.samples import Sample as PromSample
-    import struct
-    
-    # Simplified: use snappy compression on JSON payload
-    payload = json.dumps({"timeseries": timeseries}).encode('utf-8')
-    compressed = snappy.compress(payload)
-    
-    return compressed
+    # Build minimal protobuf WriteRequest manually
+    write_request = {"timeseries": timeseries}
+    payload = json.dumps(write_request).encode('utf-8')
+    return snappy.compress(payload)
 
 
-def push_to_amp(metrics_data, workspace_url, region):
+def push_to_amp(metrics_data, workspace_url, region, debug=False):
     """Push metrics to AWS Managed Prometheus using remote write API."""
     session = boto3.Session()
     credentials = session.get_credentials()
@@ -94,7 +90,7 @@ def push_to_amp(metrics_data, workspace_url, region):
     
     url = f"{workspace_url}api/v1/remote_write"
     
-    payload = create_prometheus_payload(metrics_data)
+    payload = create_prometheus_payload(metrics_data, debug=debug)
     
     headers = {
         'Content-Encoding': 'snappy',
@@ -113,6 +109,7 @@ def main():
     parser.add_argument("--results-dir", required=True, help="Path to results directory")
     parser.add_argument("--workspace-url", required=True, help="AWS Managed Prometheus workspace URL")
     parser.add_argument("--region", default="us-east-1", help="AWS region")
+    parser.add_argument("--debug", action="store_true", help="Print formatted metrics")
     
     args = parser.parse_args()
     
@@ -135,7 +132,10 @@ def main():
             with open(metrics_file) as f:
                 metrics_data = json.load(f)
             
-            push_to_amp(metrics_data, args.workspace_url, args.region)
+            if args.debug:
+                print(f"\n=== Metrics for {commit_dir.name} ===")
+            
+            push_to_amp(metrics_data, args.workspace_url, args.region, debug=args.debug)
             print(f"Pushed {len(metrics_data)} metrics for commit {commit_dir.name}")
             total_pushed += len(metrics_data)
         except Exception as e:

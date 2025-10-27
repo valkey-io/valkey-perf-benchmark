@@ -44,4 +44,5 @@ jobs:
           python utils/push_to_prometheus.py \
             --results-dir results \
             --workspace-url "${{ secrets.AWS_PROMETHEUS_WORKSPACE_URL }}" \
-            --region "${{ secrets.AWS_REGION }}"
+            --region "${{ secrets.AWS_REGION }}" \
+            --debug

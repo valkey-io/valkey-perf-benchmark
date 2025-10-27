@@ -7,4 +7,3 @@ requests
 requests-aws4auth
 python-snappy
 prometheus-client
-protobuf
