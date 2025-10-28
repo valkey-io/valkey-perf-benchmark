@@ -43,148 +43,153 @@ def calculate_stdev(values: List[float]) -> float:
     return statistics.stdev(filtered_values)
 
 
-def calculate_confidence_interval(values: List[float], confidence_level: float = 0.99) -> Tuple[float, float]:
+def calculate_confidence_interval(
+    values: List[float], confidence_level: float = 0.99
+) -> Tuple[float, float]:
     """
     Calculate confidence interval for a list of values using t-distribution.
-    
+
     Args:
         values: List of numeric values
         confidence_level: Confidence level (default 0.99 for 99% CI)
-    
+
     Returns:
         Tuple of (lower_bound, upper_bound) or (0.0, 0.0) if insufficient data
     """
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
-    
+
     if n <= 1:
         return (0.0, 0.0)
-    
+
     mean_val = statistics.mean(filtered_values)
     stdev_val = statistics.stdev(filtered_values)
-    
+
     # Calculate standard error
-    standard_error = stdev_val / (n ** 0.5)
-    
+    standard_error = stdev_val / (n**0.5)
+
     # Use stats.t.interval for direct confidence interval calculation
     degrees_of_freedom = n - 1
     lower_bound, upper_bound = stats.t.interval(
-        confidence_level, 
-        degrees_of_freedom, 
-        loc=mean_val, 
-        scale=standard_error
+        confidence_level, degrees_of_freedom, loc=mean_val, scale=standard_error
     )
-    
+
     return (lower_bound, upper_bound)
 
 
-def calculate_prediction_interval(values: List[float], confidence_level: float = 0.99) -> Tuple[float, float]:
+def calculate_prediction_interval(
+    values: List[float], confidence_level: float = 0.99
+) -> Tuple[float, float]:
     """
     Calculate prediction interval for a single future observation.
-    
+
     Args:
         values: List of numeric values
         confidence_level: Confidence level (default 0.99 for 99% PI)
-    
+
     Returns:
         Tuple of (lower_bound, upper_bound) or (0.0, 0.0) if insufficient data
     """
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
-    
+
     if n <= 1:
         return (0.0, 0.0)
-    
+
     mean_val = statistics.mean(filtered_values)
     stdev_val = statistics.stdev(filtered_values)
-    
+
     # Prediction interval uses sqrt(1 + 1/n) factor
-    prediction_error = stdev_val * (1 + 1/n) ** 0.5
-    
+    prediction_error = stdev_val * (1 + 1 / n) ** 0.5
+
     degrees_of_freedom = n - 1
     alpha = 1 - confidence_level
-    t_critical = stats.t.ppf(1 - alpha/2, degrees_of_freedom)
-    
+    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+
     margin_of_error = t_critical * prediction_error
-    
+
     return (mean_val - margin_of_error, mean_val + margin_of_error)
 
 
-def calculate_prediction_interval_percentage(values: List[float], confidence_level: float = 0.99) -> float:
+def calculate_prediction_interval_percentage(
+    values: List[float], confidence_level: float = 0.99
+) -> float:
     """
     Calculate prediction interval as a percentage of the mean value.
-    
+
     Args:
         values: List of numeric values
         confidence_level: Confidence level (default 0.99 for 99% PI)
-    
+
     Returns:
         Prediction interval as percentage of mean (±X%), or 0.0 if insufficient data
     """
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
-    
+
     if n <= 1:
         return 0.0
-    
+
     mean_val = statistics.mean(filtered_values)
     if mean_val == 0.0:
         return 0.0
-    
+
     stdev_val = statistics.stdev(filtered_values)
-    
+
     # Prediction interval uses sqrt(1 + 1/n) factor
-    prediction_error = stdev_val * (1 + 1/n) ** 0.5
-    
+    prediction_error = stdev_val * (1 + 1 / n) ** 0.5
+
     degrees_of_freedom = n - 1
     alpha = 1 - confidence_level
-    t_critical = stats.t.ppf(1 - alpha/2, degrees_of_freedom)
-    
+    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+
     margin_of_error = t_critical * prediction_error
-    
+
     # Calculate PI as percentage of mean
     pi_percentage = (margin_of_error / mean_val) * 100.0
-    
+
     return pi_percentage
 
 
-def calculate_confidence_interval_percentage(values: List[float], confidence_level: float = 0.99) -> float:
+def calculate_confidence_interval_percentage(
+    values: List[float], confidence_level: float = 0.99
+) -> float:
     """
     Calculate confidence interval as a percentage of the mean value.
-    
+
     Args:
         values: List of numeric values
         confidence_level: Confidence level (default 0.99 for 99% CI)
-    
+
     Returns:
         Confidence interval as percentage of mean (±X%), or 0.0 if insufficient data
     """
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
-    
+
     if n <= 1:
         return 0.0
-    
+
     mean_val = statistics.mean(filtered_values)
     if mean_val == 0.0:
         return 0.0
-    
+
     stdev_val = statistics.stdev(filtered_values)
-    
+
     # Calculate standard error
-    standard_error = stdev_val / (n ** 0.5)
-    
+    standard_error = stdev_val / (n**0.5)
+
     # Get t-critical value for the confidence level
     degrees_of_freedom = n - 1
     alpha = 1 - confidence_level
-    t_critical = stats.t.ppf(1 - alpha/2, degrees_of_freedom)
-    
+    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+
     # Calculate margin of error
     margin_of_error = t_critical * standard_error
-    
+
     # Calculate CI as percentage of mean
     ci_percentage = (margin_of_error / mean_val) * 100.0
-    
+
     return ci_percentage
 
 
@@ -257,7 +262,7 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
         "p95_latency_ms_pi_percent",
         "p99_latency_ms_pi_lower",
         "p99_latency_ms_pi_upper",
-        "p99_latency_ms_pi_percent"
+        "p99_latency_ms_pi_percent",
     }
 
     for item in data:
@@ -690,7 +695,9 @@ def _generate_table_rows_for_config(
                         "baseline_ci_percent": baseline_stats.get(
                             f"{metric_key}_ci_percent", 0.0
                         ),
-                        "new_ci_percent": new_stats.get(f"{metric_key}_ci_percent", 0.0),
+                        "new_ci_percent": new_stats.get(
+                            f"{metric_key}_ci_percent", 0.0
+                        ),
                         "baseline_pi_lower": baseline_stats.get(
                             f"{metric_key}_pi_lower", 0.0
                         ),
@@ -702,7 +709,9 @@ def _generate_table_rows_for_config(
                         "baseline_pi_percent": baseline_stats.get(
                             f"{metric_key}_pi_percent", 0.0
                         ),
-                        "new_pi_percent": new_stats.get(f"{metric_key}_pi_percent", 0.0),
+                        "new_pi_percent": new_stats.get(
+                            f"{metric_key}_pi_percent", 0.0
+                        ),
                     }
                 )
 
@@ -753,7 +762,7 @@ def _extract_run_statistics(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             stats[ci_upper_key] = items[0].get(ci_upper_key, 0.0)
             ci_percent_key = f"{metric_base}_ci_percent"
             stats[ci_percent_key] = items[0].get(ci_percent_key, 0.0)
-            
+
             # Extract pre-calculated PI values
             pi_lower_key = f"{metric_base}_pi_lower"
             pi_upper_key = f"{metric_base}_pi_upper"
@@ -838,7 +847,13 @@ def format_comparison_report(
         for key in sorted(config_keys):
             value = config_dict.get(key)
             # Exclude statistical fields from configuration display (they are statistical results, not config parameters)
-            if value is not None and not key.endswith("_cv") and not key.endswith("_ci_lower") and not key.endswith("_ci_upper") and not key.endswith("_ci_percent"):
+            if (
+                value is not None
+                and not key.endswith("_cv")
+                and not key.endswith("_ci_lower")
+                and not key.endswith("_ci_upper")
+                and not key.endswith("_ci_percent")
+            ):
                 report_lines.append(f"- {key}: {value}")
         report_lines.append("")
 
@@ -891,7 +906,16 @@ def format_comparison_report(
 
 
 def _format_metric_value(
-    value: float, run_count: int, stdev: float, cv: float = 0.0, ci_lower: float = 0.0, ci_upper: float = 0.0, ci_percent: float = 0.0, pi_lower: float = 0.0, pi_upper: float = 0.0, pi_percent: float = 0.0
+    value: float,
+    run_count: int,
+    stdev: float,
+    cv: float = 0.0,
+    ci_lower: float = 0.0,
+    ci_upper: float = 0.0,
+    ci_percent: float = 0.0,
+    pi_lower: float = 0.0,
+    pi_upper: float = 0.0,
+    pi_percent: float = 0.0,
 ) -> str:
     """Format a metric value with optional run count, standard deviation, coefficient of variation, confidence interval, and prediction interval."""
     formatted_value = f"{value:.3f}"
@@ -901,24 +925,24 @@ def _format_metric_value(
         # Include CV, CI99%, and PI99% percentages in the main statistical display
         ci_precision = 6 if ci_percent < 0.001 else 3
         pi_precision = 6 if pi_percent < 0.001 else 3
-        
+
         # Only show non-zero percentages
         stats_parts = [f"CV={cv:.2f}%"]
         if ci_percent > 0.0001:
             stats_parts.append(f"CI99%=±{ci_percent:.{ci_precision}f}%")
         if pi_percent > 0.0001:
             stats_parts.append(f"PI99%=±{pi_percent:.{pi_precision}f}%")
-        
+
         stats_text = ", ".join(stats_parts)
-        
+
         ci_bounds_text = ""
         if ci_lower != 0.0 or ci_upper != 0.0:
             ci_bounds_text = f", CI[{ci_lower:.3f}, {ci_upper:.3f}]"
-        
+
         pi_bounds_text = ""
         if pi_lower != 0.0 or pi_upper != 0.0:
             pi_bounds_text = f", PI[{pi_lower:.3f}, {pi_upper:.3f}]"
-        
+
         formatted_value += f" (n={run_count}, σ={stdev:.3f}, {stats_text}{ci_bounds_text}{pi_bounds_text})"
 
     return formatted_value
@@ -1150,7 +1174,9 @@ def _generate_single_variance_graph(
                 # Add mean line and prediction interval
                 if len(baseline_values) > 1:
                     mean_val = statistics.mean(baseline_values)
-                    pi_lower, pi_upper = calculate_prediction_interval(baseline_values, 0.99)
+                    pi_lower, pi_upper = calculate_prediction_interval(
+                        baseline_values, 0.99
+                    )
                     ax.axhline(y=mean_val, color="steelblue", linestyle="--", alpha=0.6)
                     ax.fill_between(
                         baseline_x,
@@ -1158,7 +1184,7 @@ def _generate_single_variance_graph(
                         [pi_upper] * len(baseline_x),
                         color="steelblue",
                         alpha=0.2,
-                        label=f"{baseline_version} 99% PI"
+                        label=f"{baseline_version} 99% PI",
                     )
 
             # Plot new version runs
@@ -1188,7 +1214,7 @@ def _generate_single_variance_graph(
                         [pi_upper] * len(new_x),
                         color="mediumseagreen",
                         alpha=0.2,
-                        label=f"{new_version} 99% PI"
+                        label=f"{new_version} 99% PI",
                     )
 
             # Formatting

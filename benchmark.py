@@ -187,9 +187,13 @@ def validate_config(cfg: dict) -> None:
                         raise ValueError("'io-threads' must be a positive integer")
                 elif isinstance(cfg["io-threads"], list):
                     if not all(isinstance(x, int) and x > 0 for x in cfg["io-threads"]):
-                        raise ValueError("'io-threads' must be a list of positive integers")
+                        raise ValueError(
+                            "'io-threads' must be a list of positive integers"
+                        )
                 else:
-                    raise ValueError("'io-threads' must be a positive integer or list of positive integers")
+                    raise ValueError(
+                        "'io-threads' must be a positive integer or list of positive integers"
+                    )
             # Validate optional benchmark-threads
             elif k == "benchmark-threads":
                 if (
@@ -373,7 +377,7 @@ def run_benchmark_matrix(
     # Run benchmark for each io_threads value
     for io_threads in io_threads_list:
         logging.info(f"Running benchmark with io_threads={io_threads}")
-        
+
         # ---- server section -----------------
         launcher = None
         if (not args.use_running_server) and args.mode in ("server", "both"):
@@ -420,7 +424,7 @@ def run_benchmark_matrix(
             runner.wait_for_server_ready()
             runner.run_benchmark_config()
 
-        # Shutdown server after each io_threads test 
+        # Shutdown server after each io_threads test
         if launcher and not args.use_running_server:
             launcher.shutdown(cfg["tls_mode"])
 

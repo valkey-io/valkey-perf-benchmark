@@ -62,7 +62,7 @@ class ClientRunner:
         valkey_benchmark_path: Optional[str] = None,
         benchmark_threads: Optional[int] = None,
         runs: int = 1,
-        server_launcher = None,
+        server_launcher=None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -284,7 +284,7 @@ class ClientRunner:
             for run_num in range(self.runs):
                 if self.runs > 1:
                     logging.info(f"=== Run {run_num + 1}/{self.runs} ===")
-                
+
                 logging.info(
                     f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | {mode_info} | keyspacelen={keyspacelen} | warmup={warmup}"
                 )
@@ -302,7 +302,9 @@ class ClientRunner:
                 # Data injection for read commands
                 if command in READ_COMMANDS:
                     # For duration mode, use keyspacelen as the number of keys to populate
-                    populate_requests = requests if requests is not None else keyspacelen
+                    populate_requests = (
+                        requests if requests is not None else keyspacelen
+                    )
                     self._populate_keyspace(
                         command,
                         populate_requests,
@@ -422,17 +424,17 @@ class ClientRunner:
     def _restart_server(self) -> None:
         """Restart the Valkey server for a clean state."""
         logging.info("Restarting Valkey server for clean state...")
-        
+
         # Shutdown current server
         self.server_launcher.shutdown(self.tls_mode)
-        
+
         # Start fresh server
         self.server_launcher.launch(
             cluster_mode=self.cluster_mode,
             tls_mode=self.tls_mode,
             io_threads=self.io_threads,
         )
-        
+
         # Wait for server to be ready
         self.wait_for_server_ready()
         logging.info("Server restarted successfully")
