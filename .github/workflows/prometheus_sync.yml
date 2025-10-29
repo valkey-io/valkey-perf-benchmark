@@ -39,10 +39,9 @@ jobs:
         run: |
           aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/results results --recursive
 
-      - name: Push metrics to AWS Managed Prometheus
+      - name: Push metrics to Prometheus
         run: |
           python utils/push_to_prometheus.py \
             --results-dir results \
-            --workspace-url "${{ secrets.AWS_PROMETHEUS_WORKSPACE_URL }}" \
-            --region "${{ secrets.AWS_REGION }}" \
+            --url "${{ secrets.PROMETHEUS_URL }}/api/v1/write" \
             --debug

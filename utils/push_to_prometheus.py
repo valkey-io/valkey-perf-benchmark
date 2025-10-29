@@ -15,17 +15,15 @@ from requests_aws4auth import AWS4Auth
 
 def build_labels(metric):
     """Build label dictionary from metric data."""
-    commit_time = metric["timestamp"].replace("Z", "+00:00")
-
     labels = {
         "commit": metric.get("commit", ""),
-        "commit_time": commit_time,
         "command": metric.get("command", ""),
         "data_size": str(metric.get("data_size", "")),
         "pipeline": str(metric.get("pipeline", "")),
         "clients": str(metric.get("clients", "")),
         "cluster_mode": str(metric.get("cluster_mode", "")).lower(),
         "tls": str(metric.get("tls", "")).lower(),
+        "version": "v2",
     }
 
     optional_fields = {
@@ -59,16 +57,15 @@ def get_metric_values(metric):
 
 def print_metrics_dry_run(metrics_data):
     """Print metrics in Prometheus format for dry-run."""
-    current_timestamp_ms = int(datetime.now().timestamp() * 1000)
-
     for metric in metrics_data:
+        timestamp_ms = int(datetime.fromisoformat(metric['timestamp'].replace('Z', '+00:00')).timestamp() * 1000)
         labels = build_labels(metric)
         metrics_map = get_metric_values(metric)
 
         for metric_name, value in metrics_map.items():
             if value is not None:
                 label_str = ",".join([f'{k}="{v}"' for k, v in labels.items()])
-                print(f"{metric_name}{{{label_str}}} {value} {current_timestamp_ms}")
+                print(f"{metric_name}{{{label_str}}} {value} {timestamp_ms}")
 
 
 def create_prometheus_payload(metrics_data):
@@ -76,9 +73,9 @@ def create_prometheus_payload(metrics_data):
     import remote_pb2
 
     write_request = remote_pb2.WriteRequest()
-    current_timestamp_ms = int(datetime.now().timestamp() * 1000)
 
     for metric in metrics_data:
+        timestamp_ms = int(datetime.fromisoformat(metric['timestamp'].replace('Z', '+00:00')).timestamp() * 1000)
         labels = build_labels(metric)
         metrics_map = get_metric_values(metric)
 
@@ -97,27 +94,27 @@ def create_prometheus_payload(metrics_data):
 
                 sample = ts.samples.add()
                 sample.value = float(value)
-                sample.timestamp = current_timestamp_ms
+                sample.timestamp = timestamp_ms
 
     return snappy.compress(write_request.SerializeToString())
 
 
-def push_to_amp(metrics_data, workspace_url, region, debug=False):
-    """Push metrics to AWS Managed Prometheus using remote write API."""
+def push_to_prometheus(metrics_data, url, use_aws_auth=False, region=None, debug=False):
+    """Push metrics to Prometheus using remote write API."""
+    
+    # Print first few metrics being pushed
+    print(f"\nPushing {len(metrics_data)} metrics:")
+    for i, metric in enumerate(metrics_data[:3]):
+        timestamp_ms = int(datetime.fromisoformat(metric['timestamp'].replace('Z', '+00:00')).timestamp() * 1000)
+        print(f"  [{i+1}] commit={metric.get('commit', '')[:8]}, cmd={metric.get('command', '')}, "
+              f"pipeline={metric.get('pipeline', '')}, rps={metric.get('rps', '')}, timestamp={timestamp_ms}")
+    if len(metrics_data) > 3:
+        print(f"  ... and {len(metrics_data) - 3} more")
+    
     payload = create_prometheus_payload(metrics_data)
 
     if debug:
-        print(f"Payload size: {len(payload)} bytes")
-
-    session = boto3.Session()
-    credentials = session.get_credentials()
-    auth = AWS4Auth(
-        credentials.access_key,
-        credentials.secret_key,
-        region,
-        "aps",
-        session_token=credentials.token,
-    )
+        print(f"\nPayload size: {len(payload)} bytes")
 
     headers = {
         "Content-Encoding": "snappy",
@@ -125,19 +122,45 @@ def push_to_amp(metrics_data, workspace_url, region, debug=False):
         "X-Prometheus-Remote-Write-Version": "0.1.0",
     }
 
-    url = f"{workspace_url}/api/v1/remote_write"
     if debug:
         print(f"Pushing to: {url}")
 
-    response = requests.post(url, data=payload, auth=auth, headers=headers)
+    if use_aws_auth:
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        auth = AWS4Auth(
+            credentials.access_key,
+            credentials.secret_key,
+            region,
+            "aps",
+            session_token=credentials.token,
+        )
+        response = requests.post(url, data=payload, auth=auth, headers=headers)
+    else:
+        response = requests.post(url, data=payload, headers=headers)
 
-    if debug:
-        print(f"Response status: {response.status_code}")
+    print(f"\n=== Response ===")
+    print(f"Status: {response.status_code}")
+    print(f"Headers: {dict(response.headers)}")
+    
+    if response.text:
+        print(f"Body:")
+        try:
+            import json as json_lib
+            print(json_lib.dumps(json_lib.loads(response.text), indent=2))
+        except:
+            print(response.text)
+    else:
+        print("Body: (empty)")
+    
+    if response.status_code not in [200, 204]:
+        print(f"\nError: Expected status 200 or 204, got {response.status_code}", file=sys.stderr)
+        response.raise_for_status()
+    else:
+        print(f"\n✓ Successfully pushed metrics")
 
-    response.raise_for_status()
 
-
-def process_commit_metrics(commit_dir, dry_run, workspace_url, region, debug=False):
+def process_commit_metrics(commit_dir, dry_run, url, use_aws_auth, region, debug=False):
     """Process metrics for a single commit directory."""
     metrics_file = commit_dir / "metrics.json"
     if not metrics_file.exists():
@@ -153,7 +176,7 @@ def process_commit_metrics(commit_dir, dry_run, workspace_url, region, debug=Fal
         print_metrics_dry_run(metrics_data)
         print(f"Would push {len(metrics_data)} metrics")
     else:
-        push_to_amp(metrics_data, workspace_url, region, debug=debug)
+        push_to_prometheus(metrics_data, url, use_aws_auth, region, debug=debug)
         print(f"Pushed {len(metrics_data)} metrics")
 
     return len(metrics_data)
@@ -161,16 +184,21 @@ def process_commit_metrics(commit_dir, dry_run, workspace_url, region, debug=Fal
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Push benchmark metrics to AWS Managed Prometheus"
+        description="Push benchmark metrics to Prometheus"
     )
     parser.add_argument(
         "--results-dir", required=True, help="Path to results directory"
     )
     parser.add_argument(
-        "--workspace-url",
-        help="AWS Managed Prometheus workspace URL (not required for --dry-run)",
+        "--url",
+        help="Prometheus remote write URL (not required for --dry-run)",
     )
-    parser.add_argument("--region", default="us-east-1", help="AWS region")
+    parser.add_argument(
+        "--aws-auth",
+        action="store_true",
+        help="Use AWS SigV4 authentication for AWS Managed Prometheus",
+    )
+    parser.add_argument("--region", default="us-east-1", help="AWS region (for AWS auth)")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -184,22 +212,35 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.dry_run and not args.workspace_url:
-        parser.error("--workspace-url is required unless --dry-run is specified")
+    if not args.dry_run and not args.url:
+        parser.error("--url is required unless --dry-run is specified")
 
     results_dir = Path(args.results_dir)
     if not results_dir.exists():
         print(f"Error: Results directory not found: {results_dir}", file=sys.stderr)
         sys.exit(1)
 
-    total_pushed = 0
-    for commit_dir in sorted(results_dir.iterdir()):
+    # Sort commit directories by timestamp (oldest first)
+    commit_dirs = []
+    for commit_dir in results_dir.iterdir():
         if not commit_dir.is_dir():
             continue
+        metrics_file = commit_dir / "metrics.json"
+        if metrics_file.exists():
+            with open(metrics_file) as f:
+                metrics_data = json.load(f)
+                if metrics_data:
+                    timestamp = datetime.fromisoformat(metrics_data[0]['timestamp'].replace('Z', '+00:00'))
+                    commit_dirs.append((timestamp, commit_dir))
+    
+    commit_dirs.sort(key=lambda x: x[0])
+    
+    total_pushed = 0
+    for _, commit_dir in commit_dirs:
 
         try:
             count = process_commit_metrics(
-                commit_dir, args.dry_run, args.workspace_url, args.region, args.debug
+                commit_dir, args.dry_run, args.url, args.aws_auth, args.region, args.debug
             )
             total_pushed += count
         except Exception as e:
