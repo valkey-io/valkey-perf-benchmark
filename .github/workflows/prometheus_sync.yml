@@ -39,9 +39,9 @@ jobs:
         run: |
           aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/results results --recursive
 
-      - name: Push metrics to Prometheus
+      - name: Push metrics to Victoria
         run: |
-          python utils/push_to_prometheus.py \
+          python utils/push_to_victoriametrics.py \
             --results-dir results \
-            --url "${{ secrets.PROMETHEUS_URL }}/api/v1/write" \
+            --url "${{ secrets.VICTORIA_URL }}/api/v1/write" \
             --debug

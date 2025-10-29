@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert benchmark metrics to Prometheus format and push to AWS Managed Prometheus."""
+"""Convert benchmark metrics to Prometheus format and push to VictoriaMetrics."""
 
 import argparse
 import json
@@ -23,7 +23,6 @@ def build_labels(metric):
         "clients": str(metric.get("clients", "")),
         "cluster_mode": str(metric.get("cluster_mode", "")).lower(),
         "tls": str(metric.get("tls", "")).lower(),
-        "version": "v2",
     }
 
     optional_fields = {
@@ -99,8 +98,8 @@ def create_prometheus_payload(metrics_data):
     return snappy.compress(write_request.SerializeToString())
 
 
-def push_to_prometheus(metrics_data, url, use_aws_auth=False, region=None, debug=False):
-    """Push metrics to Prometheus using remote write API."""
+def push_to_victoriametrics(metrics_data, url, use_aws_auth=False, region=None, debug=False):
+    """Push metrics to VictoriaMetrics using remote write API."""
     
     # Print first few metrics being pushed
     print(f"\nPushing {len(metrics_data)} metrics:")
@@ -176,7 +175,7 @@ def process_commit_metrics(commit_dir, dry_run, url, use_aws_auth, region, debug
         print_metrics_dry_run(metrics_data)
         print(f"Would push {len(metrics_data)} metrics")
     else:
-        push_to_prometheus(metrics_data, url, use_aws_auth, region, debug=debug)
+        push_to_victoriametrics(metrics_data, url, use_aws_auth, region, debug=debug)
         print(f"Pushed {len(metrics_data)} metrics")
 
     return len(metrics_data)
@@ -184,14 +183,14 @@ def process_commit_metrics(commit_dir, dry_run, url, use_aws_auth, region, debug
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Push benchmark metrics to Prometheus"
+        description="Push benchmark metrics to VictoriaMetrics"
     )
     parser.add_argument(
         "--results-dir", required=True, help="Path to results directory"
     )
     parser.add_argument(
         "--url",
-        help="Prometheus remote write URL (not required for --dry-run)",
+        help="VictoriaMetrics remote write URL (not required for --dry-run)",
     )
     parser.add_argument(
         "--aws-auth",
@@ -247,7 +246,7 @@ def main():
             print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
 
     status = "[DRY RUN] Would push" if args.dry_run else "Successfully pushed"
-    print(f"\n{status} {total_pushed} total metrics to Prometheus")
+    print(f"\n{status} {total_pushed} total metrics to VictoriaMetrics")
 
 
 if __name__ == "__main__":
