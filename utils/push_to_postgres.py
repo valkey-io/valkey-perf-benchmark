@@ -136,12 +136,7 @@ def process_commit_metrics(commit_dir, conn, dry_run=False):
     return count
 
 
-def get_rds_token(host, port, username, region):
-    """Generate RDS IAM authentication token."""
-    client = boto3.client("rds", region_name=region)
-    return client.generate_db_auth_token(
-        DBHostname=host, Port=port, DBUsername=username
-    )
+
 
 
 def main():
@@ -158,10 +153,7 @@ def main():
     parser.add_argument(
         "--password", help="Database password (not required for dry-run)"
     )
-    parser.add_argument(
-        "--use-iam-auth", action="store_true", help="Use IAM authentication"
-    )
-    parser.add_argument("--region", default="us-east-1", help="AWS region for IAM auth")
+
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
     )
@@ -173,9 +165,9 @@ def main():
             parser.error(
                 "--host, --database, and --username are required unless --dry-run is specified"
             )
-        if not args.use_iam_auth and not args.password:
+        if not args.password:
             parser.error(
-                "--password is required unless --use-iam-auth or --dry-run is specified"
+                "--password is required unless --dry-run is specified"
             )
 
     results_dir = Path(args.results_dir)
@@ -185,16 +177,14 @@ def main():
 
     conn = None
     if not args.dry_run:
-        # Get password (either provided or IAM token)
-        if args.use_iam_auth:
-            password = get_rds_token(args.host, args.port, args.username, args.region)
-            print(f"Using IAM authentication for {args.username}@{args.host}")
-        else:
-            password = args.password
-            print(f"Using password authentication for {args.username}@{args.host}")
+        password = args.password
+        print(f"Connecting as {args.username}@{args.host}")
 
         # Connect to PostgreSQL
         try:
+            print(f"Attempting connection to {args.host}:{args.port}...")
+            print(f"Database: {args.database}, User: {args.username}")
+            
             conn = psycopg2.connect(
                 host=args.host,
                 port=args.port,
@@ -202,10 +192,23 @@ def main():
                 user=args.username,
                 password=password,
                 connect_timeout=30,
+                sslmode='require'
             )
-            print(f"Connected to PostgreSQL at {args.host}:{args.port}")
+            print(f"✓ Connected to PostgreSQL at {args.host}:{args.port}")
+        except psycopg2.OperationalError as e:
+            if "timeout expired" in str(e) or "Connection timed out" in str(e):
+                print(f"\n❌ Connection timeout to RDS instance.", file=sys.stderr)
+                print(f"This indicates a network connectivity issue.", file=sys.stderr)
+                print(f"\nTroubleshooting steps:", file=sys.stderr)
+                print(f"1. Check RDS Security Group allows inbound port 5432 from GitHub Actions IP", file=sys.stderr)
+                print(f"2. Verify RDS is in correct VPC/subnets", file=sys.stderr)
+                print(f"3. Check if RDS is publicly accessible (if needed)", file=sys.stderr)
+                print(f"4. Consider using RDS Proxy for better connectivity", file=sys.stderr)
+            else:
+                print(f"❌ PostgreSQL connection error: {e}", file=sys.stderr)
+            sys.exit(1)
         except Exception as e:
-            print(f"Error connecting to PostgreSQL: {e}", file=sys.stderr)
+            print(f"❌ Unexpected error connecting to PostgreSQL: {e}", file=sys.stderr)
             sys.exit(1)
 
     try:

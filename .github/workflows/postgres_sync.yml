@@ -39,6 +39,16 @@ jobs:
         run: |
           aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/results results --recursive
 
+      - name: Generate RDS IAM token
+        run: |
+          RDS_TOKEN=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --region ${{ secrets.AWS_REGION }})
+          echo "::add-mask::$RDS_TOKEN"
+          echo "RDS_TOKEN=$RDS_TOKEN" >> $GITHUB_ENV
+
       - name: Push metrics to PostgreSQL
         run: |
           python utils/push_to_postgres.py \
@@ -46,5 +56,4 @@ jobs:
             --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --use-iam-auth \
-            --region ${{ secrets.AWS_REGION }}
+            --password "$RDS_TOKEN"
