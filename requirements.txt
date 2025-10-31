@@ -8,3 +8,4 @@ requests-aws4auth
 python-snappy
 protobuf
 grpcio-tools
+psycopg2-binary>=2.9.0

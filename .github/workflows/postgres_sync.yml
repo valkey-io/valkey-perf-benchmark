@@ -39,9 +39,12 @@ jobs:
         run: |
           aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/results results --recursive
 
-      - name: Push metrics to Victoria
+      - name: Push metrics to PostgreSQL
         run: |
-          python utils/push_to_victoriametrics.py \
-            --results-dir results \
-            --url "${{ secrets.VICTORIA_URL }}/api/v1/write" \
-            --debug
+          python utils/push_to_postgres.py \
+            --results-dir ./results \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --use-iam-auth \
+            --region ${{ secrets.AWS_REGION }}
