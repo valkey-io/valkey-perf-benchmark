@@ -1,0 +1,207 @@
+# Grafana Helm Chart Values
+# This configures Grafana to use PostgreSQL backend and enables shared dashboards
+
+replicas: 1
+
+image:
+  repository: grafana/grafana
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Service configuration - Now using ClusterIP with ALB Ingress
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+# Ingress configuration (alternative to LoadBalancer)
+ingress:
+  enabled: false
+  ingressClassName: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+  hosts:
+    - grafana.yourdomain.com
+  path: /
+  pathType: Prefix
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# Persistence for plugins and other data
+persistence:
+  enabled: true
+  type: pvc
+  storageClassName: gp2
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+
+# Admin credentials
+adminUser: admin
+adminPassword: "ChangeThisPassword123!"
+
+# PostgreSQL database configuration
+envFromSecret: grafana-postgres-secret
+
+env:
+  GF_SERVER_ROOT_URL: "https://your-cloudfront-domain.cloudfront.net" # Update with your CloudFront domain
+  GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+
+  # Enable shared/public dashboards
+  GF_FEATURE_TOGGLES_ENABLE: "publicDashboards"
+  GF_DASHBOARDS_PUBLIC_ENABLED: "true"
+
+  # Security settings
+  GF_SECURITY_ALLOW_EMBEDDING: "true"
+  GF_AUTH_ANONYMOUS_ENABLED: "false"
+
+  # Logging
+  GF_LOG_MODE: "console"
+  GF_LOG_LEVEL: "info"
+
+# Grafana.ini configuration
+grafana.ini:
+  server:
+    root_url: "https://your-cloudfront-domain.cloudfront.net" # Update with your CloudFront domain
+    enable_gzip: true
+
+  database:
+    type: postgres
+    host: <your-rds-endpoint>:5432 # Update with your RDS endpoint from CloudFormation outputs
+    name: grafana
+    ssl_mode: require
+    max_idle_conn: 2
+    max_open_conn: 10
+    conn_max_lifetime: 14400
+
+  remote_cache:
+    type: database
+
+  analytics:
+    reporting_enabled: false
+    check_for_updates: true
+
+  security:
+    admin_user: admin
+    cookie_secure: true
+    cookie_samesite: lax
+    allow_embedding: true
+
+  users:
+    allow_sign_up: false
+    auto_assign_org: true
+    auto_assign_org_role: Viewer
+
+  auth.anonymous:
+    enabled: false
+
+  dashboards:
+    versions_to_keep: 20
+    min_refresh_interval: 5s
+
+  feature_toggles:
+    enable: publicDashboards
+
+# Plugins to install
+plugins:
+  - grafana-clock-panel
+  - grafana-simple-json-datasource
+  - grafana-piechart-panel
+
+# Data sources to provision
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: PostgreSQL-Valkey
+        type: postgres
+        url: <your-rds-endpoint>:5432 # Update with your RDS endpoint
+        database: grafana
+        user: $__env{GF_DATABASE_USER}
+        secureJsonData:
+          password: $__env{GF_DATABASE_PASSWORD}
+        jsonData:
+          sslmode: require
+          maxOpenConns: 10
+          maxIdleConns: 2
+          connMaxLifetime: 14400
+        editable: true
+
+# Dashboard providers
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: "default"
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+# Sidecar for dashboard discovery
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    folder: /tmp/dashboards
+    defaultFolderName: "General"
+  datasources:
+    enabled: true
+    label: grafana_datasource
+
+# Pod annotations
+podAnnotations: {}
+
+# Security context
+securityContext:
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: 3000
+  initialDelaySeconds: 60
+  timeoutSeconds: 30
+  failureThreshold: 10
+
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: 3000
+  initialDelaySeconds: 30
+  timeoutSeconds: 30
+
+# Affinity rules for high availability
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - grafana
+          topologyKey: kubernetes.io/hostname
+
+# Node selector (optional - adjust based on your node labels)
+nodeSelector: {}
+
+# Tolerations (optional)
+tolerations: []

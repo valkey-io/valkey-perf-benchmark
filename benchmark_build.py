@@ -16,7 +16,7 @@ class BenchmarkBuilder:
         benchmark_dir: str = "../valkey-benchmark-latest",
         tls_enabled: bool = False,
     ) -> None:
-        self.repo_url = "https://github.com/SoftlyRaining/valkey.git"
+        self.repo_url = "https://github.com/rainsupreme/valkey.git"
         self.repo_branch = "valkey-benchmark-duration"
         self.benchmark_dir = Path(benchmark_dir)
         self.benchmark_binary = self.benchmark_dir / "src" / "valkey-benchmark"

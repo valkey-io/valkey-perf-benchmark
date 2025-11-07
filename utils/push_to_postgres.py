@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Convert benchmark metrics from JSON to PostgreSQL."""
+"""Convert benchmark metrics from JSON to PostgreSQL.
+
+This script supports both traditional password authentication and 
+AWS IAM database authentication for RDS PostgreSQL instances.
+When using IAM authentication, provide an IAM-generated token as the password.
+"""
 
 import argparse
 import json
@@ -136,9 +141,6 @@ def process_commit_metrics(commit_dir, conn, dry_run=False):
     return count
 
 
-
-
-
 def main():
     parser = argparse.ArgumentParser(description="Push benchmark metrics to PostgreSQL")
     parser.add_argument(
@@ -166,9 +168,7 @@ def main():
                 "--host, --database, and --username are required unless --dry-run is specified"
             )
         if not args.password:
-            parser.error(
-                "--password is required unless --dry-run is specified"
-            )
+            parser.error("--password is required unless --dry-run is specified")
 
     results_dir = Path(args.results_dir)
     if not results_dir.exists():
@@ -184,7 +184,7 @@ def main():
         try:
             print(f"Attempting connection to {args.host}:{args.port}...")
             print(f"Database: {args.database}, User: {args.username}")
-            
+
             conn = psycopg2.connect(
                 host=args.host,
                 port=args.port,
@@ -192,7 +192,7 @@ def main():
                 user=args.username,
                 password=password,
                 connect_timeout=30,
-                sslmode='require'
+                sslmode="require",
             )
             print(f"✓ Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:
@@ -200,10 +200,19 @@ def main():
                 print(f"\n❌ Connection timeout to RDS instance.", file=sys.stderr)
                 print(f"This indicates a network connectivity issue.", file=sys.stderr)
                 print(f"\nTroubleshooting steps:", file=sys.stderr)
-                print(f"1. Check RDS Security Group allows inbound port 5432 from GitHub Actions IP", file=sys.stderr)
+                print(
+                    f"1. Check RDS Security Group allows inbound port 5432 from GitHub Actions IP",
+                    file=sys.stderr,
+                )
                 print(f"2. Verify RDS is in correct VPC/subnets", file=sys.stderr)
-                print(f"3. Check if RDS is publicly accessible (if needed)", file=sys.stderr)
-                print(f"4. Consider using RDS Proxy for better connectivity", file=sys.stderr)
+                print(
+                    f"3. Check if RDS is publicly accessible (if needed)",
+                    file=sys.stderr,
+                )
+                print(
+                    f"4. Consider using RDS Proxy for better connectivity",
+                    file=sys.stderr,
+                )
             else:
                 print(f"❌ PostgreSQL connection error: {e}", file=sys.stderr)
             sys.exit(1)
