@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert benchmark metrics from JSON to PostgreSQL.
 
-This script supports both traditional password authentication and 
+This script supports both traditional password authentication and
 AWS IAM database authentication for RDS PostgreSQL instances.
 When using IAM authentication, provide an IAM-generated token as the password.
 """
