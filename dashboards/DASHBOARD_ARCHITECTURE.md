@@ -163,7 +163,7 @@ This document describes the complete architecture of the Grafana deployment on A
 **Purpose:** Kubernetes platform for running Grafana
 
 **Configuration:**
-- Kubernetes Version: 1.32
+- Kubernetes Version: 1.33
 - Control Plane: Managed by AWS
 - Endpoint Access: Public and Private
 - Logging: All log types enabled (API, audit, authenticator, controller manager, scheduler)

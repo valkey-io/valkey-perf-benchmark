@@ -12,9 +12,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-# Add timestamp to stack name to allow parallel deployments
+# Allow overriding STACK_NAME for stack updates, otherwise default to timestamped name
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-STACK_NAME="${STACK_NAME_PREFIX:-valkey-benchmark-stack}-${TIMESTAMP}"
+DEFAULT_STACK_NAME="${STACK_NAME_PREFIX:-valkey-benchmark-stack}-${TIMESTAMP}"
+STACK_NAME="${STACK_NAME:-$DEFAULT_STACK_NAME}"
 TEMPLATE_FILE="infrastructure/cloudformation/valkey-benchmark-stack.yaml"
 REGION="${AWS_REGION:-us-east-1}"
 
@@ -30,6 +31,7 @@ DB_MASTER_USERNAME="${DB_MASTER_USERNAME:-postgres}"
 ENVIRONMENT="${ENVIRONMENT:-production}"
 PROJECT_NAME="${PROJECT_NAME:-valkey-benchmark}"
 KEY_PAIR_NAME="${KEY_PAIR_NAME:-valkey-benchmark-key}"
+GRAFANA_ALB_DNS_NAME="${GRAFANA_ALB_DNS_NAME:-}"
 
 # Function to print colored messages
 print_info() {
@@ -268,6 +270,13 @@ deploy_stack() {
         ParameterKey=Environment,ParameterValue=\"$ENVIRONMENT\" \
         ParameterKey=ProjectName,ParameterValue=\"$PROJECT_NAME\" \
         ParameterKey=KeyPairName,ParameterValue=\"$KEY_PAIR_NAME\""
+
+    if [ -n "$GRAFANA_ALB_DNS_NAME" ]; then
+        print_info "Including Grafana ALB DNS name: $GRAFANA_ALB_DNS_NAME"
+        PARAMS="$PARAMS ParameterKey=GrafanaAlbDnsName,ParameterValue=\"$GRAFANA_ALB_DNS_NAME\""
+    else
+        print_warning "Grafana ALB DNS name not provided. CloudFront distribution will be created after you rerun with GRAFANA_ALB_DNS_NAME set."
+    fi
     
     # Add GitHub OIDC Provider ARN if found
     if [ -n "$GITHUB_OIDC_PROVIDER_ARN" ] && [ "$GITHUB_OIDC_PROVIDER_ARN" != "None" ]; then
@@ -420,7 +429,10 @@ display_next_steps() {
     echo "  2. Install AWS Load Balancer Controller"
     echo "  3. Install EBS CSI Driver"
     echo "  4. Deploy Grafana with Helm"
-    echo "  5. Update CloudFront origin with ALB DNS name"
+    echo "  5. Capture the ALB DNS once the ingress is ready:"
+    echo "       kubectl get ingress -n grafana grafana-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'"
+    echo "  6. Re-run this script with STACK_NAME=$STACK_NAME and GRAFANA_ALB_DNS_NAME set to that hostname to enable CloudFront."
+    echo "  7. IMPORTANT: Secure ALB for CloudFront-only access: ./secure-alb-for-cloudfront.sh"
     echo ""
     print_info "Useful commands:"
     echo "  - View stack: aws cloudformation describe-stacks --stack-name $STACK_NAME --region $REGION"

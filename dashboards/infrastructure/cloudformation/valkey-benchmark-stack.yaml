@@ -11,7 +11,7 @@ Parameters:
     Type: String
     Default: t4g.small
     AllowedValues:
-      [t4g.small, t4g.medium, t4g.large, t3.small, t3.medium, t3.large]
+      [t4g.small, t4g.medium, t4g.large]
     Description: EC2 instance type for EKS worker nodes
 
   NodeGroupDesiredCapacity:
@@ -43,9 +43,6 @@ Parameters:
         db.t4g.micro,
         db.t4g.small,
         db.t4g.medium,
-        db.t3.micro,
-        db.t3.small,
-        db.t3.medium,
       ]
     Description: RDS instance class
 
@@ -88,9 +85,17 @@ Parameters:
     Default: ""
     Description: ARN of the existing GitHub OIDC Provider
 
+  GrafanaAlbDnsName:
+    Type: String
+    Default: ""
+    Description: DNS name of the Grafana ALB created by the AWS Load Balancer Controller (e.g. k8s-grafana-grafanai-XXXXXXXXXX.elb.amazonaws.com)
+    AllowedPattern: "^$|([a-z0-9-]+\\.)+elb\\.amazonaws\\.com$"
+    ConstraintDescription: Must be empty or a valid AWS ALB hostname (…elb.amazonaws.com)
+
 Conditions:
   HasGitHubOIDCProvider: !Not [!Equals [!Ref GitHubOIDCProviderArn, ""]]
   NeedsGitHubOIDCProvider: !Equals [!Ref GitHubOIDCProviderArn, ""]
+  HasGrafanaAlbDns: !Not [!Equals [!Ref GrafanaAlbDnsName, ""]]
 
 Resources:
   # VPC and Networking
@@ -302,8 +307,8 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: HTTPS access to EKS API
+          CidrIp: 10.0.0.0/16
+          Description: Restrict EKS API access to the VPC range
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-eks-cluster-sg"
@@ -337,6 +342,18 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # Security Group for GitHub Actions Runner (if in same VPC)
+  GitHubRunnerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for GitHub Actions self-hosted runner
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-github-runner-sg"
+        - Key: Environment
+          Value: !Ref Environment
+
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -351,8 +368,8 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          CidrIp: 0.0.0.0/0
-          Description: Allow GitHub Actions to access PostgreSQL (restrict to GitHub IP ranges in production)
+          SourceSecurityGroupId: !Ref GitHubRunnerSecurityGroup
+          Description: Allow GitHub Actions runner to access PostgreSQL (same VPC)
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-sg"
@@ -442,7 +459,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - rds-db:connect
-                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${RDSInstance}/*"
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${RDSInstance.DbiResourceId}/*"
               - Effect: Allow
                 Action:
                   - rds:DescribeDBInstances
@@ -479,7 +496,7 @@ Resources:
     Type: AWS::EKS::Cluster
     Properties:
       Name: !Ref ClusterName
-      Version: "1.32"
+      Version: "1.33"
       RoleArn: !GetAtt EKSClusterRole.Arn
       ResourcesVpcConfig:
         SecurityGroupIds:
@@ -489,9 +506,8 @@ Resources:
           - !Ref PublicSubnet2
           - !Ref PrivateSubnet1
           - !Ref PrivateSubnet2
-        EndpointPublicAccess: true
+        EndpointPublicAccess: false
         EndpointPrivateAccess: true
-        PublicAccessCidrs: ["0.0.0.0/0"]
       Logging:
         ClusterLogging:
           EnabledTypes:
@@ -744,6 +760,25 @@ Resources:
         - Key: Project
           Value: !Ref ProjectName
 
+  EKSNodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${ProjectName}-node-lt"
+      LaunchTemplateData:
+        KeyName: !Ref KeyPairName
+        SecurityGroupIds:
+          - !Ref EKSNodeSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 2
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Environment
+                Value: !Ref Environment
+              - Key: Project
+                Value: !Ref ProjectName
+
   # EKS Node Group
   EKSNodeGroup:
     Type: AWS::EKS::Nodegroup
@@ -759,6 +794,9 @@ Resources:
       Subnets:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
+      LaunchTemplate:
+        Id: !Ref EKSNodeLaunchTemplate
+        Version: !GetAtt EKSNodeLaunchTemplate.LatestVersionNumber
       ScalingConfig:
         MinSize: !Ref NodeGroupMinSize
         MaxSize: !Ref NodeGroupMaxSize
@@ -787,7 +825,7 @@ Resources:
         - Key: Project
           Value: !Ref ProjectName
 
-  # RDS Subnet Group
+  # RDS Subnet Group - Private-only subnets for database isolation
   RDSSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -859,8 +897,12 @@ Resources:
           Value: !Ref ProjectName
 
   # CloudFront Distribution
+  # Supply the actual ALB DNS name via the GrafanaAlbDnsName parameter (GitHub workflow/self-hosted runners can discover it via
+  # aws elbv2 describe-load-balancers) so the distribution always points at the live ingress. Continue to run dashboards/secure-alb-for-cloudfront.sh
+  # to restrict the ALB security group to the CloudFront managed prefix list.
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
+    Condition: HasGrafanaAlbDns
     Properties:
       DistributionConfig:
         Comment: !Sub "CloudFront distribution for ${ProjectName} Grafana dashboards"
@@ -870,7 +912,7 @@ Resources:
         PriceClass: PriceClass_100
         Origins:
           - Id: grafana-alb-origin
-            DomainName: !Sub "placeholder-${AWS::StackName}.elb.amazonaws.com"
+            DomainName: !Ref GrafanaAlbDnsName
             CustomOriginConfig:
               HTTPPort: 80
               HTTPSPort: 443
@@ -948,12 +990,14 @@ Outputs:
 
   CloudFrontDomainName:
     Description: CloudFront Distribution Domain Name
+    Condition: HasGrafanaAlbDns
     Value: !GetAtt CloudFrontDistribution.DomainName
     Export:
       Name: !Sub "${AWS::StackName}-CloudFront-Domain"
 
   CloudFrontDistributionId:
     Description: CloudFront Distribution ID
+    Condition: HasGrafanaAlbDns
     Value: !Ref CloudFrontDistribution
     Export:
       Name: !Sub "${AWS::StackName}-CloudFront-ID"
