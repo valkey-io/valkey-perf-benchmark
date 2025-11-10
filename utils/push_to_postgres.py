@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Convert benchmark metrics from JSON to PostgreSQL.
 
-This script supports both traditional password authentication and
-AWS IAM database authentication for RDS PostgreSQL instances.
-When using IAM authentication, provide an IAM-generated token as the password.
+This script accepts database credentials including password.
+For AWS IAM authentication, generate the token externally and pass it as the password.
 """
 
 import argparse
@@ -12,7 +11,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import boto3
 import psycopg2
 from psycopg2.extras import execute_values
 
