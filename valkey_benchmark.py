@@ -63,6 +63,7 @@ class ClientRunner:
         benchmark_threads: Optional[int] = None,
         runs: int = 1,
         server_launcher=None,
+        architecture: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -77,6 +78,7 @@ class ClientRunner:
         self.benchmark_threads = benchmark_threads
         self.runs = runs
         self.server_launcher = server_launcher
+        self.architecture = architecture
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -246,6 +248,7 @@ class ClientRunner:
             commit_time,
             self.io_threads,
             self.benchmark_threads,
+            self.architecture,
         )
         metric_json = []
 

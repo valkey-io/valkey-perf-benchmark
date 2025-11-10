@@ -45,6 +45,7 @@ def create_tables(conn):
                 benchmark_mode VARCHAR(50),
                 duration INTEGER,
                 warmup INTEGER,
+                architecture VARCHAR(50),
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
             
@@ -84,6 +85,7 @@ def convert_metrics_to_rows(metrics_data):
             metric.get("benchmark_mode"),
             metric.get("duration"),
             metric.get("warmup"),
+            metric.get("architecture"),
         )
         rows.append(row)
     return rows
@@ -111,7 +113,7 @@ def push_to_postgres(metrics_data, conn, dry_run=False):
                 timestamp, commit, command, data_size, pipeline, clients, requests,
                 rps, avg_latency_ms, min_latency_ms, p50_latency_ms, p95_latency_ms,
                 p99_latency_ms, max_latency_ms, cluster_mode, tls, io_threads,
-                benchmark_threads, benchmark_mode, duration, warmup
+                benchmark_threads, benchmark_mode, duration, warmup, architecture
             ) VALUES %s
             ON CONFLICT (timestamp, commit, command, data_size, pipeline) DO NOTHING
             """,

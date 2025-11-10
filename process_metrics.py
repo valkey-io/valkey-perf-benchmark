@@ -31,6 +31,7 @@ class MetricsProcessor:
         commit_time: str,
         io_threads: Optional[int] = None,
         benchmark_threads: Optional[int] = None,
+        architecture: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
@@ -38,6 +39,7 @@ class MetricsProcessor:
         self.commit_time = commit_time
         self.io_threads = io_threads
         self.benchmark_threads = benchmark_threads
+        self.architecture = architecture
 
     def create_metrics(
         self,
@@ -142,6 +144,10 @@ class MetricsProcessor:
             # Add warmup to metrics if it was specified
             if warmup is not None:
                 metrics_dict["warmup"] = warmup
+
+            # Add architecture to metrics if it was specified
+            if self.architecture is not None:
+                metrics_dict["architecture"] = self.architecture
 
             return metrics_dict
         except Exception:

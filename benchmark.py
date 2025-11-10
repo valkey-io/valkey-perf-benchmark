@@ -5,6 +5,7 @@ import argparse
 import ipaddress
 import json
 import logging
+import platform
 from pathlib import Path
 from typing import List
 import sys
@@ -342,6 +343,10 @@ def run_benchmark_matrix(
     init_logging(results_dir / "logs.txt")
     logging.info(f"Loaded config: {cfg}")
 
+    # Detect system architecture
+    architecture = platform.machine()
+    logging.info(f"Detected architecture: {architecture}")
+
     server_core_range = cfg.get("server_cpu_range")
     bench_core_range = cfg.get("client_cpu_range")
 
@@ -420,6 +425,7 @@ def run_benchmark_matrix(
                 benchmark_threads=cfg.get("benchmark-threads"),
                 runs=args.runs,
                 server_launcher=launcher,
+                architecture=architecture,
             )
             runner.wait_for_server_ready()
             runner.run_benchmark_config()

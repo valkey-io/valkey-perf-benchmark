@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS benchmark_metrics (
     benchmark_mode VARCHAR(50),
     duration INTEGER,
     warmup INTEGER,
+    architecture VARCHAR(50),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -132,3 +133,4 @@ COMMENT ON COLUMN benchmark_metrics.p50_latency_ms IS 'P50 latency in millisecon
 COMMENT ON COLUMN benchmark_metrics.p99_latency_ms IS 'P99 latency in milliseconds';
 COMMENT ON COLUMN benchmark_metrics.cluster_mode IS 'Whether cluster mode was enabled';
 COMMENT ON COLUMN benchmark_metrics.tls IS 'Whether TLS was enabled';
+COMMENT ON COLUMN benchmark_metrics.architecture IS 'System architecture (e.g., x86_64, aarch64, arm64)';

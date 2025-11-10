@@ -110,7 +110,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SET' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SET' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -206,7 +206,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'GET' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'GET' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -302,7 +302,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'RPUSH' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'RPUSH' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -398,7 +398,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPUSH' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPUSH' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -494,7 +494,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPOP' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPOP' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -590,7 +590,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SADD' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SADD' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -686,7 +686,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SPOP' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SPOP' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
@@ -782,7 +782,7 @@
                         "uid": "df3ap35djgtfke"
                     },
                     "format": "time_series",
-                    "rawSql": "SELECT timestamp AS time, rps AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit_hash, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'HSET' ORDER BY timestamp",
+                    "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'D, P', pipeline, ' - Commit: ', SUBSTRING(commit, 1, 8)) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'HSET' GROUP BY timestamp, commit, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, benchmark_threads, benchmark_mode, duration, warmup, architecture ORDER BY timestamp",
                     "refId": "A"
                 }
             ],
