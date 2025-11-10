@@ -121,7 +121,7 @@ def push_to_postgres(metrics_data, conn, dry_run=False):
         )
     print(f"  Committing transaction...")
     conn.commit()
-    print(f"  ✓ Successfully inserted {len(rows)} rows")
+    print(f"Successfully inserted {len(rows)} rows")
     return len(rows)
 
 
@@ -196,7 +196,7 @@ def main():
                 connect_timeout=30,
                 sslmode="require",
             )
-            print(f"✓ Connected to PostgreSQL at {args.host}:{args.port}")
+            print(f"Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:
             if "timeout expired" in str(e) or "Connection timed out" in str(e):
                 print(f"\nConnection timeout to RDS instance.", file=sys.stderr)
@@ -226,7 +226,7 @@ def main():
         if not args.dry_run:
             print("Creating/verifying database tables...")
             create_tables(conn)
-            print("✓ Created/verified database tables")
+            print("Created/verified database tables")
 
         # Process all commit directories
         print(f"Scanning {results_dir} for commit directories...")
@@ -245,9 +245,9 @@ def main():
             try:
                 count = process_commit_metrics(commit_dir, conn, args.dry_run)
                 total_processed += count
-                print(f"✓ Completed {commit_dir.name} ({count} metrics)")
+                print(f"Completed {commit_dir.name} ({count} metrics)")
             except Exception as e:
-                print(f"✗ Error processing {commit_dir.name}: {e}", file=sys.stderr)
+                print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
 
         status = "[DRY RUN] Would process" if args.dry_run else "Successfully processed"
         print(f"\n{status} {total_processed} total metrics")
