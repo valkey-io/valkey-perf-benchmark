@@ -197,7 +197,7 @@ def main():
             print(f"✓ Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:
             if "timeout expired" in str(e) or "Connection timed out" in str(e):
-                print(f"\n❌ Connection timeout to RDS instance.", file=sys.stderr)
+                print(f"\nConnection timeout to RDS instance.", file=sys.stderr)
                 print(f"This indicates a network connectivity issue.", file=sys.stderr)
                 print(f"\nTroubleshooting steps:", file=sys.stderr)
                 print(
@@ -214,10 +214,10 @@ def main():
                     file=sys.stderr,
                 )
             else:
-                print(f"❌ PostgreSQL connection error: {e}", file=sys.stderr)
+                print(f"PostgreSQL connection error: {e}", file=sys.stderr)
             sys.exit(1)
         except Exception as e:
-            print(f"❌ Unexpected error connecting to PostgreSQL: {e}", file=sys.stderr)
+            print(f"Unexpected error connecting to PostgreSQL: {e}", file=sys.stderr)
             sys.exit(1)
 
     try:

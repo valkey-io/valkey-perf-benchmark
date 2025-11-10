@@ -5,7 +5,7 @@
 set -e
 
 REGION="${AWS_REGION:-us-east-1}"
-CLUSTER_NAME="${1:-grafana-cluster}"
+CLUSTER_NAME="${1:-valkey-perf-cluster}"
 
 echo "Securing ALB for CloudFront-only access..."
 echo "Region: $REGION"
@@ -21,11 +21,11 @@ CLOUDFRONT_PREFIX_LIST=$(aws ec2 describe-managed-prefix-lists \
   --output text)
 
 if [ -z "$CLOUDFRONT_PREFIX_LIST" ] || [ "$CLOUDFRONT_PREFIX_LIST" == "None" ]; then
-  echo "❌ Error: Could not find CloudFront managed prefix list"
+  echo "Error: Could not find CloudFront managed prefix list"
   exit 1
 fi
 
-echo "✅ CloudFront prefix list: $CLOUDFRONT_PREFIX_LIST"
+echo "CloudFront prefix list: $CLOUDFRONT_PREFIX_LIST"
 echo ""
 
 # Get ALB security group (created by Load Balancer Controller)
@@ -37,7 +37,7 @@ ALB_SG=$(aws ec2 describe-security-groups \
   --output text 2>/dev/null || echo "")
 
 if [ -z "$ALB_SG" ] || [ "$ALB_SG" == "None" ]; then
-  echo "⚠️  ALB security group not found via tag, trying alternative method..."
+  echo "ALB security group not found via tag, trying alternative method..."
   
   # Try to find by description
   ALB_SG=$(aws ec2 describe-security-groups \
@@ -48,12 +48,12 @@ if [ -z "$ALB_SG" ] || [ "$ALB_SG" == "None" ]; then
 fi
 
 if [ -z "$ALB_SG" ] || [ "$ALB_SG" == "None" ]; then
-  echo "❌ Error: Could not find ALB security group"
+  echo "Error: Could not find ALB security group"
   echo "Please ensure the ingress has been deployed and the ALB is created"
   exit 1
 fi
 
-echo "✅ ALB security group: $ALB_SG"
+echo "ALB security group: $ALB_SG"
 echo ""
 
 # Get EKS cluster security group
@@ -65,11 +65,11 @@ CLUSTER_SG=$(aws eks describe-cluster \
   --output text)
 
 if [ -z "$CLUSTER_SG" ] || [ "$CLUSTER_SG" == "None" ]; then
-  echo "❌ Error: Could not find EKS cluster security group"
+  echo "Error: Could not find EKS cluster security group"
   exit 1
 fi
 
-echo "✅ EKS cluster security group: $CLUSTER_SG"
+echo "EKS cluster security group: $CLUSTER_SG"
 echo ""
 
 # Check if 0.0.0.0/0 rule exists
@@ -81,15 +81,15 @@ PUBLIC_RULE=$(aws ec2 describe-security-groups \
   --output json)
 
 if [ "$PUBLIC_RULE" != "[]" ]; then
-  echo "⚠️  Found public access rule (0.0.0.0/0), removing..."
+  echo "Found public access rule (0.0.0.0/0), removing..."
   aws ec2 revoke-security-group-ingress \
     --group-id "$ALB_SG" \
     --region "$REGION" \
     --ip-permissions '[{"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]' \
     2>/dev/null || echo "  (Rule may already be removed)"
-  echo "✅ Removed public access rule"
+  echo "Removed public access rule"
 else
-  echo "✅ No public access rule found"
+  echo "No public access rule found"
 fi
 
 echo ""
@@ -100,7 +100,7 @@ aws ec2 authorize-security-group-ingress \
   --group-id "$ALB_SG" \
   --region "$REGION" \
   --ip-permissions "[{\"IpProtocol\": \"tcp\", \"FromPort\": 80, \"ToPort\": 80, \"PrefixListIds\": [{\"PrefixListId\": \"$CLOUDFRONT_PREFIX_LIST\", \"Description\": \"CloudFront origin access\"}]}]" \
-  2>/dev/null && echo "✅ Added CloudFront access rule" || echo "✅ CloudFront rule already exists"
+  2>/dev/null && echo "Added CloudFront access rule" || echo "CloudFront rule already exists"
 
 echo ""
 
@@ -110,7 +110,7 @@ aws ec2 authorize-security-group-ingress \
   --group-id "$CLUSTER_SG" \
   --region "$REGION" \
   --ip-permissions "[{\"IpProtocol\": \"tcp\", \"FromPort\": 3000, \"ToPort\": 3000, \"UserIdGroupPairs\": [{\"GroupId\": \"$ALB_SG\", \"Description\": \"Allow ALB to reach Grafana pods\"}]}]" \
-  2>/dev/null && echo "✅ Added ALB to EKS node rule" || echo "✅ ALB to EKS node rule already exists"
+  2>/dev/null && echo "Added ALB to EKS node rule" || echo "ALB to EKS node rule already exists"
 
 echo ""
 echo "Security configuration complete!"

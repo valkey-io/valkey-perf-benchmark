@@ -760,6 +760,74 @@ Resources:
         - Key: Project
           Value: !Ref ProjectName
 
+  # IAM Role for Cluster Autoscaler
+  ClusterAutoscalerRole:
+    Type: AWS::IAM::Role
+    DependsOn: EKSOIDCProvider
+    Properties:
+      RoleName: !Sub "${ProjectName}-cluster-autoscaler-role"
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "${OIDCProviderArn}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerUrl}:aud": "sts.amazonaws.com",
+                      "${IssuerUrl}:sub": "system:serviceaccount:kube-system:cluster-autoscaler"
+                    }
+                  }
+                }
+              ]
+            }
+          - OIDCProviderArn: !GetAtt EKSOIDCProvider.Arn
+            IssuerUrl: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
+      ManagedPolicyArns:
+        - !Ref ClusterAutoscalerPolicy
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # IAM Policy for Cluster Autoscaler
+  ClusterAutoscalerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-cluster-autoscaler-policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - autoscaling:DescribeAutoScalingGroups
+              - autoscaling:DescribeAutoScalingInstances
+              - autoscaling:DescribeLaunchConfigurations
+              - autoscaling:DescribeScalingActivities
+              - autoscaling:DescribeTags
+              - ec2:DescribeImages
+              - ec2:DescribeInstanceTypes
+              - ec2:DescribeLaunchTemplateVersions
+              - ec2:GetInstanceTypesFromInstanceRequirements
+              - eks:DescribeNodegroup
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - autoscaling:SetDesiredCapacity
+              - autoscaling:TerminateInstanceInAutoScalingGroup
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/enabled": "true"
+                "autoscaling:ResourceTag/kubernetes.io/cluster/${ClusterName}": "owned"
+
   EKSNodeLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -806,6 +874,8 @@ Resources:
       Tags:
         Environment: !Ref Environment
         Project: !Ref ProjectName
+        "k8s.io/cluster-autoscaler/enabled": "true"
+        "k8s.io/cluster-autoscaler/valkey-perf-cluster": "owned"
 
   # EBS CSI Driver Add-on
   EBSCSIDriverAddon:
@@ -1013,6 +1083,12 @@ Outputs:
     Value: !GetAtt EBSCSIDriverRole.Arn
     Export:
       Name: !Sub "${AWS::StackName}-EBS-CSI-Role-ARN"
+
+  ClusterAutoscalerRoleArn:
+    Description: Cluster Autoscaler IAM Role ARN
+    Value: !GetAtt ClusterAutoscalerRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-Cluster-Autoscaler-Role-ARN"
 
   EKSOIDCProviderArn:
     Description: EKS OIDC Provider ARN
