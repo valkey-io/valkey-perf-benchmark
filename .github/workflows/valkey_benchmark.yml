@@ -36,7 +36,7 @@ jobs:
 
     steps:
       - name: Set up Python
-        uses: kishaningithub/setup-python-amazon-linux@v1
+        uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
         with:
           python-version: "3.10"
           cache: "pip"
