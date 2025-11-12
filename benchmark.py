@@ -14,7 +14,6 @@ from valkey_build import ServerBuilder
 from valkey_server import ServerLauncher
 from valkey_benchmark import ClientRunner
 from benchmark_build import BenchmarkBuilder
-from utils.workflow_commits import mark_commits
 
 # ---------- Constants --------------------------------------------------------
 DEFAULT_RESULTS_ROOT = Path("results")
@@ -106,13 +105,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
-    )
-
-    parser.add_argument(
-        "--completed-file",
-        type=Path,
-        default="./completed_commits.json",
-        help="Path to completed_commits.json used for tracking progress",
     )
 
     parser.add_argument(
@@ -316,9 +308,16 @@ def parse_bool(value) -> bool:
 
 
 def run_benchmark_matrix(
-    *, commit_id: str, cfg: dict, args: argparse.Namespace
+    *, commit_id: str, cfg: dict, args: argparse.Namespace, config_data: dict = None
 ) -> None:
-    """Run benchmarks for all tls and cluster mode combinations."""
+    """Run benchmarks for all tls and cluster mode combinations.
+    
+    Args:
+        commit_id: Git commit SHA to benchmark
+        cfg: Benchmark configuration dictionary
+        args: Command line arguments
+        config_data: Full config data including file path and content for tracking
+    """
     results_dir = ensure_results_dir(args.results_dir, commit_id)
     init_logging(results_dir / "logs.txt")
     logging.info(f"Loaded config: {cfg}")
@@ -414,17 +413,6 @@ def run_benchmark_matrix(
         if launcher and not args.use_running_server:
             launcher.shutdown(cfg["tls_mode"])
 
-    # Mark commit as complete when done
-    try:
-        mark_commits(
-            completed_file=Path(args.completed_file),
-            repo=valkey_dir,
-            shas=[commit_id],
-            status="complete",
-        )
-    except Exception as exc:
-        logging.warning(f"Failed to update completed_commits.json: {exc}")
-
     if not args.use_running_server:
         if args.valkey_path:
             builder.terminate_valkey()
@@ -455,10 +443,14 @@ def main() -> None:
     if args.baseline and args.baseline not in commits:
         commits.append(args.baseline)
 
-    for cfg in load_configs(args.config):
+    configs = load_configs(args.config)
+    for cfg in configs:
+        # Prepare config data for tracking (just the config content, not file path)
+        config_data = [cfg]
+        
         for commit in commits:
             print(f"=== Processing commit: {commit} ===")
-            run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args)
+            run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args, config_data=config_data)
 
 
 if __name__ == "__main__":

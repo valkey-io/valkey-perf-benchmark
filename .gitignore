@@ -22,7 +22,6 @@ env/
 
 # Runtime files - automatically created during benchmarking
 results*/
-completed_commits.json
 
 # CloudFormation and AWS deployment artifacts
 dashboards/stack-outputs.json

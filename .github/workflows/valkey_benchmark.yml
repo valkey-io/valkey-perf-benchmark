@@ -8,8 +8,8 @@ on:
         required: false
         default: "3"
         type: string
-  # schedule:
-  #   - cron: '*/25 * * * *'
+  schedule:
+    - cron: '*/25 * * * *'
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
@@ -42,15 +42,15 @@ jobs:
           cache: "pip"
 
       - name: Checkout Valkey
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: valkey-io/valkey
           ref: ${{ env.BRANCH }}
-          fetch-depth: 0 # Fetch all history for the branch
+          fetch-depth: 0
           path: valkey
 
       - name: Checkout Valkey Benchmark
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           path: valkey-perf-benchmark
 
@@ -58,11 +58,7 @@ jobs:
         working-directory: valkey-perf-benchmark
         run: |
           sudo dnf groupinstall "Development Tools" -y
-          sudo dnf install -y gcc gcc-c++ make \
-              python3-devel \
-              openssl-devel \
-              bzip2-devel \
-              libffi-devel
+          sudo dnf install -y gcc gcc-c++ make python3-devel openssl-devel bzip2-devel libffi-devel
           pip install -r requirements.txt
 
       - name: Configure AWS credentials
@@ -71,38 +67,81 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
-      - name: Download completed_commits.json from S3
+      - name: Initialize PostgreSQL tables
         working-directory: valkey-perf-benchmark
         run: |
-          aws s3 cp s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json completed_commits.json \
-            || echo '[]' > completed_commits.json
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          python utils/postgres_track_commits.py init \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD"
+
+      - name: Cleanup incomplete commits from previous runs
+        working-directory: valkey-perf-benchmark
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          python utils/postgres_track_commits.py cleanup \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD"
 
       - name: Determine commits to benchmark
         id: determine_commits
         working-directory: valkey-perf-benchmark
         run: |
-          commits=$(python utils/workflow_commits.py \
-            determine \
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          CONFIG_FILE="./configs/benchmark-config-arm.json"
+          commits=$(python utils/postgres_track_commits.py determine \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
             --repo ../valkey \
             --branch "$BRANCH" \
-            --completed-file completed_commits.json \
-            --max-commits "$MAX_COMMITS")
+            --max-commits "$MAX_COMMITS" \
+            --config-file "$CONFIG_FILE")
           echo "commit_ids=$commits" >> "$GITHUB_OUTPUT"
 
       - name: Mark commits as in progress
         working-directory: valkey-perf-benchmark
         run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
           COMMIT_IDS="${{ steps.determine_commits.outputs.commit_ids }}"
-          python utils/workflow_commits.py \
-            mark \
+          CONFIG_FILE="./configs/benchmark-config-arm.json"
+          python utils/postgres_track_commits.py mark \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
             --repo ../valkey \
-            --completed-file completed_commits.json \
             --status in_progress \
+            --config-file "$CONFIG_FILE" \
             $COMMIT_IDS
-          aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
 
       - name: Checkout valkey (RainingSoftly fork for latest benchmark)
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         with:
           repository: rainsupreme/valkey
           ref: "valkey-benchmark-duration"
@@ -114,27 +153,16 @@ jobs:
         working-directory: valkey_latest
         run: |
           echo "Building latest valkey-benchmark for latest benchmark executable..."
-
-          # Clean any previous builds
           make distclean || true
-
-          # Build valkey-benchmark with latest code
           make -j$(nproc)
-
-          # Verify the binary was created
           if [[ -f "src/valkey-benchmark" ]]; then
             echo "Successfully built latest valkey-benchmark"
             ls -la src/valkey-benchmark
-
-            # Test the binary
-            echo "Testing valkey-benchmark binary..."
             ./src/valkey-benchmark --version || echo "Version check completed"
           else
             echo "Failed to build valkey-benchmark"
             exit 1
           fi
-
-          # Store the absolute path for later use
           VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
@@ -143,14 +171,11 @@ jobs:
         working-directory: valkey-perf-benchmark
         run: |
           echo "===== BENCHMARKING ${{ steps.determine_commits.outputs.commit_ids }} ====="
-
-          # -- run benchmark
           python ./benchmark.py \
             --commits ${{ steps.determine_commits.outputs.commit_ids }} \
             --config ./configs/benchmark-config-arm.json \
             --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH" \
             --target-ip ${{ secrets.EC2_ARM64_IP }} \
-            --completed-file completed_commits.json \
             --results-dir "results"
 
       - name: Upload Artifact
@@ -176,22 +201,14 @@ jobs:
               "s3://${{ secrets.AWS_S3_BUCKET }}/results/$sha/metrics.json"
           done
 
-      - name: Upload updated completed_commits.json to S3
-        working-directory: valkey-perf-benchmark
-        run: |
-          aws s3 cp completed_commits.json "s3://${{ secrets.AWS_S3_BUCKET }}/completed_commits.json"
-
       - name: Push metrics to PostgreSQL
         working-directory: valkey-perf-benchmark
         run: |
-
-          # Generate IAM authentication token
           PGPASSWORD=$(aws rds generate-db-auth-token \
             --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
             --port 5432 \
             --region ${{ secrets.AWS_REGION }} \
             --username ${{ secrets.RDS_USERNAME }})
-
           python utils/push_to_postgres.py \
             --results-dir ./results \
             --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
@@ -199,6 +216,27 @@ jobs:
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
             --password $PGPASSWORD
+
+      - name: Mark commits as complete after successful PostgreSQL push
+        working-directory: valkey-perf-benchmark
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          COMMIT_IDS="${{ steps.determine_commits.outputs.commit_ids }}"
+          CONFIG_FILE="./configs/benchmark-config-arm.json"
+          python utils/postgres_track_commits.py mark \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
+            --repo ../valkey \
+            --status complete \
+            --config-file "$CONFIG_FILE" \
+            $COMMIT_IDS
 
       - name: Cleanup any running valkey processes and files
         if: always()
