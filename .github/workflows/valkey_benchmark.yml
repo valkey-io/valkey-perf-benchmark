@@ -80,7 +80,7 @@ jobs:
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD"
+            --password $PGPASSWORD
 
       - name: Cleanup incomplete commits from previous runs
         working-directory: valkey-perf-benchmark
@@ -95,7 +95,7 @@ jobs:
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD"
+            --password $PGPASSWORD
 
       - name: Determine commits to benchmark
         id: determine_commits
@@ -112,7 +112,7 @@ jobs:
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD" \
+            --password $PGPASSWORD \
             --repo ../valkey \
             --branch "$BRANCH" \
             --max-commits "$MAX_COMMITS" \
@@ -134,7 +134,7 @@ jobs:
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD" \
+            --password $PGPASSWORD \
             --repo ../valkey \
             --status in_progress \
             --config-file "$CONFIG_FILE" \
@@ -232,7 +232,7 @@ jobs:
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD" \
+            --password $PGPASSWORD \
             --repo ../valkey \
             --status complete \
             --config-file "$CONFIG_FILE" \

@@ -10,12 +10,13 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import List, Dict, Any, Tuple
 
 import psycopg2
 from psycopg2.extras import execute_values
 
 
-def create_tables(conn):
+def create_tables(conn: psycopg2.extensions.connection) -> None:
     """Create benchmark metrics table if it doesn't exist."""
     with conn.cursor() as cur:
         cur.execute(
@@ -50,15 +51,26 @@ def create_tables(conn):
             CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_commit ON benchmark_metrics(commit);
             CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_timestamp ON benchmark_metrics(timestamp);
             CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_command ON benchmark_metrics(command);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmark_metrics_unique 
-                ON benchmark_metrics(timestamp, commit, command, data_size, pipeline);
+            CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_config 
+                ON benchmark_metrics(commit, command, data_size, pipeline, clients);
         """
         )
     conn.commit()
 
 
-def convert_metrics_to_rows(metrics_data):
-    """Convert JSON metrics to PostgreSQL rows."""
+def convert_metrics_to_rows(
+    metrics_data: List[Dict[str, Any]],
+) -> List[Tuple[Any, ...]]:
+    """Convert JSON metrics to PostgreSQL rows.
+
+    Args:
+        metrics_data: List of benchmark metric dictionaries from metrics.json file.
+                     Each dict contains keys like 'timestamp', 'commit', 'command',
+                     'rps', 'avg_latency_ms', etc.
+
+    Returns:
+        List of tuples ready for PostgreSQL insertion.
+    """
     rows = []
     for metric in metrics_data:
         row = (
@@ -89,8 +101,21 @@ def convert_metrics_to_rows(metrics_data):
     return rows
 
 
-def push_to_postgres(metrics_data, conn, dry_run=False):
-    """Push metrics to PostgreSQL."""
+def push_to_postgres(
+    metrics_data: List[Dict[str, Any]],
+    conn: psycopg2.extensions.connection,
+    dry_run: bool = False,
+) -> int:
+    """Push metrics to PostgreSQL.
+
+    Args:
+        metrics_data: List of benchmark metric dictionaries from metrics.json file.
+        conn: PostgreSQL database connection.
+        dry_run: If True, only show what would be inserted without actually inserting.
+
+    Returns:
+        Number of rows that would be/were processed.
+    """
     print(f"  Converting {len(metrics_data)} metrics to rows...")
     rows = convert_metrics_to_rows(metrics_data)
 
@@ -113,18 +138,30 @@ def push_to_postgres(metrics_data, conn, dry_run=False):
                 p99_latency_ms, max_latency_ms, cluster_mode, tls, io_threads,
                 benchmark_threads, benchmark_mode, duration, warmup, architecture
             ) VALUES %s
-            ON CONFLICT (timestamp, commit, command, data_size, pipeline) DO NOTHING
             """,
             rows,
         )
-    print(f"  Committing transaction...")
+        inserted_count = cur.rowcount
+    print("  Committing transaction...")
     conn.commit()
-    print(f"Successfully inserted {len(rows)} rows")
+
+    print(f"Successfully inserted all {inserted_count} rows")
     return len(rows)
 
 
-def process_commit_metrics(commit_dir, conn, dry_run=False):
-    """Process metrics for a single commit directory."""
+def process_commit_metrics(
+    commit_dir: Path, conn: psycopg2.extensions.connection, dry_run: bool = False
+) -> int:
+    """Process metrics for a single commit directory.
+
+    Args:
+        commit_dir: Path to directory containing metrics.json file.
+        conn: PostgreSQL database connection.
+        dry_run: If True, only show what would be inserted without actually inserting.
+
+    Returns:
+        Number of metrics processed from this commit directory.
+    """
     metrics_file = commit_dir / "metrics.json"
     if not metrics_file.exists():
         print(f"Skipping {commit_dir.name}: no metrics.json found")
@@ -141,7 +178,7 @@ def process_commit_metrics(commit_dir, conn, dry_run=False):
     return count
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Push benchmark metrics to PostgreSQL")
     parser.add_argument(
         "--results-dir", required=True, help="Path to results directory"
@@ -197,20 +234,20 @@ def main():
             print(f"Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:
             if "timeout expired" in str(e) or "Connection timed out" in str(e):
-                print(f"\nConnection timeout to RDS instance.", file=sys.stderr)
-                print(f"This indicates a network connectivity issue.", file=sys.stderr)
-                print(f"\nTroubleshooting steps:", file=sys.stderr)
+                print("\nConnection timeout to RDS instance.", file=sys.stderr)
+                print("This indicates a network connectivity issue.", file=sys.stderr)
+                print("\nTroubleshooting steps:", file=sys.stderr)
                 print(
-                    f"1. Check RDS Security Group allows inbound port 5432 from GitHub Actions IP",
+                    "1. Check RDS Security Group allows inbound port 5432 from GitHub Actions IP",
                     file=sys.stderr,
                 )
-                print(f"2. Verify RDS is in correct VPC/subnets", file=sys.stderr)
+                print("2. Verify RDS is in correct VPC/subnets", file=sys.stderr)
                 print(
-                    f"3. Check if RDS is publicly accessible (if needed)",
+                    "3. Check if RDS is publicly accessible (if needed)",
                     file=sys.stderr,
                 )
                 print(
-                    f"4. Consider using RDS Proxy for better connectivity",
+                    "4. Consider using RDS Proxy for better connectivity",
                     file=sys.stderr,
                 )
             else:

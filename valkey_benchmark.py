@@ -62,7 +62,7 @@ class ClientRunner:
         valkey_benchmark_path: Optional[str] = None,
         benchmark_threads: Optional[int] = None,
         runs: int = 1,
-        server_launcher=None,
+        server_launcher: Optional[ServerLauncher] = None,
         architecture: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
@@ -71,7 +71,7 @@ class ClientRunner:
         self.tls_mode = tls_mode
         self.target_ip = target_ip
         self.results_dir = results_dir
-        self.valkey_path = valkey_path
+        self.valkey_path = Path(valkey_path)
         self.cores = cores
         self.io_threads = io_threads
         self.valkey_benchmark_path = valkey_benchmark_path or VALKEY_BENCHMARK

@@ -47,9 +47,9 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--mode",
-        choices=["server", "client", "both"],
+        choices=["client", "both"],
         default="both",
-        help="Execution mode: 'server' to only setup and run Valkey server, 'client' to only run benchmark tests against an existing server, or 'both' to run server and benchmarks on the same host.",
+        help="Execution mode: 'client' to only run benchmark tests against an existing server, or 'both' to run server and benchmarks on the same host.",
     )
     parser.add_argument(
         "--commits",
@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-ip",
         default="127.0.0.1",
-        help="Server IP visible to the client (ignored for --mode=server).",
+        help="Server IP visible to the client.",
     )
     parser.add_argument(
         "--config",
@@ -368,7 +368,7 @@ def run_benchmark_matrix(
 
         # ---- server section -----------------
         launcher = None
-        if (not args.use_running_server) and args.mode in ("server", "both"):
+        if (not args.use_running_server) and args.mode == "both":
             launcher = ServerLauncher(
                 results_dir=str(results_dir),
                 valkey_path=str(valkey_dir),
@@ -429,12 +429,10 @@ def main() -> None:
     """Entry point for the benchmark CLI."""
     args = parse_args()
 
-    if args.use_running_server and (
-        args.mode in ("server", "both") or not args.valkey_path
-    ):
+    if args.use_running_server and not args.valkey_path:
         print(
             "ERROR: --use-running-server implies the valkey is already built and running, "
-            "so --mode must be 'client' and `valkey_path` must be provided."
+            "so `valkey_path` must be provided."
         )
         sys.exit(1)
 

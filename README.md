@@ -167,11 +167,13 @@ python benchmark.py --results-dir ./my-results
 # Set logging level
 python benchmark.py --log-level DEBUG
 
-
-
 # Use a custom valkey-benchmark executable (useful for testing modified versions)
 python benchmark.py --valkey-benchmark-path /path/to/custom/valkey-benchmark
 ```
+
+### Benchmarking Remote Servers and Pre-Running Servers
+
+When using `--use-running-server` or benchmarking remote servers, **restarting the server between benchmark runs is the user's responsibility**. Failure to restart between runs will significantly affect test results
 
 ### Custom Valkey-Benchmark Executable
 
