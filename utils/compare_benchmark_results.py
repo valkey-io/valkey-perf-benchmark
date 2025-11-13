@@ -10,10 +10,21 @@ import json
 import statistics
 import sys
 from typing import Dict, List, Tuple, Any, Optional
-import matplotlib.pyplot as plt
-import numpy as np
 from pathlib import Path
-from scipy import stats
+
+# Optional dependencies for graphing functionality
+try:
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from scipy import stats
+    from matplotlib.ticker import FuncFormatter
+    GRAPHING_AVAILABLE = True
+except ImportError:
+    GRAPHING_AVAILABLE = False
+    plt = None
+    np = None
+    stats = None
+    FuncFormatter = None
 
 
 def load_benchmark_data(path: str) -> List[Dict[str, Any]]:
@@ -68,13 +79,19 @@ def calculate_confidence_interval(
     # Calculate standard error
     standard_error = stdev_val / (n**0.5)
 
-    # Use stats.t.interval for direct confidence interval calculation
-    degrees_of_freedom = n - 1
-    lower_bound, upper_bound = stats.t.interval(
-        confidence_level, degrees_of_freedom, loc=mean_val, scale=standard_error
-    )
-
-    return (lower_bound, upper_bound)
+    if GRAPHING_AVAILABLE and stats:
+        # Use stats.t.interval for direct confidence interval calculation
+        degrees_of_freedom = n - 1
+        lower_bound, upper_bound = stats.t.interval(
+            confidence_level, degrees_of_freedom, loc=mean_val, scale=standard_error
+        )
+        return (lower_bound, upper_bound)
+    else:
+        # Fallback: use normal approximation for large samples or simple approximation
+        # For 99% confidence level, use z ≈ 2.576 (normal approximation)
+        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
+        margin_of_error = z_score * standard_error
+        return (mean_val - margin_of_error, mean_val + margin_of_error)
 
 
 def calculate_prediction_interval(
@@ -102,11 +119,15 @@ def calculate_prediction_interval(
     # Prediction interval uses sqrt(1 + 1/n) factor
     prediction_error = stdev_val * (1 + 1 / n) ** 0.5
 
-    degrees_of_freedom = n - 1
-    alpha = 1 - confidence_level
-    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
-
-    margin_of_error = t_critical * prediction_error
+    if GRAPHING_AVAILABLE and stats:
+        degrees_of_freedom = n - 1
+        alpha = 1 - confidence_level
+        t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+        margin_of_error = t_critical * prediction_error
+    else:
+        # Fallback: use normal approximation
+        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
+        margin_of_error = z_score * prediction_error
 
     return (mean_val - margin_of_error, mean_val + margin_of_error)
 
@@ -139,11 +160,15 @@ def calculate_prediction_interval_percentage(
     # Prediction interval uses sqrt(1 + 1/n) factor
     prediction_error = stdev_val * (1 + 1 / n) ** 0.5
 
-    degrees_of_freedom = n - 1
-    alpha = 1 - confidence_level
-    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
-
-    margin_of_error = t_critical * prediction_error
+    if GRAPHING_AVAILABLE and stats:
+        degrees_of_freedom = n - 1
+        alpha = 1 - confidence_level
+        t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+        margin_of_error = t_critical * prediction_error
+    else:
+        # Fallback: use normal approximation
+        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
+        margin_of_error = z_score * prediction_error
 
     # Calculate PI as percentage of mean
     pi_percentage = (margin_of_error / mean_val) * 100.0
@@ -179,13 +204,16 @@ def calculate_confidence_interval_percentage(
     # Calculate standard error
     standard_error = stdev_val / (n**0.5)
 
-    # Get t-critical value for the confidence level
-    degrees_of_freedom = n - 1
-    alpha = 1 - confidence_level
-    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
-
-    # Calculate margin of error
-    margin_of_error = t_critical * standard_error
+    if GRAPHING_AVAILABLE and stats:
+        # Get t-critical value for the confidence level
+        degrees_of_freedom = n - 1
+        alpha = 1 - confidence_level
+        t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+        margin_of_error = t_critical * standard_error
+    else:
+        # Fallback: use normal approximation
+        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
+        margin_of_error = z_score * standard_error
 
     # Calculate CI as percentage of mean
     ci_percentage = (margin_of_error / mean_val) * 100.0
@@ -498,8 +526,6 @@ def extract_version_identifier(data: List[Dict[str, Any]]) -> str:
         # Extract just the date part for cleaner display
         try:
             # Parse timestamp and extract date
-            from datetime import datetime
-
             if "T" in timestamp:
                 date_part = timestamp.split("T")[0]  # Get YYYY-MM-DD part
                 return date_part
@@ -953,8 +979,8 @@ def generate_comparison_graphs(
     baseline_version: str,
     new_version: str,
     output_dir: str = ".",
-    raw_baseline_data: List[Dict] = None,
-    raw_new_data: List[Dict] = None,
+    raw_baseline_data: Optional[List[Dict]] = None,
+    raw_new_data: Optional[List[Dict]] = None,
     metrics_filter: str = "all",
 ) -> List[str]:
     """
@@ -966,6 +992,10 @@ def generate_comparison_graphs(
 
     Returns list of generated file paths.
     """
+    if not GRAPHING_AVAILABLE:
+        print("WARNING: Graphing dependencies (matplotlib, numpy, scipy) not available. Skipping graph generation.")
+        return []
+        
     if not config_groups:
         print("No data available for graph generation")
         return []
@@ -1134,7 +1164,7 @@ def _generate_single_variance_graph(
             metrics = all_metrics
 
         # Create subplots for each metric
-        fig, axes = plt.subplots(len(metrics), 1, figsize=(12, 4 * len(metrics)))
+        _, axes = plt.subplots(len(metrics), 1, figsize=(12, 4 * len(metrics)))
         if len(metrics) == 1:
             axes = [axes]
 
@@ -1224,7 +1254,7 @@ def _generate_single_variance_graph(
                 ax.set_ylabel("Requests per Second")
                 # Format y-axis for RPS
                 ax.yaxis.set_major_formatter(
-                    plt.FuncFormatter(
+                    FuncFormatter(
                         lambda x, p: f"{x/1e6:.2f}M" if x >= 1e6 else f"{x/1e3:.0f}K"
                     )
                 )
@@ -1279,7 +1309,7 @@ def generate_consolidated_metrics_graph(
 
         # Create subplots for each metric
         num_metrics = len(metrics_data)
-        fig, axes = plt.subplots(num_metrics, 1, figsize=(14, 6 * num_metrics))
+        _, axes = plt.subplots(num_metrics, 1, figsize=(14, 6 * num_metrics))
         if num_metrics == 1:
             axes = [axes]
 
@@ -1377,7 +1407,7 @@ def generate_consolidated_metrics_graph(
             if metric == "rps":
                 ax.set_ylabel("Requests per Second (Millions)")
                 ax.yaxis.set_major_formatter(
-                    plt.FuncFormatter(lambda x, p: f"{x:.2f}M")
+                    FuncFormatter(lambda x, p: f"{x:.2f}M")
                 )
             else:
                 ax.set_ylabel(f'{metric.replace("_", " ").title()} (ms)')
@@ -1548,8 +1578,8 @@ def main():
             baseline_version,
             new_version,
             graph_dir,
-            raw_baseline_data,
-            raw_new_data,
+            raw_baseline_data or [],
+            raw_new_data or [],
             metrics_filter,
         )
         if generated_files:

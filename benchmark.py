@@ -6,7 +6,7 @@ import json
 import logging
 import platform
 from pathlib import Path
-from typing import List
+from typing import List, Union
 import sys
 
 
@@ -308,10 +308,10 @@ def parse_bool(value) -> bool:
 
 
 def run_benchmark_matrix(
-    *, commit_id: str, cfg: dict, args: argparse.Namespace, config_data: dict = None
+    *, commit_id: str, cfg: dict, args: argparse.Namespace, config_data: Union[dict, None] = None
 ) -> None:
     """Run benchmarks for all tls and cluster mode combinations.
-    
+
     Args:
         commit_id: Git commit SHA to benchmark
         cfg: Benchmark configuration dictionary
@@ -366,7 +366,7 @@ def run_benchmark_matrix(
         launcher = None
         if (not args.use_running_server) and args.mode in ("server", "both"):
             launcher = ServerLauncher(
-                results_dir=results_dir,
+                results_dir=str(results_dir),
                 valkey_path=str(valkey_dir),
                 cores=server_core_range,
             )
@@ -446,11 +446,13 @@ def main() -> None:
     configs = load_configs(args.config)
     for cfg in configs:
         # Prepare config data for tracking (just the config content, not file path)
-        config_data = [cfg]
-        
+        config_data = cfg
+
         for commit in commits:
             print(f"=== Processing commit: {commit} ===")
-            run_benchmark_matrix(commit_id=commit, cfg=cfg, args=args, config_data=config_data)
+            run_benchmark_matrix(
+                commit_id=commit, cfg=cfg, args=args, config_data=config_data
+            )
 
 
 if __name__ == "__main__":

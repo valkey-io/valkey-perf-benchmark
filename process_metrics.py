@@ -1,7 +1,6 @@
 """Helpers for parsing benchmark results."""
 
 import json
-import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
