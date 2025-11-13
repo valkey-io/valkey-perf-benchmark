@@ -434,6 +434,7 @@ See `dashboards/README.md` for detailed deployment instructions.
 ### Commit Management
 
 - `utils/postgres_track_commits.py`: Manages commit tracking, status updates, and cleanup operations using PostgreSQL
+- `utils/push_to_postgres.py`: Pushes benchmark metrics to PostgreSQL with **dynamic schema support** - automatically creates database columns for new metrics added to `metrics.json` files
 - `utils/compare_benchmark_results.py`: Utilities for comparing benchmark results across commits
 
 ### Configuration Files

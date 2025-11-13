@@ -365,7 +365,7 @@ class ServerLauncher:
 
                         if retrieved_value == "ready":
                             logging.info(
-                                "✅ Cluster is fully operational and ready for connections."
+                                "Cluster is fully operational and ready for connections."
                             )
                             return
                         else:
