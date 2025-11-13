@@ -42,7 +42,7 @@ class MetricsProcessor:
 
     def create_metrics(
         self,
-        output: str,
+        benchmark_csv_data: str,
         command: str,
         data_size: int,
         pipeline: int,
@@ -55,7 +55,7 @@ class MetricsProcessor:
 
         Parameters
         ----------
-        output : str
+        benchmark_csv_data : str
             Raw CSV output from ``valkey-benchmark``.
         command : str
             Benchmark command that was executed.
@@ -70,14 +70,16 @@ class MetricsProcessor:
         warmup : int, optional
             Warmup time in seconds.
         """
-        if not output or not output.strip():
+        if not benchmark_csv_data or not benchmark_csv_data.strip():
             logging.warning("Empty benchmark output received")
             return None
 
         try:
-            lines = output.strip().split("\n")
+            lines = benchmark_csv_data.strip().split("\n")
             if len(lines) < 2:
-                logging.warning(f"Unexpected CSV format in benchmark output: {output}")
+                logging.warning(
+                    f"Unexpected CSV format in benchmark output: {benchmark_csv_data}"
+                )
                 return None
 
             labels = [label.strip().replace('"', "") for label in lines[0].split(",")]
@@ -151,7 +153,7 @@ class MetricsProcessor:
             return metrics_dict
         except Exception:
             logging.exception(f"Error parsing CSV output")
-            logging.debug(f"Raw output: {output}")
+            logging.debug(f"Raw output: {benchmark_csv_data}")
             return None
 
     def write_metrics(

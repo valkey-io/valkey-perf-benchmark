@@ -125,11 +125,11 @@ jobs:
             --config-file "$CONFIG_FILE" \
             $COMMIT_IDS
 
-      - name: Checkout valkey (RainingSoftly fork for latest benchmark)
+      - name: Checkout valkey to build latest benchmark.
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         with:
-          repository: rainsupreme/valkey
-          ref: "valkey-benchmark-duration"
+          repository: valkey-io/valkey
+          ref: "unstable"
           path: valkey_latest
           fetch-depth: 0
           persist-credentials: false

@@ -15,8 +15,8 @@ class BenchmarkBuilder:
         benchmark_dir: str = "../valkey-benchmark-latest",
         tls_enabled: bool = False,
     ) -> None:
-        self.repo_url = "https://github.com/rainsupreme/valkey.git"
-        self.repo_branch = "valkey-benchmark-duration"
+        self.repo_url = "https://github.com/valkey-io/valkey.git"
+        self.repo_branch = "unstable"
         self.benchmark_dir = Path(benchmark_dir)
         self.benchmark_binary = self.benchmark_dir / "src" / "valkey-benchmark"
         self.tls_enabled = tls_enabled
@@ -38,10 +38,12 @@ class BenchmarkBuilder:
             raise
 
     def clone_latest_unstable(self) -> None:
-        """Clone or update to latest unstable branch."""
+        """Clone latest unstable branch if directory doesn't exist."""
         if self.benchmark_dir.exists():
-            logging.info(f"Removing existing benchmark directory: {self.benchmark_dir}")
-            shutil.rmtree(self.benchmark_dir)
+            logging.info(
+                f"Repository already exists at {self.benchmark_dir}, skipping clone"
+            )
+            return
 
         logging.info(f"Cloning latest Valkey unstable into {self.benchmark_dir}...")
         self._run(
@@ -59,9 +61,16 @@ class BenchmarkBuilder:
 
     def build_benchmark(self) -> str:
         """Build valkey-benchmark and return path to binary."""
+        # Check if binary already exists
+        if self.benchmark_binary.exists():
+            logging.info(
+                f"Using existing valkey-benchmark binary at {self.benchmark_binary}, no need to rebuild."
+            )
+            return str(self.benchmark_binary)
+
+        logging.info("valkey-benchmark binary not found, building...")
         self.clone_latest_unstable()
 
-        self._run(["make", "distclean"], cwd=self.benchmark_dir)
         if self.tls_enabled:
             self._run(["make", "BUILD_TLS=yes", "-j"], cwd=self.benchmark_dir)
             tls_status = "with TLS"
@@ -77,12 +86,6 @@ class BenchmarkBuilder:
         logging.info(
             f"Successfully built valkey-benchmark {tls_status} at {self.benchmark_binary}"
         )
-        return str(self.benchmark_binary)
-
-    def get_benchmark_path(self) -> str:
-        """Get path to valkey-benchmark binary, building if necessary."""
-        if not self.benchmark_binary.exists():
-            return self.build_benchmark()
         return str(self.benchmark_binary)
 
     def cleanup(self) -> None:

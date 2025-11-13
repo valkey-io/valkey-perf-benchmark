@@ -99,7 +99,10 @@ def calculate_prediction_interval(
     values: List[float], confidence_level: float = 0.99
 ) -> Tuple[float, float]:
     """
-    Calculate prediction interval for a single future observation.
+    Calculate prediction interval for a single future observation using t-distribution.
+
+    Uses SciPy's t-distribution functions for accurate statistical calculations.
+    Reference: https://en.wikipedia.org/wiki/Student%27s_t-distribution#Prediction_interval
 
     Args:
         values: List of numeric values
@@ -117,20 +120,24 @@ def calculate_prediction_interval(
     mean_val = statistics.mean(filtered_values)
     stdev_val = statistics.stdev(filtered_values)
 
-    # Prediction interval uses sqrt(1 + 1/n) factor
-    prediction_error = stdev_val * (1 + 1 / n) ** 0.5
-
     if GRAPHING_AVAILABLE and stats:
+        # Uses SciPy's t-distribution with prediction interval scaling factor
+        # Prediction interval accounts for both sampling uncertainty and future observation variability
         degrees_of_freedom = n - 1
-        alpha = 1 - confidence_level
-        t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
-        margin_of_error = t_critical * prediction_error
+        prediction_scale = (
+            stdev_val * (1 + 1 / n) ** 0.5
+        )  # Standard prediction interval scaling
+
+        lower_bound, upper_bound = stats.t.interval(
+            confidence_level, degrees_of_freedom, loc=mean_val, scale=prediction_scale
+        )
+        return (lower_bound, upper_bound)
     else:
-        # Fallback: use normal approximation
+        # Fallback: use normal approximation with prediction interval scaling
+        prediction_error = stdev_val * (1 + 1 / n) ** 0.5
         z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
         margin_of_error = z_score * prediction_error
-
-    return (mean_val - margin_of_error, mean_val + margin_of_error)
+        return (mean_val - margin_of_error, mean_val + margin_of_error)
 
 
 def calculate_prediction_interval_percentage(
@@ -200,21 +207,15 @@ def calculate_confidence_interval_percentage(
     if mean_val == 0.0:
         return 0.0
 
-    stdev_val = statistics.stdev(filtered_values)
+    # Use the existing calculate_confidence_interval function
+    ci_lower, ci_upper = calculate_confidence_interval(values, confidence_level)
 
-    # Calculate standard error
-    standard_error = stdev_val / (n**0.5)
+    # If confidence interval calculation failed, return 0.0
+    if ci_lower == 0.0 and ci_upper == 0.0:
+        return 0.0
 
-    if GRAPHING_AVAILABLE and stats:
-        # Get t-critical value for the confidence level
-        degrees_of_freedom = n - 1
-        alpha = 1 - confidence_level
-        t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
-        margin_of_error = t_critical * standard_error
-    else:
-        # Fallback: use normal approximation
-        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
-        margin_of_error = z_score * standard_error
+    # Calculate margin of error from the confidence interval bounds
+    margin_of_error = (ci_upper - ci_lower) / 2.0
 
     # Calculate CI as percentage of mean
     ci_percentage = (margin_of_error / mean_val) * 100.0
