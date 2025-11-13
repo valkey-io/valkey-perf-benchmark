@@ -8,23 +8,8 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 
-# Global variables for lazy import
-psycopg2 = None
-Json = None
-
-def import_psycopg2():
-    """Lazy import of psycopg2 to avoid import errors when not needed."""
-    global psycopg2, Json
-    if psycopg2 is None:
-        try:
-            import psycopg2 as pg2
-            from psycopg2.extras import Json as JsonType
-            psycopg2 = pg2
-            Json = JsonType
-        except ImportError as e:
-            print(f"Error: psycopg2 is required for PostgreSQL operations: {e}", file=sys.stderr)
-            print("Install with: pip install psycopg2-binary", file=sys.stderr)
-            sys.exit(1)
+import psycopg2
+from psycopg2.extras import Json
 
 
 def create_tables(conn):
@@ -126,7 +111,10 @@ def mark_commits(
                     first_cfg = config[0]
                     config_display = f" (config: io-threads={first_cfg.get('io-threads', 'N/A')}, cluster={first_cfg.get('cluster_mode', 'N/A')})"
 
-            print(f"Marked {sha} as {status} with timestamp {ts}{config_display}", file=sys.stderr)
+            print(
+                f"Marked {sha} as {status} with timestamp {ts}{config_display}",
+                file=sys.stderr,
+            )
 
     conn.commit()
 
@@ -351,7 +339,7 @@ def determine_commits_to_benchmark(
 
                 print(
                     f"Skipping {sha[:8]} - subset config already benchmarked{superset_info}",
-                    file=sys.stderr
+                    file=sys.stderr,
                 )
                 continue
 
@@ -362,7 +350,7 @@ def determine_commits_to_benchmark(
     if subset_skipped > 0:
         print(
             f"Subset detection: skipped {subset_skipped} commits with existing superset configs",
-            file=sys.stderr
+            file=sys.stderr,
         )
 
     return commits
@@ -443,11 +431,11 @@ def main():
     )
 
     parser.add_argument(
-        "operation", 
+        "operation",
         choices=["determine", "mark", "query", "cleanup"],
-        help="Operation to perform"
+        help="Operation to perform",
     )
-    
+
     # Database connection arguments
     parser.add_argument("--host", required=True, help="PostgreSQL host")
     parser.add_argument("--port", type=int, default=5432, help="PostgreSQL port")
@@ -458,9 +446,18 @@ def main():
     )
 
     # Arguments for determine operation
-    parser.add_argument("--repo", type=Path, help="Git repository path (for determine/mark)")
-    parser.add_argument("--branch", default="unstable", help="Git branch (for determine)")
-    parser.add_argument("--max-commits", type=int, default=3, help="Max commits to return (for determine)")
+    parser.add_argument(
+        "--repo", type=Path, help="Git repository path (for determine/mark)"
+    )
+    parser.add_argument(
+        "--branch", default="unstable", help="Git branch (for determine)"
+    )
+    parser.add_argument(
+        "--max-commits",
+        type=int,
+        default=3,
+        help="Max commits to return (for determine)",
+    )
     parser.add_argument("--config-file", type=str, help="Config file to load")
     parser.add_argument(
         "--disable-subset-detection",
@@ -475,12 +472,14 @@ def main():
 
     # Arguments for query operation
     parser.add_argument(
-        "--list-configs", action="store_true", help="List all unique configs (for query)"
+        "--list-configs",
+        action="store_true",
+        help="List all unique configs (for query)",
     )
 
     # Parse known args first to get the operation
     args, remaining_args = parser.parse_known_args()
-    
+
     # Add shas argument only for mark operation
     if args.operation == "mark":
         parser.add_argument("shas", nargs="+", help="Commit SHAs (required for mark)")
@@ -488,10 +487,7 @@ def main():
     elif remaining_args:
         # If there are remaining args for non-mark operations, it's an error
         parser.error(f"unrecognized arguments: {' '.join(remaining_args)}")
-    
-    # Import psycopg2 when we actually need it
-    import_psycopg2()
-    
+
     # Connect to PostgreSQL
     try:
         conn = psycopg2.connect(
@@ -511,9 +507,11 @@ def main():
     try:
         if args.operation == "determine":
             if not args.repo:
-                print("Error: --repo is required for determine operation", file=sys.stderr)
+                print(
+                    "Error: --repo is required for determine operation", file=sys.stderr
+                )
                 sys.exit(1)
-                
+
             config = None
             if args.config_file:
                 with open(args.config_file, "r") as f:
@@ -538,9 +536,12 @@ def main():
                 print("Error: --status is required for mark operation", file=sys.stderr)
                 sys.exit(1)
             if not args.shas:
-                print("Error: commit SHAs are required for mark operation", file=sys.stderr)
+                print(
+                    "Error: commit SHAs are required for mark operation",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
-                
+
             config = None
             if args.config_file:
                 with open(args.config_file, "r") as f:
