@@ -8,11 +8,24 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 
-try:
-    import psycopg2
-    from psycopg2.extras import Json
-except ImportError:
-    print("Please install psycopg2 to use this script.")
+# Global variables for lazy import
+psycopg2 = None
+Json = None
+
+def import_psycopg2():
+    """Lazy import of psycopg2 to avoid import errors when not needed."""
+    global psycopg2, Json
+    if psycopg2 is None:
+        try:
+            import psycopg2 as pg2
+            from psycopg2.extras import Json as JsonType
+            psycopg2 = pg2
+            Json = JsonType
+        except ImportError as e:
+            print(f"Error: psycopg2 is required for PostgreSQL operations: {e}", file=sys.stderr)
+            print("Install with: pip install psycopg2-binary", file=sys.stderr)
+            sys.exit(1)
+
 
 def create_tables(conn):
     """Create benchmark tracking tables if they don't exist."""
@@ -41,7 +54,7 @@ def create_tables(conn):
         """
         )
     conn.commit()
-    print("Created/verified benchmark_commits table")
+    print("Created/verified benchmark_commits table", file=sys.stderr)
 
 
 def _git_rev_list(repo: Path, branch: str) -> List[str]:
@@ -113,7 +126,7 @@ def mark_commits(
                     first_cfg = config[0]
                     config_display = f" (config: io-threads={first_cfg.get('io-threads', 'N/A')}, cluster={first_cfg.get('cluster_mode', 'N/A')})"
 
-            print(f"Marked {sha} as {status} with timestamp {ts}{config_display}")
+            print(f"Marked {sha} as {status} with timestamp {ts}{config_display}", file=sys.stderr)
 
     conn.commit()
 
@@ -140,7 +153,7 @@ def cleanup_incomplete_commits(conn) -> int:
     conn.commit()
 
     if count > 0:
-        print(f"Cleaned up {count} incomplete commits")
+        print(f"Cleaned up {count} incomplete commits", file=sys.stderr)
 
     return count
 
@@ -337,7 +350,8 @@ def determine_commits_to_benchmark(
                         superset_info = f" (subset {subset_data_sizes} found in superset {superset_data_sizes})"
 
                 print(
-                    f"Skipping {sha[:8]} - subset config already benchmarked{superset_info}"
+                    f"Skipping {sha[:8]} - subset config already benchmarked{superset_info}",
+                    file=sys.stderr
                 )
                 continue
 
@@ -347,7 +361,8 @@ def determine_commits_to_benchmark(
 
     if subset_skipped > 0:
         print(
-            f"Subset detection: skipped {subset_skipped} commits with existing superset configs"
+            f"Subset detection: skipped {subset_skipped} commits with existing superset configs",
+            file=sys.stderr
         )
 
     return commits
@@ -422,49 +437,6 @@ def get_unique_configs(conn) -> List[dict]:
         return [row[0] for row in cur.fetchall()]
 
 
-def get_commit_stats(conn) -> Dict:
-    """Get statistics about tracked commits.
-
-    Args:
-        conn: PostgreSQL connection
-
-    Returns:
-        Dict with statistics
-    """
-    # Ensure tables exist
-    create_tables(conn)
-
-    with conn.cursor() as cur:
-        # Total entries
-        cur.execute("SELECT COUNT(*) FROM benchmark_commits")
-        total = cur.fetchone()[0]
-
-        # By status
-        cur.execute(
-            """
-            SELECT status, COUNT(*)
-            FROM benchmark_commits
-            GROUP BY status
-        """
-        )
-        by_status = {row[0]: row[1] for row in cur.fetchall()}
-
-        # Unique commits
-        cur.execute("SELECT COUNT(DISTINCT sha) FROM benchmark_commits")
-        unique_commits = cur.fetchone()[0]
-
-        # Unique configs
-        cur.execute("SELECT COUNT(DISTINCT config) FROM benchmark_commits")
-        unique_configs = cur.fetchone()[0]
-
-    return {
-        "total": total,
-        "by_status": by_status,
-        "unique_commits": unique_commits,
-        "unique_configs": unique_configs,
-    }
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="PostgreSQL-based commit tracking for benchmarks"
@@ -517,6 +489,9 @@ def main():
         # If there are remaining args for non-mark operations, it's an error
         parser.error(f"unrecognized arguments: {' '.join(remaining_args)}")
     
+    # Import psycopg2 when we actually need it
+    import_psycopg2()
+    
     # Connect to PostgreSQL
     try:
         conn = psycopg2.connect(
@@ -528,7 +503,7 @@ def main():
             connect_timeout=30,
             sslmode="require",
         )
-        print(f"Connected to PostgreSQL at {args.host}:{args.port}")
+        print(f"Connected to PostgreSQL at {args.host}:{args.port}", file=sys.stderr)
     except Exception as err:
         print(f"Failed to connect to PostgreSQL: {err}", file=sys.stderr)
         sys.exit(1)
@@ -587,13 +562,13 @@ def main():
 
             if args.list_configs:
                 configs = get_unique_configs(conn)
-                print(f"Unique configs used: {len(configs)}")
+                print(f"Unique configs used: {len(configs)}", file=sys.stderr)
                 for i, cfg in enumerate(configs, 1):
                     summary = ""
                     if isinstance(cfg, list) and len(cfg) > 0:
                         first = cfg[0]
                         summary = f"(io-threads={first.get('io-threads', 'N/A')}, cluster={first.get('cluster_mode', 'N/A')}, tls={first.get('tls_mode', 'N/A')})"
-                    print(f"  Config {i}: {summary}")
+                    print(f"  Config {i}: {summary}", file=sys.stderr)
             else:
                 commits = get_commits_by_config(conn, config)
                 count = len(commits)
@@ -602,9 +577,9 @@ def main():
                     if isinstance(config, list) and len(config) > 0:
                         cfg = config[0]
                         summary = f" (io-threads={cfg.get('io-threads', 'N/A')}, cluster={cfg.get('cluster_mode', 'N/A')}, tls={cfg.get('tls_mode', 'N/A')})"
-                    print(f"Config{summary}: {count} commits")
+                    print(f"Config{summary}: {count} commits", file=sys.stderr)
                 else:
-                    print(f"All commits: {count}")
+                    print(f"All commits: {count}", file=sys.stderr)
 
         elif args.operation == "cleanup":
             cleanup_incomplete_commits(conn)
