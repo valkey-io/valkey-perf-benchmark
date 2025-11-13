@@ -78,6 +78,9 @@ def mark_commits(
         status: Status to set ('in_progress', 'complete')
         config: Config content (dict/list) to track
     """
+    # Ensure tables exist
+    create_tables(conn)
+
     with conn.cursor() as cur:
         for sha in shas:
             # Resolve HEAD to actual commit SHA
@@ -119,6 +122,9 @@ def cleanup_incomplete_commits(conn) -> int:
     Returns:
         Number of entries cleaned up
     """
+    # Ensure tables exist
+    create_tables(conn)
+
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -267,6 +273,9 @@ def determine_commits_to_benchmark(
     Returns:
         List of commit SHAs that need benchmarking
     """
+    # Ensure tables exist
+    create_tables(conn)
+
     # Clean up incomplete commits first
     cleanup_incomplete_commits(conn)
 
@@ -352,6 +361,9 @@ def get_commits_by_config(conn, config: Optional[dict] = None) -> List[Dict]:
     Returns:
         List of commit entries
     """
+    # Ensure tables exist
+    create_tables(conn)
+
     with conn.cursor() as cur:
         if config:
             cur.execute(
@@ -395,6 +407,9 @@ def get_unique_configs(conn) -> List[dict]:
     Returns:
         List of unique configs
     """
+    # Ensure tables exist
+    create_tables(conn)
+
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -414,6 +429,9 @@ def get_commit_stats(conn) -> Dict:
     Returns:
         Dict with statistics
     """
+    # Ensure tables exist
+    create_tables(conn)
+
     with conn.cursor() as cur:
         # Total entries
         cur.execute("SELECT COUNT(*) FROM benchmark_commits")
@@ -458,9 +476,6 @@ def main():
     )
 
     sub = parser.add_subparsers(dest="cmd", required=True)
-
-    # Init command
-    sub.add_parser("init", help="Initialize database tables")
 
     # Determine command
     determine_parser = sub.add_parser("determine", help="List commits to benchmark")
@@ -523,10 +538,7 @@ def main():
         sys.exit(1)
 
     try:
-        if args.cmd == "init":
-            create_tables(conn)
-
-        elif args.cmd == "determine":
+        if args.cmd == "determine":
             config = None
             if args.config_file:
                 with open(args.config_file, "r") as f:

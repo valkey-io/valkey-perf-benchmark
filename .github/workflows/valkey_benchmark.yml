@@ -67,21 +67,6 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
-      - name: Initialize PostgreSQL tables
-        working-directory: valkey-perf-benchmark
-        run: |
-          PGPASSWORD=$(aws rds generate-db-auth-token \
-            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
-            --port 5432 \
-            --region ${{ secrets.AWS_REGION }} \
-            --username ${{ secrets.RDS_USERNAME }})
-          python utils/postgres_track_commits.py init \
-            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
-            --port 5432 \
-            --database ${{ secrets.RDS_DATABASE }} \
-            --username ${{ secrets.RDS_USERNAME }} \
-            --password $PGPASSWORD
-
       - name: Cleanup incomplete commits from previous runs
         working-directory: valkey-perf-benchmark
         run: |
