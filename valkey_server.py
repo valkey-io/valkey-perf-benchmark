@@ -173,6 +173,9 @@ class ServerLauncher:
 
                 # Wait and verify that the node has the expected slots assigned
                 self._wait_verify_slot_assignment(client, 0, 16383)
+
+                # Wait for cluster to become fully operational
+                self._wait_for_cluster_ready(client)
                 logging.info("Cluster configuration completed successfully.")
         except Exception as e:
             logging.error(f"Failed to setup cluster: {e}")
@@ -314,6 +317,77 @@ class ServerLauncher:
             raise RuntimeError(
                 f"Slot assignment verification timed out after {elapsed:.1f}s. Missing slots: {missing_ranges}"
             )
+
+    def _wait_for_cluster_ready(self, client: valkey.Valkey, timeout: int = 30) -> None:
+        """Wait for cluster to become fully operational after slot assignment."""
+        logging.info("Verifying cluster state after slot assignment...")
+        start_time = time.time()
+        last_error = None
+
+        while time.time() - start_time < timeout:
+            try:
+                # Check cluster info to ensure it's in a good state
+                cluster_info = client.execute_command("CLUSTER", "INFO")
+
+                # Parse cluster info for key indicators
+                info_dict = {}
+                for line in cluster_info.strip().split("\r\n"):
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        info_dict[key] = value
+
+                # Check critical cluster state indicators
+                cluster_state = info_dict.get("cluster_state", "fail")
+                cluster_slots_assigned = int(
+                    info_dict.get("cluster_slots_assigned", "0")
+                )
+                cluster_slots_ok = int(info_dict.get("cluster_slots_ok", "0"))
+                cluster_known_nodes = int(info_dict.get("cluster_known_nodes", "0"))
+
+                logging.info(
+                    f"Cluster state check: state={cluster_state}, slots_assigned={cluster_slots_assigned}, slots_ok={cluster_slots_ok}, known_nodes={cluster_known_nodes}"
+                )
+
+                # Check if cluster is ready
+                if (
+                    cluster_state == "ok"
+                    and cluster_slots_assigned == 16384
+                    and cluster_slots_ok == 16384
+                    and cluster_known_nodes >= 1
+                ):
+
+                    # Additional verification: try a simple SET/GET operation
+                    try:
+                        test_key = f"cluster_ready_test_{int(time.time())}"
+                        client.set(test_key, "ready")
+                        retrieved_value = client.get(test_key)
+                        client.delete(test_key)
+
+                        if retrieved_value == "ready":
+                            logging.info(
+                                "✅ Cluster is fully operational and ready for connections."
+                            )
+                            return
+                        else:
+                            last_error = "Cluster test operation failed: value mismatch"
+                    except Exception as test_error:
+                        last_error = f"Cluster test operation failed: {test_error}"
+                        logging.warning(f"Cluster test operation failed: {test_error}")
+                else:
+                    last_error = f"Cluster not ready - state: {cluster_state}, assigned: {cluster_slots_assigned}/16384, ok: {cluster_slots_ok}/16384, nodes: {cluster_known_nodes}"
+
+                time.sleep(1)
+
+            except Exception as e:
+                last_error = str(e)
+                logging.warning(f"Error checking cluster state: {e}")
+                time.sleep(1)
+
+        # Timeout reached
+        elapsed = time.time() - start_time
+        raise RuntimeError(
+            f"Cluster failed to become ready within {elapsed:.1f}s. Last error: {last_error}"
+        )
 
     def _format_slot_ranges(self, slots: list) -> str:
         """Format a list of slots into readable ranges (e.g., '1-5,7,9-12')."""
