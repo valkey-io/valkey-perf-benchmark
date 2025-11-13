@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Valkey Benchmark CloudFormation Stack Deployment Script
-# This script deploys the complete infrastructure for Valkey performance benchmarking
+# Valkey Benchmark Dashboard Infrastructure Deployment Script
+# This script deploys the complete infrastructure using AWS Fargate
 
 set -e
 
@@ -9,480 +9,498 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-# Allow overriding STACK_NAME for stack updates, otherwise default to timestamped name
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-DEFAULT_STACK_NAME="${STACK_NAME_PREFIX:-valkey-benchmark-stack}-${TIMESTAMP}"
-STACK_NAME="${STACK_NAME:-$DEFAULT_STACK_NAME}"
-TEMPLATE_FILE="infrastructure/cloudformation/valkey-benchmark-stack.yaml"
-REGION="${AWS_REGION:-us-east-1}"
+PROJECT_NAME="valkey-benchmark"
+REGION="us-east-1"
+CLUSTER_NAME="valkey-perf-cluster"
 
-# Default parameters (can be overridden via command line)
-CLUSTER_NAME="${CLUSTER_NAME:-valkey-perf-cluster}"
-NODE_INSTANCE_TYPE="${NODE_INSTANCE_TYPE:-t4g.small}"
-NODE_DESIRED_CAPACITY="${NODE_DESIRED_CAPACITY:-2}"
-NODE_MIN_SIZE="${NODE_MIN_SIZE:-1}"
-NODE_MAX_SIZE="${NODE_MAX_SIZE:-4}"
-DB_INSTANCE_CLASS="${DB_INSTANCE_CLASS:-db.t4g.micro}"
-DB_ALLOCATED_STORAGE="${DB_ALLOCATED_STORAGE:-20}"
-DB_MASTER_USERNAME="${DB_MASTER_USERNAME:-postgres}"
-ENVIRONMENT="${ENVIRONMENT:-production}"
-PROJECT_NAME="${PROJECT_NAME:-valkey-benchmark}"
-KEY_PAIR_NAME="${KEY_PAIR_NAME:-valkey-benchmark-key}"
-GRAFANA_ALB_DNS_NAME="${GRAFANA_ALB_DNS_NAME:-}"
+# Function to print colored output
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
 
-# Function to print colored messages
-print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to check if AWS CLI is installed
-check_aws_cli() {
-    if ! command -v aws &> /dev/null; then
-        print_error "AWS CLI is not installed. Please install it first."
-        exit 1
-    fi
-    print_info "AWS CLI found: $(aws --version)"
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
-# Function to check if jq is installed
-check_jq() {
-    if ! command -v jq &> /dev/null; then
-        print_error "jq is not installed. Please install it first (https://stedolan.github.io/jq/)."
-        exit 1
-    fi
-    print_info "jq found: $(jq --version 2>&1)"
-}
-
-# Function to find existing GitHub OIDC provider
-find_github_oidc_provider() {
-    print_info "Checking for existing GitHub OIDC Provider..."
-    GITHUB_OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers \
-        --query 'OpenIDConnectProviderList[?contains(Arn, `token.actions.githubusercontent.com`)].Arn' \
-        --output text 2>/dev/null)
+# Check prerequisites
+check_prerequisites() {
+    print_status "Checking prerequisites..."
     
-    if [ -n "$GITHUB_OIDC_PROVIDER_ARN" ] && [ "$GITHUB_OIDC_PROVIDER_ARN" != "None" ]; then
-        print_info "Found existing GitHub OIDC Provider: $GITHUB_OIDC_PROVIDER_ARN"
-    else
-        print_info "No existing GitHub OIDC Provider found - CloudFormation will create one"
-        GITHUB_OIDC_PROVIDER_ARN=""
-    fi
-}
-
-# Function to validate AWS credentials
-check_aws_credentials() {
-    if ! aws sts get-caller-identity &> /dev/null; then
-        print_error "AWS credentials not configured or invalid."
-        exit 1
-    fi
-    print_info "AWS credentials validated"
-    aws sts get-caller-identity
-}
-
-# Function to check if template file exists
-check_template() {
-    if [ ! -f "$TEMPLATE_FILE" ]; then
-        print_error "Template file not found: $TEMPLATE_FILE"
-        exit 1
-    fi
-    print_info "Template file found: $TEMPLATE_FILE"
-}
-
-# Function to validate CloudFormation template
-validate_template() {
-    print_info "Validating CloudFormation template..."
-    if aws cloudformation validate-template \
-        --template-body file://"$TEMPLATE_FILE" \
-        --region "$REGION" &> /dev/null; then
-        print_info "Template validation successful"
-    else
-        print_error "Template validation failed"
-        exit 1
-    fi
-}
-
-# Function to check if EC2 key pair exists
-check_key_pair() {
-    print_info "Checking for EC2 key pair: $KEY_PAIR_NAME"
-    if aws ec2 describe-key-pairs --key-names "$KEY_PAIR_NAME" --region "$REGION" &> /dev/null; then
-        print_info "Key pair '$KEY_PAIR_NAME' exists"
-    else
-        print_warning "Key pair '$KEY_PAIR_NAME' not found"
-        read -p "Do you want to create it? (y/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            aws ec2 create-key-pair \
-                --key-name "$KEY_PAIR_NAME" \
-                --region "$REGION" \
-                --query 'KeyMaterial' \
-                --output text > "${KEY_PAIR_NAME}.pem"
-            chmod 400 "${KEY_PAIR_NAME}.pem"
-            print_info "Key pair created and saved to ${KEY_PAIR_NAME}.pem"
-        else
-            print_error "Key pair is required. Exiting."
-            exit 1
-        fi
-    fi
-}
-
-# Function to prompt for DB password
-get_db_password() {
-    if [ -z "$DB_MASTER_PASSWORD" ]; then
-        print_warning "Database master password not set"
-        read -sp "Enter RDS master password (min 8 characters): " DB_MASTER_PASSWORD
-        echo
-        if [ ${#DB_MASTER_PASSWORD} -lt 8 ]; then
-            print_error "Password must be at least 8 characters"
-            exit 1
-        fi
-    fi
-}
-
-# Function to check if stack exists
-stack_exists() {
-    aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$REGION" &> /dev/null
-}
-
-# Function to get stack status
-get_stack_status() {
-    aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$REGION" \
-        --query 'Stacks[0].StackStatus' \
-        --output text 2>/dev/null || echo "NOT_FOUND"
-}
-
-# Function to delete stack
-delete_stack() {
-    local stack_status
-    stack_status=$(get_stack_status)
+    local missing_tools=()
     
-    case "$stack_status" in
-        "ROLLBACK_COMPLETE"|"DELETE_FAILED"|"CREATE_FAILED")
-            print_warning "Stack is in $stack_status state. Deleting before redeploying..."
-            if aws cloudformation delete-stack \
-                --stack-name "$STACK_NAME" \
-                --region "$REGION"; then
-                print_info "Stack deletion initiated. Waiting for deletion to complete (timeout: 10 minutes)..."
-                # Wait for up to 10 minutes for stack deletion
-                local end_time=$(( $(date +%s) + 600 ))
-                while [ $(date +%s) -lt $end_time ]; do
-                    local status
-                    status=$(get_stack_status)
-                    case "$status" in
-                        "DELETE_COMPLETE"|"NOT_FOUND")
-                            print_info "Stack deleted successfully"
-                            return 0
-                            ;;
-                        "DELETE_FAILED")
-                            print_error "Stack deletion failed"
-                            return 1
-                            ;;
-                        *)
-                            # Still deleting, wait a bit more
-                            sleep 10
-                            ;;
-                    esac
-                done
-                print_error "Stack deletion timed out after 10 minutes"
-                return 1
+    if ! command_exists aws; then
+        missing_tools+=("aws")
+    fi
+    
+    if ! command_exists kubectl; then
+        missing_tools+=("kubectl")
+    fi
+    
+    if ! command_exists helm; then
+        missing_tools+=("helm")
+    fi
+    
+    if ! command_exists jq; then
+        missing_tools+=("jq")
+    fi
+    
+    if [ ${#missing_tools[@]} -ne 0 ]; then
+        print_error "Missing required tools: ${missing_tools[*]}"
+        print_error "Please install them and try again."
+        exit 1
+    fi
+    
+    # Check AWS credentials
+    if ! aws sts get-caller-identity >/dev/null 2>&1; then
+        print_error "AWS credentials not configured. Please run 'aws configure' first."
+        exit 1
+    fi
+    
+    print_success "All prerequisites met"
+}
+
+# Function to get user input
+get_user_input() {
+    print_status "Gathering deployment parameters..."
+    
+    # Check if we're updating an existing stack
+    if [ -n "$STACK_NAME" ]; then
+        print_status "Using existing stack: $STACK_NAME"
+        return
+    fi
+    
+    # Generate stack name with timestamp
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    STACK_NAME="${PROJECT_NAME}-fargate-stack-${TIMESTAMP}"
+    
+    # Get RDS password
+    if [ -z "$DB_PASSWORD" ]; then
+        echo
+        print_status "Database Configuration"
+        while true; do
+            read -s -p "Enter RDS master password (min 8 characters): " DB_PASSWORD
+            echo
+            if [ ${#DB_PASSWORD} -ge 8 ]; then
+                break
             else
-                print_error "Failed to initiate stack deletion"
-                return 1
+                print_error "Password must be at least 8 characters long"
             fi
-            ;;
-        "CREATE_IN_PROGRESS"|"UPDATE_IN_PROGRESS"|"DELETE_IN_PROGRESS"|"UPDATE_COMPLETE_CLEANUP_IN_PROGRESS")
-            print_warning "Stack is in $stack_status state. Waiting for operation to complete..."
-            # Wait for current operation to complete before proceeding
-            case "$stack_status" in
-                "DELETE_IN_PROGRESS")
-                    if aws cloudformation wait stack-delete-complete \
-                        --stack-name "$STACK_NAME" \
-                        --region "$REGION" 2>/dev/null; then
-                        print_info "Stack deletion completed"
-                        return 0
-                    else
-                        print_error "Stack operation failed or timed out"
-                        return 1
-                    fi
-                    ;;
-                "CREATE_IN_PROGRESS"|"UPDATE_IN_PROGRESS"|"UPDATE_COMPLETE_CLEANUP_IN_PROGRESS")
-                    # For create/update, we'll let the deploy_stack function handle it
-                    print_info "Continuing with existing stack operation"
-                    return 0
-                    ;;
-            esac
-            ;;
-        *)
-            # Stack is in a stable state, no action needed
-            return 0
-            ;;
-    esac
+        done
+    fi
+    
+    # Check for existing GitHub OIDC Provider
+    if [ -z "$GITHUB_OIDC_PROVIDER_ARN" ]; then
+        print_status "Checking for existing GitHub OIDC Provider..."
+        GITHUB_OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers \
+            --query 'OpenIDConnectProviderList[?contains(Arn, `token.actions.githubusercontent.com`)].Arn' \
+            --output text 2>/dev/null || echo "")
+        
+        if [ -n "$GITHUB_OIDC_PROVIDER_ARN" ]; then
+            print_success "Found existing GitHub OIDC Provider: $GITHUB_OIDC_PROVIDER_ARN"
+        else
+            print_status "No existing GitHub OIDC Provider found. Will create new one."
+        fi
+    fi
+    
+    print_success "Configuration complete"
 }
 
-# Function to deploy stack
-deploy_stack() {
-    print_info "Deploying CloudFormation stack: $STACK_NAME"
-    
-    # Check if stack needs to be deleted first
-    if stack_exists; then
-        if ! delete_stack; then
-            print_error "Failed to clean up existing stack. Aborting deployment."
-            exit 1
-        fi
-        
-        # Check if stack still exists after cleanup
-        if stack_exists; then
-            print_warning "Updating existing stack..."
-            OPERATION="update-stack"
-        else
-            print_info "Creating new stack..."
-            OPERATION="create-stack"
-        fi
-    else
-        print_info "Creating new stack..."
-        OPERATION="create-stack"
-    fi
+# Function to deploy CloudFormation stack
+deploy_infrastructure() {
+    print_status "Deploying infrastructure stack: $STACK_NAME"
     
     # Prepare parameters
-    PARAMS="--parameters \
-        ParameterKey=ClusterName,ParameterValue=\"$CLUSTER_NAME\" \
-        ParameterKey=NodeInstanceType,ParameterValue=\"$NODE_INSTANCE_TYPE\" \
-        ParameterKey=NodeGroupDesiredCapacity,ParameterValue=\"$NODE_DESIRED_CAPACITY\" \
-        ParameterKey=NodeGroupMinSize,ParameterValue=\"$NODE_MIN_SIZE\" \
-        ParameterKey=NodeGroupMaxSize,ParameterValue=\"$NODE_MAX_SIZE\" \
-        ParameterKey=DBInstanceClass,ParameterValue=\"$DB_INSTANCE_CLASS\" \
-        ParameterKey=DBAllocatedStorage,ParameterValue=\"$DB_ALLOCATED_STORAGE\" \
-        ParameterKey=DBMasterUsername,ParameterValue=\"$DB_MASTER_USERNAME\" \
-        ParameterKey=DBMasterPassword,ParameterValue=\"$DB_MASTER_PASSWORD\" \
-        ParameterKey=Environment,ParameterValue=\"$ENVIRONMENT\" \
-        ParameterKey=ProjectName,ParameterValue=\"$PROJECT_NAME\" \
-        ParameterKey=KeyPairName,ParameterValue=\"$KEY_PAIR_NAME\""
-
+    local params=(
+        "ParameterKey=ProjectName,ParameterValue=$PROJECT_NAME"
+        "ParameterKey=ClusterName,ParameterValue=$CLUSTER_NAME"
+        "ParameterKey=DBMasterPassword,ParameterValue=$DB_PASSWORD"
+    )
+    
+    # Add GitHub OIDC Provider ARN if exists
+    if [ -n "$GITHUB_OIDC_PROVIDER_ARN" ]; then
+        params+=("ParameterKey=GitHubOIDCProviderArn,ParameterValue=$GITHUB_OIDC_PROVIDER_ARN")
+    fi
+    
+    # Add Grafana ALB DNS name if provided (for CloudFront update)
     if [ -n "$GRAFANA_ALB_DNS_NAME" ]; then
-        print_info "Including Grafana ALB DNS name: $GRAFANA_ALB_DNS_NAME"
-        PARAMS="$PARAMS ParameterKey=GrafanaAlbDnsName,ParameterValue=\"$GRAFANA_ALB_DNS_NAME\""
-    else
-        print_warning "Grafana ALB DNS name not provided. CloudFront distribution will be created after you rerun with GRAFANA_ALB_DNS_NAME set."
+        params+=("ParameterKey=GrafanaAlbDnsName,ParameterValue=$GRAFANA_ALB_DNS_NAME")
     fi
     
-    # Add GitHub OIDC Provider ARN if found
-    if [ -n "$GITHUB_OIDC_PROVIDER_ARN" ] && [ "$GITHUB_OIDC_PROVIDER_ARN" != "None" ]; then
-        print_info "Adding GitHub OIDC Provider ARN parameter: $GITHUB_OIDC_PROVIDER_ARN"
-        PARAMS="$PARAMS ParameterKey=GitHubOIDCProviderArn,ParameterValue=\"$GITHUB_OIDC_PROVIDER_ARN\""
+    # Check if stack exists
+    if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+        print_status "Updating existing stack..."
+        aws cloudformation update-stack \
+            --stack-name "$STACK_NAME" \
+            --template-body file://infrastructure/cloudformation/valkey-benchmark-stack.yaml \
+            --parameters "${params[@]}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region "$REGION"
+        
+        print_status "Waiting for stack update to complete..."
+        aws cloudformation wait stack-update-complete \
+            --stack-name "$STACK_NAME" \
+            --region "$REGION"
     else
-        print_info "No existing GitHub OIDC Provider found - CloudFormation will create one"
-        # Don't pass the parameter, let it use the default empty value
-        # This will trigger the NeedsGitHubOIDCProvider condition
+        print_status "Creating new stack..."
+        aws cloudformation create-stack \
+            --stack-name "$STACK_NAME" \
+            --template-body file://infrastructure/cloudformation/valkey-benchmark-stack.yaml \
+            --parameters "${params[@]}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region "$REGION"
+        
+        print_status "Waiting for stack creation to complete (this may take 25-40 minutes)..."
+        aws cloudformation wait stack-create-complete \
+            --stack-name "$STACK_NAME" \
+            --region "$REGION"
     fi
     
-    print_info "Deploying with parameters: $PARAMS"
-    
-    aws cloudformation "$OPERATION" \
-        --stack-name "$STACK_NAME" \
-        --template-body file://"$TEMPLATE_FILE" \
-        --region "$REGION" \
-        $PARAMS \
-        --capabilities CAPABILITY_NAMED_IAM \
-        --tags \
-            Key=Environment,Value="$ENVIRONMENT" \
-            Key=Project,Value="$PROJECT_NAME" \
-            Key=ManagedBy,Value=CloudFormation
-    
-    print_info "Stack $OPERATION initiated"
+    print_success "Infrastructure deployment complete"
 }
 
-# Function to wait for stack completion with progress monitoring
-wait_for_stack() {
-    print_info "Waiting for stack operation to complete..."
-    print_warning "This may take 25-40 minutes..."
-    print_info "Monitoring stack events in real-time (Ctrl+C to stop monitoring, but deployment will continue)..."
+# Function to save stack outputs
+save_stack_outputs() {
+    print_status "Saving stack outputs..."
     
-    local last_event_id=""
-    local stack_complete=false
-    
-    # Monitor stack progress
-    while ! $stack_complete; do
-        # Get recent stack events
-        local events_output
-        events_output=$(aws cloudformation describe-stack-events \
-            --stack-name "$STACK_NAME" \
-            --region "$REGION" \
-            --max-items 5 2>/dev/null) || {
-            sleep 10
-            continue
-        }
-        
-        # Get the latest event ID
-        local latest_event_id
-        latest_event_id=$(echo "$events_output" | jq -r '.StackEvents[0].EventId // empty')
-        
-        # Print new events
-        if [ -n "$latest_event_id" ] && [ "$latest_event_id" != "$last_event_id" ]; then
-            # Extract and print new events
-            echo "$events_output" | jq -r '.StackEvents[] | select(.EventId != "'"$last_event_id"'" and (.ResourceStatus != null)) | 
-                "\(.Timestamp) [\(.ResourceStatus)] \(.ResourceType) - \(.LogicalResourceId) \((.ResourceStatusReason // ""))"' | 
-                while IFS= read -r line; do
-                    if [[ $line == *"COMPLETE"* ]] && [[ $line == *"ROLLBACK"* ]]; then
-                        echo -e "${RED}$line${NC}"
-                    elif [[ $line == *"FAILED"* ]] || [[ $line == *"ROLLBACK"* ]]; then
-                        echo -e "${RED}$line${NC}"
-                    elif [[ $line == *"COMPLETE"* ]]; then
-                        echo -e "${GREEN}$line${NC}"
-                    else
-                        echo -e "${YELLOW}$line${NC}"
-                    fi
-                done
-            
-            last_event_id="$latest_event_id"
-        fi
-        
-        # Check if stack operation is complete
-        local stack_status
-        stack_status=$(aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --region "$REGION" \
-            --query 'Stacks[0].StackStatus' \
-            --output text 2>/dev/null) || {
-            sleep 10
-            continue
-        }
-        
-        case "$stack_status" in
-            CREATE_COMPLETE|UPDATE_COMPLETE)
-                print_info "Stack operation completed successfully"
-                stack_complete=true
-                ;;
-            CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED)
-                print_error "Stack operation failed with status: $stack_status"
-                print_info "Check AWS Console for details"
-                exit 1
-                ;;
-            *)
-                # Stack is still in progress, continue monitoring
-                sleep 15
-                ;;
-        esac
-    done
-}
-
-# Function to display stack outputs
-display_outputs() {
-    print_info "Stack Outputs:"
-    aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
-        --region "$REGION" \
-        --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
-        --output table
-}
-
-# Function to save outputs to file
-save_outputs() {
-    OUTPUT_FILE="stack-outputs.json"
-    print_info "Saving outputs to $OUTPUT_FILE"
     aws cloudformation describe-stacks \
         --stack-name "$STACK_NAME" \
         --region "$REGION" \
         --query 'Stacks[0].Outputs' \
-        --output json > "$OUTPUT_FILE"
-    print_info "Outputs saved to $OUTPUT_FILE"
+        --output json > stack-outputs.json
+    
+    print_success "Stack outputs saved to stack-outputs.json"
 }
 
 # Function to configure kubectl
 configure_kubectl() {
-    print_info "Configuring kubectl for EKS cluster..."
-    CLUSTER_NAME_OUTPUT=$(aws cloudformation describe-stacks \
-        --stack-name "$STACK_NAME" \
+    print_status "Configuring kubectl for EKS cluster..."
+    
+    aws eks update-kubeconfig \
+        --name "$CLUSTER_NAME" \
+        --region "$REGION"
+    
+    # Wait for cluster to be ready
+    print_status "Waiting for cluster to be ready..."
+    kubectl wait --for=condition=Ready nodes --all --timeout=300s || true
+    
+    print_success "kubectl configured successfully"
+}
+
+# Function to create Grafana namespace
+create_grafana_namespace() {
+    print_status "Creating Grafana namespace..."
+    
+    kubectl create namespace grafana --dry-run=client -o yaml | kubectl apply -f -
+    
+    print_success "Grafana namespace ready"
+}
+
+# Function to install AWS Load Balancer Controller
+install_load_balancer_controller() {
+    print_status "Installing AWS Load Balancer Controller..."
+    
+    # Get IAM role ARN
+    local alb_role_arn=$(jq -r '.[] | select(.OutputKey=="AWSLoadBalancerControllerRoleArn") | .OutputValue' stack-outputs.json)
+    
+    # Create service account
+    kubectl create serviceaccount aws-load-balancer-controller -n kube-system --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Annotate service account
+    kubectl annotate serviceaccount aws-load-balancer-controller \
+        -n kube-system \
+        eks.amazonaws.com/role-arn="$alb_role_arn" \
+        --overwrite
+    
+    # Add Helm repo
+    helm repo add eks https://aws.github.io/eks-charts
+    helm repo update
+    
+    # Install or upgrade controller
+    helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+        -n kube-system \
+        --set clusterName="$CLUSTER_NAME" \
+        --set serviceAccount.create=false \
+        --set serviceAccount.name=aws-load-balancer-controller \
+        --wait
+    
+    print_success "AWS Load Balancer Controller installed"
+}
+
+# Function to deploy Grafana
+deploy_grafana() {
+    print_status "Deploying Grafana on Fargate..."
+    
+    # Get RDS endpoint
+    local rds_endpoint=$(jq -r '.[] | select(.OutputKey=="RDSEndpoint") | .OutputValue' stack-outputs.json)
+    
+    # Create PostgreSQL secret
+    kubectl create secret generic grafana-postgres-secret \
+        --namespace grafana \
+        --from-literal=GF_DATABASE_TYPE=postgres \
+        --from-literal=GF_DATABASE_HOST="$rds_endpoint:5432" \
+        --from-literal=GF_DATABASE_NAME=grafana \
+        --from-literal=GF_DATABASE_USER=postgres \
+        --from-literal=GF_DATABASE_PASSWORD="$DB_PASSWORD" \
+        --from-literal=GF_DATABASE_SSL_MODE=require \
+        --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Update Grafana values with RDS endpoint
+    sed "s/<your-rds-endpoint>/$rds_endpoint/g" grafana-values.yaml > grafana-values-updated.yaml
+    
+    # Add Grafana Helm repo
+    helm repo add grafana https://grafana.github.io/helm-charts
+    helm repo update
+    
+    # Install or upgrade Grafana
+    helm upgrade --install grafana grafana/grafana \
+        --namespace grafana \
+        --values grafana-values-updated.yaml \
+        --wait \
+        --timeout=10m
+    
+    # Apply ALB Ingress
+    kubectl apply -f alb-ingress.yaml
+    
+    print_success "Grafana deployed successfully"
+}
+
+# Function to wait for ALB provisioning
+wait_for_alb() {
+    print_status "Waiting for Application Load Balancer to be provisioned..."
+    
+    local max_attempts=60
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        local alb_dns=$(kubectl get ingress -n grafana grafana-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+        
+        if [ -n "$alb_dns" ]; then
+            print_success "ALB provisioned: $alb_dns"
+            echo "$alb_dns" > alb-dns-name.txt
+            export GRAFANA_ALB_DNS_NAME="$alb_dns"
+            return 0
+        fi
+        
+        echo -n "."
+        sleep 10
+        ((attempt++))
+    done
+    
+    print_error "Timeout waiting for ALB provisioning"
+    return 1
+}
+
+# Function to secure ALB for CloudFront-only access
+secure_alb_for_cloudfront() {
+    print_status "Securing ALB for CloudFront-only access..."
+    
+    # Get CloudFront managed prefix list
+    print_status "Getting CloudFront managed prefix list..."
+    local cloudfront_prefix_list=$(aws ec2 describe-managed-prefix-lists \
+        --filters "Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing" \
         --region "$REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`EKSClusterName`].OutputValue' \
+        --query 'PrefixLists[0].PrefixListId' \
         --output text)
     
-    if [ -n "$CLUSTER_NAME_OUTPUT" ]; then
-        aws eks update-kubeconfig \
-            --name "$CLUSTER_NAME_OUTPUT" \
-            --region "$REGION"
-        print_info "kubectl configured for cluster: $CLUSTER_NAME_OUTPUT"
-    else
-        print_warning "Could not retrieve EKS cluster name from outputs"
+    if [ -z "$cloudfront_prefix_list" ] || [ "$cloudfront_prefix_list" == "None" ]; then
+        print_error "Could not find CloudFront managed prefix list"
+        return 1
+    fi
+    
+    print_status "CloudFront prefix list: $cloudfront_prefix_list"
+    
+    # Get ALB security group (created by Load Balancer Controller)
+    print_status "Finding ALB security group..."
+    local alb_sg=$(aws ec2 describe-security-groups \
+        --region "$REGION" \
+        --filters "Name=tag:ingress.k8s.aws/stack,Values=grafana/grafana-ingress" \
+        --query 'SecurityGroups[0].GroupId' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ -z "$alb_sg" ] || [ "$alb_sg" == "None" ]; then
+        # Try alternative method
+        alb_sg=$(aws ec2 describe-security-groups \
+            --region "$REGION" \
+            --filters "Name=group-name,Values=k8s-grafana-grafanai-*" \
+            --query 'SecurityGroups[0].GroupId' \
+            --output text 2>/dev/null || echo "")
+    fi
+    
+    if [ -z "$alb_sg" ] || [ "$alb_sg" == "None" ]; then
+        print_warning "Could not find ALB security group. Security hardening will be skipped."
+        print_warning "You may need to run ./secure-alb-for-cloudfront.sh manually later."
+        return 0
+    fi
+    
+    print_status "ALB security group: $alb_sg"
+    
+    # Get EKS cluster security group
+    local cluster_sg=$(aws eks describe-cluster \
+        --name "$CLUSTER_NAME" \
+        --region "$REGION" \
+        --query 'cluster.resourcesVpcConfig.clusterSecurityGroupId' \
+        --output text)
+    
+    if [ -z "$cluster_sg" ] || [ "$cluster_sg" == "None" ]; then
+        print_error "Could not find EKS cluster security group"
+        return 1
+    fi
+    
+    print_status "EKS cluster security group: $cluster_sg"
+    
+    # Remove public access rule if it exists
+    print_status "Removing public access rule (0.0.0.0/0)..."
+    aws ec2 revoke-security-group-ingress \
+        --group-id "$alb_sg" \
+        --region "$REGION" \
+        --ip-permissions '[{"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]' \
+        2>/dev/null && print_status "Removed public access rule" || print_status "Public access rule not found or already removed"
+    
+    # Add CloudFront prefix list rule
+    print_status "Adding CloudFront prefix list rule..."
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$alb_sg" \
+        --region "$REGION" \
+        --ip-permissions "[{\"IpProtocol\": \"tcp\", \"FromPort\": 80, \"ToPort\": 80, \"PrefixListIds\": [{\"PrefixListId\": \"$cloudfront_prefix_list\", \"Description\": \"CloudFront origin access\"}]}]" \
+        2>/dev/null && print_status "Added CloudFront access rule" || print_status "CloudFront rule already exists"
+    
+    # Ensure EKS nodes can receive traffic from ALB
+    print_status "Ensuring EKS nodes can receive traffic from ALB..."
+    aws ec2 authorize-security-group-ingress \
+        --group-id "$cluster_sg" \
+        --region "$REGION" \
+        --ip-permissions "[{\"IpProtocol\": \"tcp\", \"FromPort\": 3000, \"ToPort\": 3000, \"UserIdGroupPairs\": [{\"GroupId\": \"$alb_sg\", \"Description\": \"Allow ALB to reach Grafana pods\"}]}]" \
+        2>/dev/null && print_status "Added ALB to EKS node rule" || print_status "ALB to EKS node rule already exists"
+    
+    print_success "ALB security hardening complete!"
+    print_success "ALB is now restricted to CloudFront access only"
+}
+
+# Function to update stack with CloudFront
+update_stack_with_cloudfront() {
+    if [ -z "$GRAFANA_ALB_DNS_NAME" ]; then
+        print_warning "No ALB DNS name available. Skipping CloudFront setup."
+        return
+    fi
+    
+    print_status "Updating stack to enable CloudFront..."
+    
+    # Re-run deployment with ALB DNS name
+    deploy_infrastructure
+    save_stack_outputs
+    
+    # Get CloudFront domain
+    local cloudfront_domain=$(jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' stack-outputs.json 2>/dev/null || echo "")
+    
+    if [ -n "$cloudfront_domain" ]; then
+        print_success "CloudFront distribution created: https://$cloudfront_domain"
+        
+        # Update Grafana configuration with CloudFront URL
+        helm upgrade grafana grafana/grafana \
+            --namespace grafana \
+            --values grafana-values-updated.yaml \
+            --set env.GF_SERVER_ROOT_URL="https://$cloudfront_domain" \
+            --set grafana\\.ini.server.root_url="https://$cloudfront_domain" \
+            --wait
+        
+        # Restart Grafana to apply changes
+        kubectl rollout restart deployment grafana -n grafana
+        kubectl rollout status deployment grafana -n grafana
+        
+        print_success "Grafana updated with CloudFront URL"
+        
+        # Secure ALB for CloudFront-only access
+        secure_alb_for_cloudfront
     fi
 }
 
-# Function to display next steps
-display_next_steps() {
-    echo ""
-    print_info "=== Deployment Complete ==="
-    echo ""
-    print_info "Next steps:"
-    echo "  1. Configure kubectl: aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION"
-    echo "  2. Install AWS Load Balancer Controller"
-    echo "  3. Install EBS CSI Driver"
-    echo "  4. Deploy Grafana with Helm"
-    echo "  5. Capture the ALB DNS once the ingress is ready:"
-    echo "       kubectl get ingress -n grafana grafana-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'"
-    echo "  6. Re-run this script with STACK_NAME=$STACK_NAME and GRAFANA_ALB_DNS_NAME set to that hostname to enable CloudFront."
-    echo "  7. IMPORTANT: Secure ALB for CloudFront-only access: ./secure-alb-for-cloudfront.sh"
-    echo ""
-    print_info "Useful commands:"
-    echo "  - View stack: aws cloudformation describe-stacks --stack-name $STACK_NAME --region $REGION"
-    echo "  - Delete stack: aws cloudformation delete-stack --stack-name $STACK_NAME --region $REGION"
-    echo "  - View events: aws cloudformation describe-stack-events --stack-name $STACK_NAME --region $REGION"
-    echo ""
-    print_info "Note: During deployment, you saw real-time CloudFormation events."
-    echo "      If you need to monitor a running stack, use:"
-    echo "      aws cloudformation describe-stack-events --stack-name $STACK_NAME --region $REGION"
-    echo ""
+# Function to display final information
+display_final_info() {
+    print_success "Deployment completed successfully!"
+    echo
+    echo "=== DEPLOYMENT SUMMARY ==="
+    echo "Stack Name: $STACK_NAME"
+    echo "Region: $REGION"
+    echo "EKS Cluster: $CLUSTER_NAME"
+    echo
+    
+    # Get important outputs
+    local rds_endpoint=$(jq -r '.[] | select(.OutputKey=="RDSEndpoint") | .OutputValue' stack-outputs.json)
+    local cloudfront_domain=$(jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' stack-outputs.json 2>/dev/null || echo "")
+    local alb_dns=$(cat alb-dns-name.txt 2>/dev/null || echo "")
+    
+    echo "=== ACCESS INFORMATION ==="
+    if [ -n "$cloudfront_domain" ]; then
+        echo "Grafana URL: https://$cloudfront_domain"
+    elif [ -n "$alb_dns" ]; then
+        echo "Grafana URL: http://$alb_dns"
+    fi
+    
+    # Get Grafana admin password
+    local grafana_password=$(kubectl get secret --namespace grafana grafana -o jsonpath="{.data.admin-password}" 2>/dev/null | base64 --decode 2>/dev/null || echo "")
+    if [ -n "$grafana_password" ]; then
+        echo "Grafana Username: admin"
+        echo "Grafana Password: $grafana_password"
+    fi
+    
+    echo
+    echo "=== INFRASTRUCTURE DETAILS ==="
+    echo "RDS Endpoint: $rds_endpoint"
+    if [ -n "$alb_dns" ]; then
+        echo "ALB DNS: $alb_dns"
+    fi
+    if [ -n "$cloudfront_domain" ]; then
+        echo "CloudFront Domain: $cloudfront_domain"
+    fi
+    
+    echo
+    echo "=== NEXT STEPS ==="
+    echo "1. Initialize database schema: kubectl run -it --rm psql-client --image=postgres:17 --restart=Never --namespace=grafana -- psql \"host=$rds_endpoint port=5432 dbname=grafana user=postgres password=*** sslmode=require\""
+    echo "2. Import dashboards via Grafana UI"
+    echo "3. Enable public dashboard sharing"
+    echo
+    echo "✅ Security hardening completed automatically!"
+    echo
+    echo "Stack outputs saved in: stack-outputs.json"
+    echo "ALB DNS saved in: alb-dns-name.txt"
 }
 
 # Main execution
 main() {
-    echo "========================================"
-    echo "Valkey Benchmark Stack Deployment"
-    echo "========================================"
-    echo ""
-    print_info "Stack Name: $STACK_NAME"
-    echo ""
+    echo "=== Valkey Benchmark Dashboard - Fargate Deployment ==="
+    echo
     
-    # Pre-flight checks
-    check_aws_cli
-    check_jq
-    check_aws_credentials
-    check_template
-    validate_template
-    check_key_pair
-    get_db_password
-    find_github_oidc_provider
-    
-    # Clean up any problematic stack state before deployment
-    if stack_exists; then
-        print_info "Checking existing stack state..."
-        if ! delete_stack; then
-            print_error "Failed to clean up existing stack. Aborting deployment."
-            exit 1
-        fi
-    fi
-    
-    # Deploy
-    deploy_stack
-    wait_for_stack
-    
-    # Post-deployment
-    display_outputs
-    save_outputs
+    check_prerequisites
+    get_user_input
+    deploy_infrastructure
+    save_stack_outputs
     configure_kubectl
-    display_next_steps
+    create_grafana_namespace
+    install_load_balancer_controller
+    deploy_grafana
+    wait_for_alb
+    update_stack_with_cloudfront
+    display_final_info
+    
+    print_success "All done! 🚀"
 }
 
 # Run main function
-main
+main "$@"

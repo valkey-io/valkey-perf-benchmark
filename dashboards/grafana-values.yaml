@@ -1,5 +1,5 @@
-# Grafana Helm Chart Values
-# This configures Grafana to use PostgreSQL backend and enables shared dashboards
+# Grafana Helm Chart Values for Fargate
+# This configures Grafana to run on AWS Fargate with PostgreSQL backend
 
 replicas: 1
 
@@ -8,35 +8,26 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
-# Service configuration - Now using ClusterIP with ALB Ingress
+# Service configuration - ClusterIP with ALB Ingress
 service:
   type: ClusterIP
   port: 80
   targetPort: 3000
 
-# Ingress configuration (alternative to LoadBalancer)
+# Ingress configuration disabled (using separate ALB Ingress)
 ingress:
   enabled: false
-  ingressClassName: alb
-  annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-  hosts:
-    - grafana.yourdomain.com
-  path: /
-  pathType: Prefix
 
-# Resource limits
+# Resource limits - Fargate requires explicit resource definitions
 resources:
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 1000m
+    memory: 2Gi
   requests:
-    cpu: 250m
-    memory: 256Mi
+    cpu: 500m
+    memory: 1Gi
 
-# Persistence for plugins and other data
+# Persistence for plugins and other data - Fargate compatible
 persistence:
   enabled: true
   type: pvc
@@ -161,15 +152,6 @@ sidecar:
     enabled: true
     label: grafana_datasource
 
-# Pod annotations
-podAnnotations: {}
-
-# Security context
-securityContext:
-  runAsUser: 472
-  runAsGroup: 472
-  fsGroup: 472
-
 # Liveness and readiness probes
 livenessProbe:
   httpGet:
@@ -186,7 +168,7 @@ readinessProbe:
   initialDelaySeconds: 30
   timeoutSeconds: 30
 
-# Affinity rules for high availability
+# Affinity rules for high availability - Fargate compatible
 affinity:
   podAntiAffinity:
     preferredDuringSchedulingIgnoredDuringExecution:
@@ -200,8 +182,36 @@ affinity:
                   - grafana
           topologyKey: kubernetes.io/hostname
 
-# Node selector (optional - adjust based on your node labels)
+# Node selector - not needed for Fargate
 nodeSelector: {}
 
-# Tolerations (optional)
+# Tolerations - not needed for Fargate
 tolerations: []
+
+# Fargate-specific configurations
+# These ensure the pod runs correctly on Fargate
+podLabels:
+  fargate: "true"
+
+# Disable host networking (not supported on Fargate)
+hostNetwork: false
+
+# Pod security context - Fargate compatible
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  capabilities:
+    drop:
+      - ALL

@@ -1,39 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Complete Valkey Performance Benchmark Infrastructure with EKS, RDS PostgreSQL, and CloudFront"
+Description: "Valkey Performance Benchmark Infrastructure with EKS Fargate, RDS PostgreSQL, and CloudFront"
 
 Parameters:
   ClusterName:
     Type: String
     Default: valkey-perf-cluster
     Description: Name of the EKS cluster
-
-  NodeInstanceType:
-    Type: String
-    Default: t4g.small
-    AllowedValues:
-      [t4g.small, t4g.medium, t4g.large]
-    Description: EC2 instance type for EKS worker nodes
-
-  NodeGroupDesiredCapacity:
-    Type: Number
-    Default: 2
-    MinValue: 1
-    MaxValue: 10
-    Description: Desired number of worker nodes
-
-  NodeGroupMinSize:
-    Type: Number
-    Default: 1
-    MinValue: 1
-    MaxValue: 10
-    Description: Minimum number of worker nodes
-
-  NodeGroupMaxSize:
-    Type: Number
-    Default: 4
-    MinValue: 1
-    MaxValue: 20
-    Description: Maximum number of worker nodes
 
   DBInstanceClass:
     Type: String
@@ -65,20 +37,10 @@ Parameters:
     MaxLength: 128
     Description: RDS master password (8-128 characters)
 
-  Environment:
-    Type: String
-    Default: production
-    AllowedValues: [development, staging, production]
-    Description: Environment name
-
   ProjectName:
     Type: String
     Default: valkey-benchmark
     Description: Project name for resource tagging
-
-  KeyPairName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: EC2 Key Pair for SSH access to worker nodes (must exist in your account)
 
   GitHubOIDCProviderArn:
     Type: String
@@ -88,9 +50,9 @@ Parameters:
   GrafanaAlbDnsName:
     Type: String
     Default: ""
-    Description: DNS name of the Grafana ALB created by the AWS Load Balancer Controller (e.g. k8s-grafana-grafanai-XXXXXXXXXX.elb.amazonaws.com)
+    Description: DNS name of the Grafana ALB created by the AWS Load Balancer Controller
     AllowedPattern: "^$|([a-z0-9-]+\\.)+elb\\.amazonaws\\.com$"
-    ConstraintDescription: Must be empty or a valid AWS ALB hostname (…elb.amazonaws.com)
+    ConstraintDescription: Must be empty or a valid AWS ALB hostname
 
 Conditions:
   HasGitHubOIDCProvider: !Not [!Equals [!Ref GitHubOIDCProviderArn, ""]]
@@ -98,7 +60,7 @@ Conditions:
   HasGrafanaAlbDns: !Not [!Equals [!Ref GrafanaAlbDnsName, ""]]
 
 Resources:
-  # VPC and Networking
+  # VPC and Networking (same as original)
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -108,10 +70,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-vpc"
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
   # Internet Gateway
   InternetGateway:
@@ -120,8 +78,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-igw"
-        - Key: Environment
-          Value: !Ref Environment
 
   InternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -142,8 +98,6 @@ Resources:
           Value: !Sub "${ProjectName}-public-subnet-1"
         - Key: kubernetes.io/role/elb
           Value: "1"
-        - Key: Environment
-          Value: !Ref Environment
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -157,10 +111,8 @@ Resources:
           Value: !Sub "${ProjectName}-public-subnet-2"
         - Key: kubernetes.io/role/elb
           Value: "1"
-        - Key: Environment
-          Value: !Ref Environment
 
-  # Private Subnets
+  # Private Subnets for Fargate
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -172,8 +124,6 @@ Resources:
           Value: !Sub "${ProjectName}-private-subnet-1"
         - Key: kubernetes.io/role/internal-elb
           Value: "1"
-        - Key: Environment
-          Value: !Ref Environment
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -186,8 +136,6 @@ Resources:
           Value: !Sub "${ProjectName}-private-subnet-2"
         - Key: kubernetes.io/role/internal-elb
           Value: "1"
-        - Key: Environment
-          Value: !Ref Environment
 
   # NAT Gateways
   NatGateway1EIP:
@@ -297,62 +245,62 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable2
       SubnetId: !Ref PrivateSubnet2
 
-  # Security Groups
+  # Security Groups - Optimized for Fargate
   EKSClusterSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for EKS cluster
+      GroupDescription: Security group for EKS Fargate cluster
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          CidrIp: 10.0.0.0/16
-          Description: Restrict EKS API access to the VPC range
+          SourceSecurityGroupId: !Ref FargatePodSecurityGroup
+          Description: Allow Fargate pods to access EKS API
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-eks-cluster-sg"
-        - Key: Environment
-          Value: !Ref Environment
 
-  EKSNodeSecurityGroup:
+  # Fargate Pod Security Group
+  FargatePodSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for EKS worker nodes
+      GroupDescription: Security group for Fargate pods
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 1025
-          ToPort: 65535
-          SourceSecurityGroupId: !Ref EKSClusterSecurityGroup
-          Description: Allow cluster to communicate with nodes
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow ALB to access Grafana on port 3000
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic for container pulls and external APIs
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-fargate-pod-sg"
+
+  # ALB Security Group
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer - CloudFront access only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP from anywhere (will be updated to CloudFront-only by deploy script)
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref EKSClusterSecurityGroup
-          Description: Allow cluster to communicate with nodes on HTTPS
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 10.0.0.0/16
-          Description: Allow SSH access from within the VPC
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS from anywhere (will be updated to CloudFront-only by deploy script)
       Tags:
         - Key: Name
-          Value: !Sub "${ProjectName}-eks-node-sg"
-        - Key: Environment
-          Value: !Ref Environment
-
-  # Security Group for GitHub Actions Runner (if in same VPC)
-  GitHubRunnerSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for GitHub Actions self-hosted runner
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-github-runner-sg"
-        - Key: Environment
-          Value: !Ref Environment
+          Value: !Sub "${ProjectName}-alb-sg"
 
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -363,18 +311,11 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          SourceSecurityGroupId: !Ref EKSNodeSecurityGroup
-          Description: Allow EKS nodes to access PostgreSQL
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          SourceSecurityGroupId: !Ref GitHubRunnerSecurityGroup
-          Description: Allow GitHub Actions runner to access PostgreSQL (same VPC)
+          SourceSecurityGroupId: !Ref FargatePodSecurityGroup
+          Description: Allow Fargate pods to access PostgreSQL
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-sg"
-        - Key: Environment
-          Value: !Ref Environment
 
   # IAM Roles
   EKSClusterRole:
@@ -390,32 +331,23 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
-  RDSMonitoringRole:
+  # Fargate Pod Execution Role
+  FargatePodExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ProjectName}-rds-monitoring-role"
+      RoleName: !Sub "${ProjectName}-fargate-pod-execution-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
-              Service: monitoring.rds.amazonaws.com
+              Service: eks-fargate-pods.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
+        - arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy
 
-  # GitHub OIDC Provider for GitHub Actions (only create if not provided)
+  # GitHub OIDC Provider
   GitHubOIDCProvider:
     Type: AWS::IAM::OIDCProvider
     Condition: NeedsGitHubOIDCProvider
@@ -428,10 +360,8 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-github-oidc-provider"
-        - Key: Environment
-          Value: !Ref Environment
 
-  # IAM Role for GitHub Actions to push metrics to RDS
+  # GitHub Actions Role for RDS
   GitHubActionsRDSRole:
     Type: AWS::IAM::Role
     Properties:
@@ -464,34 +394,8 @@ Resources:
                 Action:
                   - rds:DescribeDBInstances
                 Resource: !GetAtt RDSInstance.DBInstanceArn
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
-  EKSNodeRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-eks-node-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
-        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
-        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
-
-  # EKS Cluster
+  # EKS Cluster - Fargate Only
   EKSCluster:
     Type: AWS::EKS::Cluster
     Properties:
@@ -502,8 +406,6 @@ Resources:
         SecurityGroupIds:
           - !Ref EKSClusterSecurityGroup
         SubnetIds:
-          - !Ref PublicSubnet1
-          - !Ref PublicSubnet2
           - !Ref PrivateSubnet1
           - !Ref PrivateSubnet2
         EndpointPublicAccess: false
@@ -513,16 +415,8 @@ Resources:
           EnabledTypes:
             - Type: api
             - Type: audit
-            - Type: authenticator
-            - Type: controllerManager
-            - Type: scheduler
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
-  # IAM OIDC Provider for EKS
+  # EKS OIDC Provider
   EKSOIDCProvider:
     Type: AWS::IAM::OIDCProvider
     Properties:
@@ -530,14 +424,26 @@ Resources:
       ClientIdList:
         - sts.amazonaws.com
       ThumbprintList:
-        - 9e99a48a9960b14926bb7f3b02e22da2b0ab7280 # Root CA thumbprint for EKS
+        - 9e99a48a9960b14926bb7f3b02e22da2b0ab7280
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-eks-oidc-provider"
-        - Key: Environment
-          Value: !Ref Environment
 
-  # IAM Role for AWS Load Balancer Controller
+  # Fargate Profile for all workloads
+  FargateProfile:
+    Type: AWS::EKS::FargateProfile
+    Properties:
+      ClusterName: !Ref EKSCluster
+      FargateProfileName: default-profile
+      PodExecutionRoleArn: !GetAtt FargatePodExecutionRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Selectors:
+        - Namespace: grafana
+        - Namespace: kube-system
+
+  # AWS Load Balancer Controller Role
   AWSLoadBalancerControllerRole:
     Type: AWS::IAM::Role
     DependsOn: EKSOIDCProvider
@@ -568,13 +474,8 @@ Resources:
             IssuerUrl: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
       ManagedPolicyArns:
         - !Ref AWSLoadBalancerControllerPolicy
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
-  # IAM Policy for AWS Load Balancer Controller
+  # Load Balancer Controller Policy (same as original)
   AWSLoadBalancerControllerPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -681,7 +582,7 @@ Resources:
             Resource:
               - "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
               - "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*"
-              - "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
+              - "arn:aws:elasticloadbalancer:*:*:loadbalancer/app/*/*"
             Condition:
               "Null":
                 "aws:RequestTag/elbv2.k8s.aws/cluster": "true"
@@ -723,179 +624,7 @@ Resources:
               - elasticloadbalancing:ModifyRule
             Resource: "*"
 
-  # IAM Role for EBS CSI Driver
-  EBSCSIDriverRole:
-    Type: AWS::IAM::Role
-    DependsOn: EKSOIDCProvider
-    Properties:
-      RoleName: !Sub "${ProjectName}-ebs-csi-driver-role"
-      AssumeRolePolicyDocument:
-        Fn::Sub:
-          - |
-            {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Effect": "Allow",
-                  "Principal": {
-                    "Federated": "${OIDCProviderArn}"
-                  },
-                  "Action": "sts:AssumeRoleWithWebIdentity",
-                  "Condition": {
-                    "StringEquals": {
-                      "${IssuerUrl}:aud": "sts.amazonaws.com",
-                      "${IssuerUrl}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
-                    }
-                  }
-                }
-              ]
-            }
-          - OIDCProviderArn: !GetAtt EKSOIDCProvider.Arn
-            IssuerUrl: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
-
-  # IAM Role for Cluster Autoscaler
-  ClusterAutoscalerRole:
-    Type: AWS::IAM::Role
-    DependsOn: EKSOIDCProvider
-    Properties:
-      RoleName: !Sub "${ProjectName}-cluster-autoscaler-role"
-      AssumeRolePolicyDocument:
-        Fn::Sub:
-          - |
-            {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Effect": "Allow",
-                  "Principal": {
-                    "Federated": "${OIDCProviderArn}"
-                  },
-                  "Action": "sts:AssumeRoleWithWebIdentity",
-                  "Condition": {
-                    "StringEquals": {
-                      "${IssuerUrl}:aud": "sts.amazonaws.com",
-                      "${IssuerUrl}:sub": "system:serviceaccount:kube-system:cluster-autoscaler"
-                    }
-                  }
-                }
-              ]
-            }
-          - OIDCProviderArn: !GetAtt EKSOIDCProvider.Arn
-            IssuerUrl: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
-      ManagedPolicyArns:
-        - !Ref ClusterAutoscalerPolicy
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
-
-  # IAM Policy for Cluster Autoscaler
-  ClusterAutoscalerPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      ManagedPolicyName: !Sub "${ProjectName}-cluster-autoscaler-policy"
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - autoscaling:DescribeAutoScalingGroups
-              - autoscaling:DescribeAutoScalingInstances
-              - autoscaling:DescribeLaunchConfigurations
-              - autoscaling:DescribeScalingActivities
-              - autoscaling:DescribeTags
-              - ec2:DescribeImages
-              - ec2:DescribeInstanceTypes
-              - ec2:DescribeLaunchTemplateVersions
-              - ec2:GetInstanceTypesFromInstanceRequirements
-              - eks:DescribeNodegroup
-            Resource: "*"
-          - Effect: Allow
-            Action:
-              - autoscaling:SetDesiredCapacity
-              - autoscaling:TerminateInstanceInAutoScalingGroup
-            Resource: "*"
-            Condition:
-              StringEquals:
-                "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/enabled": "true"
-                "autoscaling:ResourceTag/kubernetes.io/cluster/${ClusterName}": "owned"
-
-  EKSNodeLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    Properties:
-      LaunchTemplateName: !Sub "${ProjectName}-node-lt"
-      LaunchTemplateData:
-        KeyName: !Ref KeyPairName
-        SecurityGroupIds:
-          - !Ref EKSNodeSecurityGroup
-        MetadataOptions:
-          HttpTokens: required
-          HttpPutResponseHopLimit: 2
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: Environment
-                Value: !Ref Environment
-              - Key: Project
-                Value: !Ref ProjectName
-
-  # EKS Node Group
-  EKSNodeGroup:
-    Type: AWS::EKS::Nodegroup
-    DependsOn: EKSCluster
-    Properties:
-      ClusterName: !Ref ClusterName
-      NodegroupName: !Sub "${ProjectName}-node-group"
-      NodeRole: !GetAtt EKSNodeRole.Arn
-      InstanceTypes:
-        - !Ref NodeInstanceType
-      AmiType: AL2023_ARM_64_STANDARD
-      CapacityType: ON_DEMAND
-      Subnets:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
-      LaunchTemplate:
-        Id: !Ref EKSNodeLaunchTemplate
-        Version: !GetAtt EKSNodeLaunchTemplate.LatestVersionNumber
-      ScalingConfig:
-        MinSize: !Ref NodeGroupMinSize
-        MaxSize: !Ref NodeGroupMaxSize
-        DesiredSize: !Ref NodeGroupDesiredCapacity
-      UpdateConfig:
-        MaxUnavailable: 1
-      Tags:
-        Environment: !Ref Environment
-        Project: !Ref ProjectName
-        "k8s.io/cluster-autoscaler/enabled": "true"
-        "k8s.io/cluster-autoscaler/valkey-perf-cluster": "owned"
-
-  # EBS CSI Driver Add-on
-  EBSCSIDriverAddon:
-    Type: AWS::EKS::Addon
-    DependsOn:
-      - EKSNodeGroup
-      - EBSCSIDriverRole
-    Properties:
-      ClusterName: !Ref ClusterName
-      AddonName: aws-ebs-csi-driver
-      AddonVersion: v1.36.0-eksbuild.1
-      ServiceAccountRoleArn: !GetAtt EBSCSIDriverRole.Arn
-      ResolveConflicts: OVERWRITE
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
-
-  # RDS Subnet Group - Private-only subnets for database isolation
+  # RDS Components (same as original)
   RDSSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -907,28 +636,8 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-subnet-group"
-        - Key: Environment
-          Value: !Ref Environment
 
-  # RDS Parameter Group
-  RDSParameterGroup:
-    Type: AWS::RDS::DBParameterGroup
-    Properties:
-      DBParameterGroupName: !Sub "${ProjectName}-postgres-params"
-      Description: Parameter group for PostgreSQL optimized for Grafana
-      Family: postgres17
-      Parameters:
-        shared_preload_libraries: "pg_stat_statements"
-        log_statement: "all"
-        log_min_duration_statement: "1000"
-        max_connections: "200"
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-postgres-params"
-        - Key: Environment
-          Value: !Ref Environment
 
-  # RDS Instance
   RDSInstance:
     Type: AWS::RDS::DBInstance
     DeletionPolicy: Snapshot
@@ -946,30 +655,20 @@ Resources:
       VPCSecurityGroups:
         - !Ref RDSSecurityGroup
       DBSubnetGroupName: !Ref RDSSubnetGroup
-      DBParameterGroupName: !Ref RDSParameterGroup
       BackupRetentionPeriod: 7
       PreferredBackupWindow: "03:00-04:00"
       PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
       MultiAZ: false
       PubliclyAccessible: false
       DeletionProtection: false
-      EnablePerformanceInsights: true
-      PerformanceInsightsRetentionPeriod: 7
-      MonitoringInterval: 60
-      MonitoringRoleArn: !GetAtt RDSMonitoringRole.Arn
+      EnablePerformanceInsights: false
+      MonitoringInterval: 0
       EnableIAMDatabaseAuthentication: true
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-postgres"
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
   # CloudFront Distribution
-  # Supply the actual ALB DNS name via the GrafanaAlbDnsName parameter (GitHub workflow/self-hosted runners can discover it via
-  # aws elbv2 describe-load-balancers) so the distribution always points at the live ingress. Continue to run dashboards/secure-alb-for-cloudfront.sh
-  # to restrict the ALB security group to the CloudFront managed prefix list.
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Condition: HasGrafanaAlbDns
@@ -1016,10 +715,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-cloudfront"
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Project
-          Value: !Ref ProjectName
 
 Outputs:
   VPCId:
@@ -1034,103 +729,15 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-EKS-Cluster-Name"
 
-  EKSClusterEndpoint:
-    Description: EKS Cluster Endpoint
-    Value: !GetAtt EKSCluster.Endpoint
-    Export:
-      Name: !Sub "${AWS::StackName}-EKS-Cluster-Endpoint"
-
-  EKSClusterArn:
-    Description: EKS Cluster ARN
-    Value: !GetAtt EKSCluster.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-EKS-Cluster-ARN"
-
   RDSEndpoint:
     Description: RDS PostgreSQL Endpoint
     Value: !GetAtt RDSInstance.Endpoint.Address
-    Export:
-      Name: !Sub "${AWS::StackName}-RDS-Endpoint"
-
-  RDSPort:
-    Description: RDS PostgreSQL Port
-    Value: !GetAtt RDSInstance.Endpoint.Port
-    Export:
-      Name: !Sub "${AWS::StackName}-RDS-Port"
 
   CloudFrontDomainName:
     Description: CloudFront Distribution Domain Name
     Condition: HasGrafanaAlbDns
     Value: !GetAtt CloudFrontDistribution.DomainName
-    Export:
-      Name: !Sub "${AWS::StackName}-CloudFront-Domain"
-
-  CloudFrontDistributionId:
-    Description: CloudFront Distribution ID
-    Condition: HasGrafanaAlbDns
-    Value: !Ref CloudFrontDistribution
-    Export:
-      Name: !Sub "${AWS::StackName}-CloudFront-ID"
 
   AWSLoadBalancerControllerRoleArn:
     Description: AWS Load Balancer Controller IAM Role ARN
     Value: !GetAtt AWSLoadBalancerControllerRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-ALB-Controller-Role-ARN"
-
-  EBSCSIDriverRoleArn:
-    Description: EBS CSI Driver IAM Role ARN
-    Value: !GetAtt EBSCSIDriverRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-EBS-CSI-Role-ARN"
-
-  ClusterAutoscalerRoleArn:
-    Description: Cluster Autoscaler IAM Role ARN
-    Value: !GetAtt ClusterAutoscalerRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-Cluster-Autoscaler-Role-ARN"
-
-  EKSOIDCProviderArn:
-    Description: EKS OIDC Provider ARN
-    Value: !GetAtt EKSOIDCProvider.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-OIDC-Provider-ARN"
-
-  GitHubOIDCProviderArn:
-    Description: GitHub OIDC Provider ARN (provided or created)
-    Value: !If
-      - HasGitHubOIDCProvider
-      - !Ref GitHubOIDCProviderArn
-      - !GetAtt GitHubOIDCProvider.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-GitHub-OIDC-Provider-ARN"
-
-  GitHubActionsRoleArn:
-    Description: GitHub Actions IAM Role ARN for RDS access
-    Value: !GetAtt GitHubActionsRDSRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-GitHub-Actions-Role-ARN"
-
-  DatabaseName:
-    Description: RDS Database Name
-    Value: grafana
-    Export:
-      Name: !Sub "${AWS::StackName}-Database-Name"
-
-  PublicSubnets:
-    Description: Public Subnet IDs
-    Value: !Join [",", [!Ref PublicSubnet1, !Ref PublicSubnet2]]
-    Export:
-      Name: !Sub "${AWS::StackName}-Public-Subnets"
-
-  PrivateSubnets:
-    Description: Private Subnet IDs
-    Value: !Join [",", [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
-    Export:
-      Name: !Sub "${AWS::StackName}-Private-Subnets"
-
-  RDSMonitoringRoleArn:
-    Description: RDS Monitoring IAM Role ARN
-    Value: !GetAtt RDSMonitoringRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-RDS-Monitoring-Role-ARN"

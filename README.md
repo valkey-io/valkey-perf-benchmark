@@ -1,19 +1,19 @@
 # Valkey Performance Benchmark
 
-A comprehensive benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-memory data store. This tool allows you to measure performance across different commits, configurations, including TLS and cluster modes.
+A benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-memory data store. Measures performance across different commits and configurations, including TLS and cluster modes.
 
 ## Features
 
-- Benchmark Valkey server with various commands (SET, GET, RPUSH, etc.)
-- Test with different data sizes and pipeline configurations
-- Support for TLS and cluster mode testing
-- Automatic server setup and teardown
-- Detailed performance metrics collection and reporting
-- Compare performance between different Valkey versions/commits
-- Optional CPU pinning via `taskset` using configuration file settings
-- Continuous benchmarking via GitHub Actions workflow
-- Automated commit tracking and progress management
-- Grafana dashboards for visualizing performance metrics
+- Benchmarks Valkey server with various commands (SET, GET, RPUSH, etc.)
+- Tests with different data sizes and pipeline configurations
+- Supports TLS and cluster mode testing
+- Handles automatic server setup and teardown
+- Collects detailed performance metrics and generates reports
+- Compares performance between different Valkey versions/commits
+- Provides CPU pinning via `taskset` using configuration file settings
+- Runs continuous benchmarking via GitHub Actions workflow
+- Tracks commits and manages progress automatically
+- Includes Grafana dashboards for visualizing performance metrics
 
 ## Prerequisites
 
@@ -54,10 +54,7 @@ valkey-perf-benchmark/
 └── requirements.txt         # Python dependencies
 ```
 
-Each benchmark run clones a fresh copy of the Valkey repository for the
-target commit. If `--valkey-path` is omitted, the repository is cloned into
-`valkey_<commit>` and removed after the run to keep builds isolated and
-repeatable.
+Each benchmark run clones a fresh copy of the Valkey repository for the target commit. When `--valkey-path` is omitted, the repository is cloned into `valkey_<commit>` and removed after the run to maintain build isolation and repeatability.
 
 ## Usage
 
@@ -101,7 +98,7 @@ python benchmark.py --commits HEAD --runs 5
 
 ## Benchmark Comparison and Analysis
 
-The project includes a powerful comparison tool for analyzing benchmark results with statistical rigor and graph generation.
+The project includes a comparison tool for analyzing benchmark results with statistical analysis and graph generation.
 
 ### Compare Benchmark Results
 
@@ -121,15 +118,15 @@ python utils/compare_benchmark_results.py --baseline results/commit1/metrics.jso
 
 ### Comparison Tool Features
 
-- **Automatic Run Averaging**: Intelligently groups and averages multiple benchmark runs with identical configurations
-- **Statistical Analysis**: Calculates means, standard deviations, and Coefficient of Variation (CV) with proper sample standard deviation (n-1)
-- **Coefficient of Variation**: Provides normalized variability metrics (CV = σ/μ × 100%) for scale-independent comparison across different performance metrics
-- **Graph Generation**: Comprehensive matplotlib-based visualization including:
+- **Automatic Run Averaging**: Groups and averages multiple benchmark runs with identical configurations
+- **Statistical Analysis**: Calculates means, standard deviations, and Coefficient of Variation (CV) with sample standard deviation (n-1)
+- **Coefficient of Variation**: Provides normalized variability metrics (CV = σ/μ × 100%) for scale-independent comparison across performance metrics
+- **Graph Generation**: matplotlib-based visualization including:
   - Consolidated comparison graphs for all metrics
   - Variance line graphs showing individual run values with error bars
   - RPS-focused filtering for integration purposes
-- **Metrics Filtering**: Support for filtering by metric type (all, rps, latency)
-- **Standardized Output**: Generates markdown reports with comprehensive statistical information including CV
+- **Metrics Filtering**: Supports filtering by metric type (all, rps, latency)
+- **Standardized Output**: Generates markdown reports with statistical information including CV
 
 ### Statistical Display Format
 
@@ -145,15 +142,15 @@ Where:
 - `σ`: Standard deviation
 - `CV`: Coefficient of Variation as a percentage
 
-The Coefficient of Variation (CV) is particularly useful for:
+The Coefficient of Variation (CV) is useful for:
 
-- **Scale-independent comparison**: Compare variability across metrics with different units (e.g., RPS vs latency)
+- **Scale-independent comparison**: Compares variability across metrics with different units (e.g., RPS vs latency)
 - **Performance consistency assessment**: Lower CV indicates more consistent performance
-- **Benchmark reliability evaluation**: High CV may indicate unstable test conditions
+- **Benchmark reliability evaluation**: High CV indicates unstable test conditions
 
 ### Graph Types
 
-1. **Consolidated Comparison Graphs**: Single comprehensive graphs showing all metrics with proper legend format `{commit}-P{pipeline}/IO{io_threads}`
+1. **Consolidated Comparison Graphs**: Single graphs showing all metrics with legend format `{commit}-P{pipeline}/IO{io_threads}`
 2. **Variance Line Graphs**: Individual run values with standard deviation visualization and error bars
 
 ### Advanced Options
@@ -174,17 +171,17 @@ python benchmark.py --valkey-benchmark-path /path/to/custom/valkey-benchmark
 
 ### Benchmarking Remote Servers and Pre-Running Servers
 
-When using `--use-running-server` or benchmarking remote servers, **restarting the server between benchmark runs is the user's responsibility**. Failure to restart between runs will significantly affect test results
+When using `--use-running-server` or benchmarking remote servers, **restarting the server between benchmark runs is the user's responsibility**. Failure to restart between runs affects test results.
 
 ### Custom Valkey-Benchmark Executable
 
-The `--valkey-benchmark-path` option allows you to specify a custom path to the `valkey-benchmark` executable. This is useful when:
+The `--valkey-benchmark-path` option specifies a custom path to the `valkey-benchmark` executable. This is useful when:
 
 - Testing a modified version of `valkey-benchmark`
 - Using a pre-built binary from a different location
 - Benchmarking with a specific version of the tool
 
-If not specified, the tool uses the default `src/valkey-benchmark` relative to the Valkey source directory.
+When not specified, the tool uses the default `src/valkey-benchmark` relative to the Valkey source directory.
 
 ````bash
 # Example: Use a custom benchmark tool
@@ -195,9 +192,7 @@ python benchmark.py --valkey-path /custom/valkey --valkey-benchmark-path /custom
 
 ## Configuration
 
-Create benchmark configurations in JSON format. Each object represents a single
-set of options and configurations are **not** automatically cross-multiplied.
-Example:
+Create benchmark configurations in JSON format. Each object represents a single set of options and configurations are **not** automatically cross-multiplied. Example:
 
 ```json
 [
@@ -234,13 +229,10 @@ Example:
 | `server_cpu_range` | CPU cores for server (e.g. "0-3", "0,2,4", or "144-191,48-95") | String              | No              |
 | `client_cpu_range` | CPU cores for client (e.g. "4-7", "1,3,5", or "0-3,8-11")      | String              | No              |
 
-When `warmup` is provided for read commands, the benchmark performs three
-stages:
+When `warmup` is provided for read commands, the benchmark performs three stages:
 
-1. A data injection pass using the corresponding write command with
-   `--sequential` to seed the keyspace.
-2. A warmup run of the read command (without `--sequential`) for the specified
-   duration.
+1. A data injection pass using the corresponding write command with `--sequential` to seed the keyspace.
+2. A warmup run of the read command (without `--sequential`) for the specified duration.
 3. The main benchmark run of the read command.
 
 Supported commands:
@@ -293,15 +285,14 @@ Sample metrics.json
 The project includes several GitHub Actions workflows for automated testing and deployment:
 
 - **`valkey_benchmark.yml`**: Continuous benchmarking workflow that runs on self-hosted EC2 runners
-
-  - Automatically benchmarks new commits from the Valkey unstable branch
+  - Benchmarks new commits from the Valkey unstable branch
   - Manages commit tracking via PostgreSQL
   - Uploads results to S3 and pushes metrics to PostgreSQL
   - Supports manual triggering with configurable commit limits
 
 - **`basic.yml`**: Basic validation and testing
 - **`check_format.yml`**: Code formatting validation
-- **`cluster_tls.yml`**: Specialized tests for cluster and TLS configurations
+- **`cluster_tls.yml`**: Tests for cluster and TLS configurations
 
 ### Commit Tracking
 
@@ -321,21 +312,21 @@ Commits progress through the following statuses during the benchmarking workflow
 
 #### Automatic Cleanup
 
-The system automatically cleans up `in_progress` entries on the next workflow run. This ensures:
+The system cleans up `in_progress` entries on the next workflow run. This ensures:
 
-- Failed benchmark runs are automatically retried
-- Commits stuck in progress don't block future runs
-- The tracking accurately reflects completed work
+- Failed benchmark runs are retried
+- Commits stuck in progress do not block future runs
+- The tracking reflects completed work accurately
 
 #### Config Tracking
 
-Each commit is tracked with the actual configuration content used for benchmarking. This allows you to:
+Each commit is tracked with the actual configuration content used for benchmarking. This provides:
 
-- Compare results across different configurations by actual content
-- Track the exact config parameters used for each benchmark
-- Detect when config content changes even if file name stays the same
-- Benchmark the same commit with different configs
-- Ensure reproducibility by storing complete config data
+- Comparison of results across different configurations by actual content
+- Tracking of exact config parameters used for each benchmark
+- Detection when config content changes even if file name stays the same
+- Benchmarking the same commit with different configs
+- Reproducibility by storing complete config data
 
 #### Manual Commit Management
 
@@ -399,25 +390,25 @@ python utils/postgres_track_commits.py query
 
 ### Grafana Dashboard
 
-The `dashboards/` directory contains a production-ready Grafana dashboard solution:
+The `dashboards/` directory contains a Grafana dashboard solution:
 
 **Features:**
 
 - PostgreSQL backend for data persistence
-- Deployed on AWS EKS with CloudFront CDN
+- Deployment on AWS EKS with CloudFront CDN
 - Public dashboard sharing capabilities
-- Advanced visualization and alerting
+- Visualization and alerting
 - Real-time performance metrics
 - Historical trend analysis
 - Commit-level performance tracking
 
-**What's Included:**
+**Contents:**
 
-- Pre-built Grafana dashboard JSON files (3 variants)
-- Complete AWS infrastructure as code (CloudFormation)
+- Grafana dashboard JSON files (3 variants)
+- AWS infrastructure as code (CloudFormation)
 - Kubernetes manifests and Helm values
-- Automated deployment scripts
-- Comprehensive documentation
+- Deployment scripts
+- Documentation
 
 **Quick Start:**
 
@@ -434,7 +425,7 @@ See `dashboards/README.md` for detailed deployment instructions.
 ### Commit Management
 
 - `utils/postgres_track_commits.py`: Manages commit tracking, status updates, and cleanup operations using PostgreSQL
-- `utils/push_to_postgres.py`: Pushes benchmark metrics to PostgreSQL with **dynamic schema support** - automatically creates database columns for new metrics added to `metrics.json` files
+- `utils/push_to_postgres.py`: Pushes benchmark metrics to PostgreSQL with **dynamic schema support** - creates database columns for new metrics added to `metrics.json` files
 - `utils/compare_benchmark_results.py`: Utilities for comparing benchmark results across commits
 
 ### Configuration Files
@@ -454,7 +445,7 @@ python benchmark.py --commits HEAD
 
 ### Adding New Configurations
 
-Create new JSON configuration files in the `configs/` directory following the existing format. Each configuration object represents a complete benchmark scenario.
+Create new JSON configuration files in the `configs/` directory following the existing format. Each configuration object represents a benchmark scenario.
 
 ## License
 
