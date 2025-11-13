@@ -8,9 +8,11 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 
-import psycopg2
-from psycopg2.extras import Json
-
+try:
+    import psycopg2
+    from psycopg2.extras import Json
+except ImportError:
+    print("Please install psycopg2 to use this script.")
 
 def create_tables(conn):
     """Create benchmark tracking tables if they don't exist."""
@@ -467,6 +469,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="PostgreSQL-based commit tracking for benchmarks"
     )
+
+    parser.add_argument(
+        "operation", 
+        choices=["determine", "mark", "query", "cleanup"],
+        help="Operation to perform"
+    )
+    
+    # Database connection arguments
     parser.add_argument("--host", required=True, help="PostgreSQL host")
     parser.add_argument("--port", type=int, default=5432, help="PostgreSQL port")
     parser.add_argument("--database", required=True, help="Database name")
@@ -475,52 +485,38 @@ def main():
         "--password", required=True, help="Database password (or use IAM auth)"
     )
 
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    # Determine command
-    determine_parser = sub.add_parser("determine", help="List commits to benchmark")
-    determine_parser.add_argument("--repo", type=Path, required=True)
-    determine_parser.add_argument("--branch", default="unstable")
-    determine_parser.add_argument("--max-commits", type=int, default=3)
-    determine_parser.add_argument("--config-file", type=str, help="Config file to load")
-    determine_parser.add_argument(
+    # Arguments for determine operation
+    parser.add_argument("--repo", type=Path, help="Git repository path (for determine/mark)")
+    parser.add_argument("--branch", default="unstable", help="Git branch (for determine)")
+    parser.add_argument("--max-commits", type=int, default=3, help="Max commits to return (for determine)")
+    parser.add_argument("--config-file", type=str, help="Config file to load")
+    parser.add_argument(
         "--disable-subset-detection",
         action="store_true",
-        help="Disable subset config detection (force exact config matching)",
+        help="Disable subset config detection (for determine)",
     )
 
-    # Mark command
-    mark_parser = sub.add_parser("mark", help="Mark commits with a status")
-    mark_parser.add_argument("--repo", type=Path, required=True)
-    mark_parser.add_argument(
-        "--status", required=True, choices=["in_progress", "complete"]
-    )
-    mark_parser.add_argument("--config-file", type=str, help="Config file to load")
-    mark_parser.add_argument("shas", nargs="+")
-
-    # Query command
-    query_parser = sub.add_parser("query", help="Query commits by config")
-    query_parser.add_argument(
-        "--config-file", type=str, help="Config file to filter by"
-    )
-    query_parser.add_argument(
-        "--list-configs", action="store_true", help="List all unique configs"
+    # Arguments for mark operation
+    parser.add_argument(
+        "--status", choices=["in_progress", "complete"], help="Status to set (for mark)"
     )
 
-    # Stats command
-    sub.add_parser("stats", help="Show statistics")
-
-    # Export command
-    export_parser = sub.add_parser("export", help="Export to JSON file")
-    export_parser.add_argument(
-        "--output", type=Path, required=True, help="Output JSON file"
+    # Arguments for query operation
+    parser.add_argument(
+        "--list-configs", action="store_true", help="List all unique configs (for query)"
     )
 
-    # Cleanup command
-    sub.add_parser("cleanup", help="Clean up incomplete commits")
-
-    args = parser.parse_args()
-
+    # Parse known args first to get the operation
+    args, remaining_args = parser.parse_known_args()
+    
+    # Add shas argument only for mark operation
+    if args.operation == "mark":
+        parser.add_argument("shas", nargs="+", help="Commit SHAs (required for mark)")
+        args = parser.parse_args()
+    elif remaining_args:
+        # If there are remaining args for non-mark operations, it's an error
+        parser.error(f"unrecognized arguments: {' '.join(remaining_args)}")
+    
     # Connect to PostgreSQL
     try:
         conn = psycopg2.connect(
@@ -538,7 +534,11 @@ def main():
         sys.exit(1)
 
     try:
-        if args.cmd == "determine":
+        if args.operation == "determine":
+            if not args.repo:
+                print("Error: --repo is required for determine operation", file=sys.stderr)
+                sys.exit(1)
+                
             config = None
             if args.config_file:
                 with open(args.config_file, "r") as f:
@@ -555,7 +555,17 @@ def main():
             )
             print(" ".join(commits))
 
-        elif args.cmd == "mark":
+        elif args.operation == "mark":
+            if not args.repo:
+                print("Error: --repo is required for mark operation", file=sys.stderr)
+                sys.exit(1)
+            if not args.status:
+                print("Error: --status is required for mark operation", file=sys.stderr)
+                sys.exit(1)
+            if not args.shas:
+                print("Error: commit SHAs are required for mark operation", file=sys.stderr)
+                sys.exit(1)
+                
             config = None
             if args.config_file:
                 with open(args.config_file, "r") as f:
@@ -569,7 +579,7 @@ def main():
                 config=config,
             )
 
-        elif args.cmd == "query":
+        elif args.operation == "query":
             config = None
             if args.config_file:
                 with open(args.config_file, "r") as f:
@@ -596,22 +606,7 @@ def main():
                 else:
                     print(f"All commits: {count}")
 
-        elif args.cmd == "stats":
-            stats = get_commit_stats(conn)
-            print(f"Total entries: {stats['total']}")
-            print(f"Unique commits: {stats['unique_commits']}")
-            print(f"Unique configs: {stats['unique_configs']}")
-            print("\nBy status:")
-            for status, count in stats["by_status"].items():
-                print(f"  {status}: {count}")
-
-        elif args.cmd == "export":
-            commits = get_commits_by_config(conn, None)
-            with open(args.output, "w") as f:
-                json.dump(commits, f, indent=2)
-            print(f"Exported {len(commits)} commits to {args.output}")
-
-        elif args.cmd == "cleanup":
+        elif args.operation == "cleanup":
             cleanup_incomplete_commits(conn)
 
     finally:
