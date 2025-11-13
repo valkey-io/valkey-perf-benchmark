@@ -308,7 +308,11 @@ def parse_bool(value) -> bool:
 
 
 def run_benchmark_matrix(
-    *, commit_id: str, cfg: dict, args: argparse.Namespace, config_data: Union[dict, None] = None
+    *,
+    commit_id: str,
+    cfg: dict,
+    args: argparse.Namespace,
+    config_data: Union[dict, None] = None,
 ) -> None:
     """Run benchmarks for all tls and cluster mode combinations.
 

@@ -18,6 +18,7 @@ try:
     import numpy as np
     from scipy import stats
     from matplotlib.ticker import FuncFormatter
+
     GRAPHING_AVAILABLE = True
 except ImportError:
     GRAPHING_AVAILABLE = False
@@ -993,9 +994,11 @@ def generate_comparison_graphs(
     Returns list of generated file paths.
     """
     if not GRAPHING_AVAILABLE:
-        print("WARNING: Graphing dependencies (matplotlib, numpy, scipy) not available. Skipping graph generation.")
+        print(
+            "WARNING: Graphing dependencies (matplotlib, numpy, scipy) not available. Skipping graph generation."
+        )
         return []
-        
+
     if not config_groups:
         print("No data available for graph generation")
         return []
@@ -1406,9 +1409,7 @@ def generate_consolidated_metrics_graph(
 
             if metric == "rps":
                 ax.set_ylabel("Requests per Second (Millions)")
-                ax.yaxis.set_major_formatter(
-                    FuncFormatter(lambda x, p: f"{x:.2f}M")
-                )
+                ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f"{x:.2f}M"))
             else:
                 ax.set_ylabel(f'{metric.replace("_", " ").title()} (ms)')
 

@@ -477,13 +477,17 @@ def main():
     # Mark command
     mark_parser = sub.add_parser("mark", help="Mark commits with a status")
     mark_parser.add_argument("--repo", type=Path, required=True)
-    mark_parser.add_argument("--status", required=True, choices=["in_progress", "complete"])
+    mark_parser.add_argument(
+        "--status", required=True, choices=["in_progress", "complete"]
+    )
     mark_parser.add_argument("--config-file", type=str, help="Config file to load")
     mark_parser.add_argument("shas", nargs="+")
 
     # Query command
     query_parser = sub.add_parser("query", help="Query commits by config")
-    query_parser.add_argument("--config-file", type=str, help="Config file to filter by")
+    query_parser.add_argument(
+        "--config-file", type=str, help="Config file to filter by"
+    )
     query_parser.add_argument(
         "--list-configs", action="store_true", help="List all unique configs"
     )
@@ -493,7 +497,9 @@ def main():
 
     # Export command
     export_parser = sub.add_parser("export", help="Export to JSON file")
-    export_parser.add_argument("--output", type=Path, required=True, help="Output JSON file")
+    export_parser.add_argument(
+        "--output", type=Path, required=True, help="Output JSON file"
+    )
 
     # Cleanup command
     sub.add_parser("cleanup", help="Clean up incomplete commits")
