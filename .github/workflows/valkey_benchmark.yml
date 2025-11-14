@@ -8,8 +8,8 @@ on:
         required: false
         default: "3"
         type: string
-  # schedule:
-  #   - cron: '*/25 * * * *'
+  schedule:
+    - cron: '0 */5 * * *'
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
