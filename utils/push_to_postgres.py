@@ -176,7 +176,7 @@ def create_indexes(cur) -> None:
 
 def convert_metrics_to_rows(
     metrics_data: List[Dict[str, Any]], column_order: List[str]
-) -> List[Tuple[Any, ...]]:
+) -> Tuple[List[Tuple[Any, ...]], int]:
     """Convert JSON metrics to PostgreSQL rows dynamically.
 
     Args:
@@ -184,10 +184,24 @@ def convert_metrics_to_rows(
         column_order: Ordered list of column names for the INSERT statement.
 
     Returns:
-        List of tuples ready for PostgreSQL insertion.
+        Tuple of (list of tuples ready for PostgreSQL insertion, number of skipped entries).
     """
     rows = []
-    for metric in metrics_data:
+    skipped_count = 0
+    
+    for i, metric in enumerate(metrics_data):
+        # Skip entries that are None or empty
+        if not metric or not isinstance(metric, dict):
+            print(f"  Skipping entry {i+1}: invalid data")
+            skipped_count += 1
+            continue
+            
+        # Skip entries missing required fields
+        if not metric.get("timestamp") or not metric.get("commit"):
+            print(f"  Skipping entry {i+1}: missing required fields")
+            skipped_count += 1
+            continue
+            
         row = []
         for column in column_order:
             if column in ["id", "created_at"]:
@@ -212,7 +226,7 @@ def convert_metrics_to_rows(
             else:
                 row.append(metric.get(column))
         rows.append(tuple(row))
-    return rows
+    return rows, skipped_count
 
 
 def push_to_postgres(
@@ -249,7 +263,10 @@ def push_to_postgres(
     ]
 
     print(f"  Converting {len(metrics_data)} metrics to rows...")
-    rows = convert_metrics_to_rows(metrics_data, column_order)
+    rows, skipped_entries = convert_metrics_to_rows(metrics_data, column_order)
+    
+    if skipped_entries > 0:
+        print(f"  Skipped {skipped_entries} invalid entries (expected 0)")
 
     if dry_run:
         print(f"Would insert {len(rows)} rows with {len(column_order)} columns:")
@@ -275,13 +292,16 @@ def push_to_postgres(
     print("  Committing transaction...")
     conn.commit()
 
-    print(f"Successfully inserted all {inserted_count} rows")
+    if inserted_count != len(rows):
+        print(f"  Skipped {len(rows) - inserted_count} rows during insert (expected 0)")
+    
+    print(f"Successfully inserted {inserted_count} rows")
     return len(rows)
 
 
 def process_commit_metrics(
     commit_dir: Path, conn: psycopg2.extensions.connection, dry_run: bool = False
-) -> int:
+) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
     Args:
@@ -290,22 +310,26 @@ def process_commit_metrics(
         dry_run: If True, only show what would be inserted without actually inserting.
 
     Returns:
-        Number of metrics processed from this commit directory.
+        Tuple of (number of metrics processed, whether any records were skipped).
     """
     metrics_file = commit_dir / "metrics.json"
     if not metrics_file.exists():
         print(f"Skipping {commit_dir.name}: no metrics.json found")
-        return 0
+        return 0, True
 
     with open(metrics_file) as f:
         metrics_data = json.load(f)
+
+    if not metrics_data:
+        print(f"Skipping {commit_dir.name}: empty metrics")
+        return 0, True
 
     print(f"\n=== Processing {commit_dir.name} ===")
     count = push_to_postgres(metrics_data, conn, dry_run)
 
     status = "Would insert" if dry_run else "Inserted"
     print(f"{status} {count} metrics")
-    return count
+    return count, False
 
 
 def main() -> None:
@@ -401,17 +425,25 @@ def main() -> None:
         print(f"Found {len(commit_dirs)} commit directories to process")
 
         total_processed = 0
+        total_skipped = 0
+        
         for i, commit_dir in enumerate(commit_dirs, 1):
             print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
             try:
-                count = process_commit_metrics(commit_dir, conn, args.dry_run)
+                count, was_skipped = process_commit_metrics(commit_dir, conn, args.dry_run)
                 total_processed += count
+                if was_skipped:
+                    total_skipped += 1
                 print(f"Completed {commit_dir.name} ({count} metrics)")
             except Exception as e:
                 print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
+                total_skipped += 1
 
         status = "[DRY RUN] Would process" if args.dry_run else "Successfully processed"
         print(f"\n{status} {total_processed} total metrics")
+        
+        if total_skipped > 0:
+            print(f"Skipped {total_skipped} commits (expected 0)")
 
     finally:
         if conn:

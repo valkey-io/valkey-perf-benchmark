@@ -443,7 +443,7 @@ curl -I https://$CLOUDFRONT_DOMAIN/api/health
 - Instance: db.t4g.micro (ARM, 1 GB RAM)
 - Storage: 20 GB gp3 (encrypted)
 - Location: Private subnets only
-- Backup: 7 days retention
+- Backup: 3 days retention
 - Monitoring: Basic CloudWatch metrics
 
 **Tables:**

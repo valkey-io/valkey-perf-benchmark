@@ -195,7 +195,7 @@ class ServerLauncher:
 
         while time.time() - start_time < timeout:
             try:
-                # Get cluster nodes information - more comprehensive than CLUSTER SLOTS
+                # Get cluster nodes information
                 nodes_info = client.execute_command("CLUSTER", "NODES")
 
                 if not nodes_info:

@@ -122,6 +122,86 @@ get_user_input() {
     print_success "Configuration complete"
 }
 
+# Function to monitor CloudFormation stack events
+monitor_stack_events() {
+    local stack_name="$1"
+    local operation="$2"  # CREATE or UPDATE
+    local start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    print_status "Monitoring stack $operation progress..."
+    
+    # Track resources being created/updated
+    local resources_in_progress=()
+    local completed_resources=()
+    local failed_resources=()
+    
+    while true; do
+        # Get stack status
+        local stack_status=$(aws cloudformation describe-stacks \
+            --stack-name "$stack_name" \
+            --region "$REGION" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "UNKNOWN")
+        
+        # Get recent events
+        local events=$(aws cloudformation describe-stack-events \
+            --stack-name "$stack_name" \
+            --region "$REGION" \
+            --query "StackEvents[?Timestamp>=\`$start_time\`].[LogicalResourceId,ResourceStatus,ResourceStatusReason,Timestamp]" \
+            --output text 2>/dev/null | sort -k4)
+        
+        # Process events and show progress
+        while IFS=$'\t' read -r resource_id resource_status reason timestamp; do
+            if [[ -n "$resource_id" ]]; then
+                case "$resource_status" in
+                    *_IN_PROGRESS)
+                        if [[ ! " ${resources_in_progress[@]} " =~ " ${resource_id} " ]]; then
+                            resources_in_progress+=("$resource_id")
+                            print_status "IN_PROGRESS: $resource_id: $resource_status"
+                        fi
+                        ;;
+                    *_COMPLETE)
+                        if [[ " ${resources_in_progress[@]} " =~ " ${resource_id} " ]]; then
+                            # Remove from in-progress
+                            resources_in_progress=("${resources_in_progress[@]/$resource_id}")
+                            completed_resources+=("$resource_id")
+                            print_success "COMPLETE: $resource_id: $resource_status"
+                        fi
+                        ;;
+                    *_FAILED)
+                        failed_resources+=("$resource_id")
+                        print_error "FAILED: $resource_id: $resource_status - $reason"
+                        ;;
+                esac
+            fi
+        done <<< "$events"
+        
+        # Check if operation is complete
+        case "$stack_status" in
+            CREATE_COMPLETE|UPDATE_COMPLETE)
+                print_success "Stack $operation completed successfully!"
+                echo "Summary: ${#completed_resources[@]} resources completed, ${#failed_resources[@]} failed"
+                return 0
+                ;;
+            CREATE_FAILED|UPDATE_FAILED|ROLLBACK_COMPLETE|UPDATE_ROLLBACK_COMPLETE)
+                print_error "Stack $operation failed with status: $stack_status"
+                if [ ${#failed_resources[@]} -gt 0 ]; then
+                    print_error "Failed resources: ${failed_resources[*]}"
+                fi
+                return 1
+                ;;
+            *)
+                # Still in progress, show current status
+                if [ ${#resources_in_progress[@]} -gt 0 ]; then
+                    echo -ne "\rActive: ${#resources_in_progress[@]} | Completed: ${#completed_resources[@]} | Status: $stack_status"
+                fi
+                ;;
+        esac
+        
+        sleep 15
+    done
+}
+
 # Function to deploy CloudFormation stack
 deploy_infrastructure() {
     print_status "Deploying infrastructure stack: $STACK_NAME"
@@ -144,21 +224,52 @@ deploy_infrastructure() {
     fi
     
     # Check if stack exists
+    local operation=""
     if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
         print_status "Updating existing stack..."
-        aws cloudformation update-stack \
+        operation="UPDATE"
+        
+        # Check if update is needed
+        local change_set_name="update-changeset-$(date +%s)"
+        aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
+            --change-set-name "$change_set_name" \
             --template-body file://infrastructure/cloudformation/valkey-benchmark-stack.yaml \
             --parameters "${params[@]}" \
             --capabilities CAPABILITY_NAMED_IAM \
+            --region "$REGION" >/dev/null 2>&1
+        
+        # Wait for change set creation
+        sleep 5
+        
+        # Check if there are changes
+        local changes=$(aws cloudformation describe-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$change_set_name" \
+            --region "$REGION" \
+            --query 'Changes' \
+            --output text 2>/dev/null || echo "")
+        
+        if [[ "$changes" == "None" ]] || [[ -z "$changes" ]]; then
+            print_status "No changes detected in stack. Skipping update."
+            aws cloudformation delete-change-set \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$change_set_name" \
+                --region "$REGION" >/dev/null 2>&1
+            return 0
+        fi
+        
+        # Execute the change set
+        aws cloudformation execute-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$change_set_name" \
             --region "$REGION"
         
-        print_status "Waiting for stack update to complete..."
-        aws cloudformation wait stack-update-complete \
-            --stack-name "$STACK_NAME" \
-            --region "$REGION"
+        print_status "Stack update initiated. This may take 15-30 minutes..."
     else
         print_status "Creating new stack..."
+        operation="CREATE"
+        
         aws cloudformation create-stack \
             --stack-name "$STACK_NAME" \
             --template-body file://infrastructure/cloudformation/valkey-benchmark-stack.yaml \
@@ -166,10 +277,20 @@ deploy_infrastructure() {
             --capabilities CAPABILITY_NAMED_IAM \
             --region "$REGION"
         
-        print_status "Waiting for stack creation to complete (this may take 25-40 minutes)..."
-        aws cloudformation wait stack-create-complete \
-            --stack-name "$STACK_NAME" \
-            --region "$REGION"
+        print_status "Stack creation initiated. This may take 25-40 minutes..."
+        echo "Resources to be created:"
+        echo "  - VPC with public/private subnets"
+        echo "  - EKS Fargate cluster"
+        echo "  - RDS PostgreSQL (MultiAZ enabled)"
+        echo "  - Security groups and IAM roles"
+        echo "  - CloudFront distribution (if ALB DNS provided)"
+        echo
+    fi
+    
+    # Monitor the deployment with detailed progress
+    if ! monitor_stack_events "$STACK_NAME" "$operation"; then
+        print_error "Stack deployment failed. Check AWS CloudFormation console for details."
+        return 1
     fi
     
     print_success "Infrastructure deployment complete"
@@ -287,23 +408,44 @@ wait_for_alb() {
     
     local max_attempts=60
     local attempt=0
+    local start_time=$(date +%s)
     
     while [ $attempt -lt $max_attempts ]; do
         local alb_dns=$(kubectl get ingress -n grafana grafana-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
         
         if [ -n "$alb_dns" ]; then
-            print_success "ALB provisioned: $alb_dns"
+            local elapsed=$(($(date +%s) - start_time))
+            print_success "ALB provisioned: $alb_dns (took ${elapsed}s)"
             echo "$alb_dns" > alb-dns-name.txt
             export GRAFANA_ALB_DNS_NAME="$alb_dns"
+            
+            # Test ALB health
+            print_status "Testing ALB health..."
+            local health_check_attempts=0
+            while [ $health_check_attempts -lt 12 ]; do
+                if curl -s -o /dev/null -w "%{http_code}" "http://$alb_dns" | grep -q "200\|302\|404"; then
+                    print_success "ALB is responding to requests"
+                    break
+                fi
+                echo -n "."
+                sleep 5
+                ((health_check_attempts++))
+            done
+            
             return 0
         fi
         
-        echo -n "."
+        # Show progress indicator
+        local elapsed=$(($(date +%s) - start_time))
+        echo -ne "\rWaiting for ALB... (${elapsed}s elapsed, attempt $((attempt + 1))/$max_attempts)"
+        
         sleep 10
         ((attempt++))
     done
     
-    print_error "Timeout waiting for ALB provisioning"
+    echo # New line after progress indicator
+    print_error "Timeout waiting for ALB provisioning after $((max_attempts * 10)) seconds"
+    print_error "Check AWS Load Balancer Controller logs: kubectl logs -n kube-system deployment/aws-load-balancer-controller"
     return 1
 }
 
@@ -476,7 +618,7 @@ display_final_info() {
     echo "2. Import dashboards via Grafana UI"
     echo "3. Enable public dashboard sharing"
     echo
-    echo "✅ Security hardening completed automatically!"
+    echo "Security hardening completed automatically!"
     echo
     echo "Stack outputs saved in: stack-outputs.json"
     echo "ALB DNS saved in: alb-dns-name.txt"
@@ -499,7 +641,7 @@ main() {
     update_stack_with_cloudfront
     display_final_info
     
-    print_success "All done! 🚀"
+    print_success "All done!"
 }
 
 # Run main function

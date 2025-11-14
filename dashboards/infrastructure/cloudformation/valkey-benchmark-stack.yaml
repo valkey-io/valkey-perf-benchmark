@@ -655,10 +655,10 @@ Resources:
       VPCSecurityGroups:
         - !Ref RDSSecurityGroup
       DBSubnetGroupName: !Ref RDSSubnetGroup
-      BackupRetentionPeriod: 7
+      BackupRetentionPeriod: 3
       PreferredBackupWindow: "03:00-04:00"
       PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
-      MultiAZ: false
+      MultiAZ: true
       PubliclyAccessible: false
       DeletionProtection: false
       EnablePerformanceInsights: false
