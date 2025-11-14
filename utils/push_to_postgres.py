@@ -188,20 +188,20 @@ def convert_metrics_to_rows(
     """
     rows = []
     skipped_count = 0
-    
+
     for i, metric in enumerate(metrics_data):
         # Skip entries that are None or empty
         if not metric or not isinstance(metric, dict):
             print(f"  Skipping entry {i+1}: invalid data")
             skipped_count += 1
             continue
-            
+
         # Skip entries missing required fields
         if not metric.get("timestamp") or not metric.get("commit"):
             print(f"  Skipping entry {i+1}: missing required fields")
             skipped_count += 1
             continue
-            
+
         row = []
         for column in column_order:
             if column in ["id", "created_at"]:
@@ -220,10 +220,8 @@ def convert_metrics_to_rows(
                         row.append(None)
                 else:
                     row.append(None)
-            elif column == "valkey-benchmark-threads":
-                # Handle the hyphenated field name
-                row.append(metric.get("valkey-benchmark-threads"))
             else:
+                # Direct field mapping since field names are now normalized
                 row.append(metric.get(column))
         rows.append(tuple(row))
     return rows, skipped_count
@@ -264,7 +262,7 @@ def push_to_postgres(
 
     print(f"  Converting {len(metrics_data)} metrics to rows...")
     rows, skipped_entries = convert_metrics_to_rows(metrics_data, column_order)
-    
+
     if skipped_entries > 0:
         print(f"  Skipped {skipped_entries} invalid entries (expected 0)")
 
@@ -294,7 +292,7 @@ def push_to_postgres(
 
     if inserted_count != len(rows):
         print(f"  Skipped {len(rows) - inserted_count} rows during insert (expected 0)")
-    
+
     print(f"Successfully inserted {inserted_count} rows")
     return len(rows)
 
@@ -426,11 +424,13 @@ def main() -> None:
 
         total_processed = 0
         total_skipped = 0
-        
+
         for i, commit_dir in enumerate(commit_dirs, 1):
             print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
             try:
-                count, was_skipped = process_commit_metrics(commit_dir, conn, args.dry_run)
+                count, was_skipped = process_commit_metrics(
+                    commit_dir, conn, args.dry_run
+                )
                 total_processed += count
                 if was_skipped:
                     total_skipped += 1
@@ -441,7 +441,7 @@ def main() -> None:
 
         status = "[DRY RUN] Would process" if args.dry_run else "Successfully processed"
         print(f"\n{status} {total_processed} total metrics")
-        
+
         if total_skipped > 0:
             print(f"Skipped {total_skipped} commits (expected 0)")
 

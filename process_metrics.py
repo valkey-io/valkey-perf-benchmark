@@ -140,7 +140,7 @@ class MetricsProcessor:
 
             # Add benchmark_threads to metrics if it was specified
             if self.benchmark_threads is not None:
-                metrics_dict["valkey-benchmark-threads"] = self.benchmark_threads
+                metrics_dict["valkey_benchmark_threads"] = self.benchmark_threads
 
             # Add warmup to metrics if it was specified
             if warmup is not None:
