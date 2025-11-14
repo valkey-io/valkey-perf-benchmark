@@ -127,7 +127,7 @@ class ClientRunner:
         cwd: Optional[Path] = None,
         capture_output: bool = False,
         text: bool = True,
-        timeout: int = 300,
+        timeout: Optional[int] = 300,
     ) -> Optional[subprocess.CompletedProcess]:
         """Execute a command with proper error handling and timeout."""
         cmd_list = list(command)
@@ -143,7 +143,7 @@ class ClientRunner:
                 check=True,
                 timeout=timeout,
             )
-            if result and result.stderr:
+            if result.stderr:
                 logging.warning(f"Command stderr: {result.stderr}")
             return result if capture_output else None
         except subprocess.TimeoutExpired as e:
@@ -184,12 +184,14 @@ class ClientRunner:
     def get_commit_time(self, commit_id: str) -> str:
         """Return timestamp for a commit."""
         try:
-            commit_time = self._run(
+            result = self._run(
                 ["git", "show", "-s", "--format=%cI", commit_id],
                 cwd=self.valkey_path,
                 capture_output=True,
             )
-            return commit_time.stdout.strip()
+            if result is None:
+                raise RuntimeError("Failed to get commit time: no result returned")
+            return result.stdout.strip()
         except Exception as e:
             logging.exception(f"Failed to get commit time for {commit_id}: {e}")
             raise
@@ -336,6 +338,10 @@ class ClientRunner:
                 proc = self._run(
                     bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None
                 )
+                if proc is None:
+                    logging.error("Benchmark command failed to return results")
+                    continue
+
                 logging.info(f"Benchmark output:\n{proc.stdout}")
                 if proc.stderr:
                     logging.warning(f"Benchmark stderr:\n{proc.stderr}")
@@ -426,6 +432,10 @@ class ClientRunner:
 
     def _restart_server(self) -> None:
         """Restart the Valkey server for a clean state."""
+        if self.server_launcher is None:
+            logging.error("No server launcher available for restart")
+            return
+
         logging.info("Restarting Valkey server for clean state...")
 
         # Shutdown current server

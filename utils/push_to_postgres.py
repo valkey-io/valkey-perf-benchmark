@@ -98,7 +98,10 @@ def get_existing_columns(conn: psycopg2.extensions.connection) -> Set[str]:
             AND table_schema = 'public'
         """
         )
-        return {row[0] for row in cur.fetchall()}
+        result = cur.fetchall()
+        if result is None:
+            return set()
+        return {row[0] for row in result}
 
 
 def create_or_update_table(
@@ -116,7 +119,11 @@ def create_or_update_table(
             )
         """
         )
-        table_exists = cur.fetchone()[0]
+        result = cur.fetchone()
+        if result is None:
+            table_exists = False
+        else:
+            table_exists = result[0]
 
         if not table_exists:
             # Create new table with all required columns
@@ -167,11 +174,7 @@ def create_indexes(cur) -> None:
     ]
 
     for index_sql in indexes:
-        try:
-            cur.execute(index_sql)
-        except psycopg2.Error as e:
-            # Index creation might fail if columns don't exist yet, that's OK
-            print(f"Note: Could not create index - {e}")
+        cur.execute(index_sql)
 
 
 def convert_metrics_to_rows(
@@ -229,7 +232,7 @@ def convert_metrics_to_rows(
 
 def push_to_postgres(
     metrics_data: List[Dict[str, Any]],
-    conn: psycopg2.extensions.connection,
+    conn: Optional[psycopg2.extensions.connection],
     dry_run: bool = False,
 ) -> int:
     """Push metrics to PostgreSQL with dynamic schema support.
@@ -252,6 +255,10 @@ def push_to_postgres(
     required_schema = analyze_metrics_schema(metrics_data)
 
     if not dry_run:
+        if conn is None:
+            raise ValueError(
+                "Database connection is required for non-dry-run operations"
+            )
         # Create or update table schema
         create_or_update_table(conn, required_schema)
 
@@ -282,6 +289,9 @@ def push_to_postgres(
         VALUES %s
     """
 
+    if conn is None:
+        raise ValueError("Database connection is required for inserting data")
+
     print(f"  Inserting {len(rows)} rows into database...")
     with conn.cursor() as cur:
         execute_values(cur, insert_sql, rows)
@@ -298,7 +308,9 @@ def push_to_postgres(
 
 
 def process_commit_metrics(
-    commit_dir: Path, conn: psycopg2.extensions.connection, dry_run: bool = False
+    commit_dir: Path,
+    conn: Optional[psycopg2.extensions.connection],
+    dry_run: bool = False,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
@@ -386,22 +398,7 @@ def main() -> None:
             print(f"Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:
             if "timeout expired" in str(e) or "Connection timed out" in str(e):
-                print("\nConnection timeout to RDS instance.", file=sys.stderr)
-                print("This indicates a network connectivity issue.", file=sys.stderr)
-                print("\nTroubleshooting steps:", file=sys.stderr)
-                print(
-                    "1. Check RDS Security Group allows inbound port 5432 from GitHub Actions IP",
-                    file=sys.stderr,
-                )
-                print("2. Verify RDS is in correct VPC/subnets", file=sys.stderr)
-                print(
-                    "3. Check if RDS is publicly accessible (if needed)",
-                    file=sys.stderr,
-                )
-                print(
-                    "4. Consider using RDS Proxy for better connectivity",
-                    file=sys.stderr,
-                )
+                print(f"Connection timeout to RDS: {e}", file=sys.stderr)
             else:
                 print(f"PostgreSQL connection error: {e}", file=sys.stderr)
             sys.exit(1)
@@ -423,7 +420,6 @@ def main() -> None:
         print(f"Found {len(commit_dirs)} commit directories to process")
 
         total_processed = 0
-        total_skipped = 0
 
         for i, commit_dir in enumerate(commit_dirs, 1):
             print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
@@ -433,17 +429,14 @@ def main() -> None:
                 )
                 total_processed += count
                 if was_skipped:
-                    total_skipped += 1
+                    print(f"Warning: Skipped {commit_dir.name} (no valid metrics)")
                 print(f"Completed {commit_dir.name} ({count} metrics)")
             except Exception as e:
                 print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
-                total_skipped += 1
+                sys.exit(1)
 
         status = "[DRY RUN] Would process" if args.dry_run else "Successfully processed"
         print(f"\n{status} {total_processed} total metrics")
-
-        if total_skipped > 0:
-            print(f"Skipped {total_skipped} commits (expected 0)")
 
     finally:
         if conn:

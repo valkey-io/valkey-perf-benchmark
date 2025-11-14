@@ -55,7 +55,7 @@ class ServerLauncher:
         return valkey.Valkey(**kwargs)
 
     def _run(
-        self, command: Iterable[str], cwd: Optional[Path] = None, timeout: int = 60
+        self, command: Iterable[str], cwd: Optional[str] = None, timeout: int = 60
     ) -> subprocess.CompletedProcess:
         """Execute a command with proper error handling and timeout."""
         cmd_list = list(command)
@@ -192,6 +192,7 @@ class ServerLauncher:
         expected_slots = set(range(start_slot, end_slot + 1))
         start_time = time.time()
         last_error = None
+        missing_slots = set()  # Initialize missing_slots
 
         while time.time() - start_time < timeout:
             try:
@@ -252,7 +253,7 @@ class ServerLauncher:
                     continue
 
                 # Check for node failure states
-                if "fail" in node_flags:
+                if node_flags and "fail" in node_flags:
                     raise RuntimeError("Current node is marked as failed in cluster")
 
                 # Check if all expected slots are assigned to this node
@@ -267,7 +268,7 @@ class ServerLauncher:
                             f"Current node has extra slots beyond expected range: {extra_ranges}"
                         )
 
-                    if "noaddr" in node_flags:
+                    if node_flags and "noaddr" in node_flags:
                         logging.warning(
                             "Current node has 'noaddr' flag - may indicate network issues"
                         )
@@ -309,11 +310,10 @@ class ServerLauncher:
                 f"Slot assignment verification timed out after {elapsed:.1f}s. Last error: {last_error}"
             )
         else:
-            missing_ranges = (
-                self._format_slot_ranges(sorted(missing_slots))
-                if "missing_slots" in locals()
-                else "unknown"
-            )
+            try:
+                missing_ranges = self._format_slot_ranges(sorted(missing_slots))
+            except NameError:
+                missing_ranges = "unknown"
             raise RuntimeError(
                 f"Slot assignment verification timed out after {elapsed:.1f}s. Missing slots: {missing_ranges}"
             )
