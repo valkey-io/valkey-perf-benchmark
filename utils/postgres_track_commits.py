@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,21 @@ from typing import List, Dict, Optional
 
 import psycopg2
 from psycopg2.extras import Json
+
+
+def get_system_architecture() -> str:
+    """Detect the system architecture.
+    
+    Returns:
+        Architecture string (e.g., 'x86_64', 'aarch64', 'arm64')
+    """
+    machine = platform.machine().lower()
+    # Normalize common architecture names
+    if machine in ('aarch64', 'arm64'):
+        return 'arm64'
+    elif machine in ('x86_64', 'amd64'):
+        return 'x86_64'
+    return machine
 
 
 def create_tables(conn):
@@ -23,11 +39,12 @@ def create_tables(conn):
                 timestamp TIMESTAMPTZ NOT NULL,
                 status VARCHAR(20) NOT NULL CHECK (status IN ('in_progress', 'complete')),
                 config JSONB NOT NULL,
+                architecture VARCHAR(50),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
                 
                 -- Unique constraint: same commit + config can only exist once
-                CONSTRAINT unique_sha_config UNIQUE(sha, config)
+                CONSTRAINT unique_sha_config UNIQUE(sha, config, architecture)
             );
             
             -- Indexes for fast lookups
@@ -67,15 +84,16 @@ def _git_commit_time(repo: Path, sha: str) -> str:
 
 
 def mark_commits(
-    conn, repo: Path, shas: List[str], status: str, config: Optional[dict] = None
+    conn, repo: Path, shas: List[str], status: str, architecture: str, config: Optional[dict] = None
 ) -> None:
-    """Mark commits with status and config.
+    """Mark commits with status, architecture, and config.
 
     Args:
         conn: PostgreSQL connection
         repo: Path to git repository
         shas: List of commit SHAs to mark
         status: Status to set ('in_progress', 'complete')
+        architecture: Architecture (e.g., 'x86_64', 'arm64')
         config: Config content (dict/list) to track
     """
     # Ensure tables exist
@@ -94,14 +112,14 @@ def mark_commits(
             # Insert or update
             cur.execute(
                 """
-                INSERT INTO benchmark_commits (sha, status, config, timestamp)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (sha, config) 
+                INSERT INTO benchmark_commits (sha, status, config, timestamp, architecture)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (sha, config, architecture) 
                 DO UPDATE SET 
                     status = EXCLUDED.status,
                     updated_at = NOW()
             """,
-                (sha, status, Json(config) if config else Json({}), ts),
+                (sha, status, Json(config) if config else Json({}), ts, architecture),
             )
 
             # Format config for display
@@ -112,7 +130,7 @@ def mark_commits(
                     config_display = f" (config: io-threads={first_cfg.get('io-threads', 'N/A')}, cluster={first_cfg.get('cluster_mode', 'N/A')})"
 
             print(
-                f"Marked {sha} as {status} with timestamp {ts}{config_display}",
+                f"Marked {sha} (on {architecture}) as {status} with timestamp {ts}{config_display}",
                 file=sys.stderr,
             )
 
@@ -220,13 +238,14 @@ def _is_config_array_subset(
     return True
 
 
-def _find_superset_configs(conn, sha: str, target_config: dict) -> List[dict]:
+def _find_superset_configs(conn, sha: str, target_config: dict, architecture: str) -> List[dict]:
     """Find completed configs for a commit that are supersets of target_config.
 
     Args:
         conn: PostgreSQL connection
         sha: Commit SHA to check
         target_config: Config to find supersets for
+        architecture: Architecture to filter by
 
     Returns:
         List of superset configs found
@@ -235,9 +254,9 @@ def _find_superset_configs(conn, sha: str, target_config: dict) -> List[dict]:
         cur.execute(
             """
             SELECT config FROM benchmark_commits
-            WHERE sha = %s AND status = 'complete'
+            WHERE sha = %s AND status = 'complete' AND architecture = %s
         """,
-            (sha,),
+            (sha, architecture),
         )
 
         completed_configs = [row[0] for row in cur.fetchall()]
@@ -260,16 +279,18 @@ def determine_commits_to_benchmark(
     repo: Path,
     branch: str,
     max_commits: int,
+    architecture: str,
     config: Optional[dict] = None,
     enable_subset_detection: bool = True,
 ) -> List[str]:
-    """Return up to max_commits SHAs not benchmarked with the given config.
+    """Return up to max_commits SHAs not benchmarked with the given config and architecture.
 
     Args:
         conn: PostgreSQL connection
         repo: Path to git repository
         branch: Git branch to examine
         max_commits: Maximum number of commits to return
+        architecture: Architecture to filter by
         config: Config content to check against
         enable_subset_detection: If True, skip commits that have superset configs completed
 
@@ -291,16 +312,17 @@ def determine_commits_to_benchmark(
             cur.execute(
                 """
                 SELECT DISTINCT sha FROM benchmark_commits
-                WHERE status = 'complete' AND config = %s
+                WHERE status = 'complete' AND config = %s AND architecture = %s
             """,
-                (Json(config),),
+                (Json(config), architecture),
             )
         else:
             cur.execute(
                 """
                 SELECT DISTINCT sha FROM benchmark_commits
-                WHERE status = 'complete'
-            """
+                WHERE status = 'complete' AND architecture = %s
+            """,
+                (architecture,),
             )
 
         exact_completed = {row[0] for row in cur.fetchall()}
@@ -316,7 +338,7 @@ def determine_commits_to_benchmark(
 
         # Check for subset detection if enabled and config is provided
         if enable_subset_detection and config:
-            superset_configs = _find_superset_configs(conn, sha, config)
+            superset_configs = _find_superset_configs(conn, sha, config, architecture)
             if superset_configs:
                 subset_skipped += 1
                 # Format superset info for display
@@ -356,12 +378,13 @@ def determine_commits_to_benchmark(
     return commits
 
 
-def get_commits_by_config(conn, config: Optional[dict] = None) -> List[Dict]:
-    """Get commits filtered by config content.
+def get_commits_by_config(conn, architecture: str, config: Optional[dict] = None) -> List[Dict]:
+    """Get commits filtered by architecture and config.
 
     Args:
         conn: PostgreSQL connection
-        config: Config to filter by (None returns all)
+        architecture: Architecture to filter by
+        config: Config to filter by (None returns all for the architecture)
 
     Returns:
         List of commit entries
@@ -373,20 +396,22 @@ def get_commits_by_config(conn, config: Optional[dict] = None) -> List[Dict]:
         if config:
             cur.execute(
                 """
-                SELECT sha, timestamp, status, config
+                SELECT sha, timestamp, status, config, architecture
                 FROM benchmark_commits
-                WHERE config = %s
+                WHERE config = %s AND architecture = %s
                 ORDER BY timestamp DESC
             """,
-                (Json(config),),
+                (Json(config), architecture),
             )
         else:
             cur.execute(
                 """
-                SELECT sha, timestamp, status, config
+                SELECT sha, timestamp, status, config, architecture
                 FROM benchmark_commits
+                WHERE architecture = %s
                 ORDER BY timestamp DESC
-            """
+            """,
+                (architecture,),
             )
 
         results = []
@@ -397,6 +422,7 @@ def get_commits_by_config(conn, config: Optional[dict] = None) -> List[Dict]:
                     "timestamp": row[1].isoformat(),
                     "status": row[2],
                     "config": row[3],
+                    "architecture": row[4],
                 }
             )
 
@@ -464,6 +490,11 @@ def main():
         action="store_true",
         help="Disable subset config detection (for determine)",
     )
+    parser.add_argument(
+        "--architecture",
+        type=str,
+        help="Architecture (e.g., x86_64, arm64). Auto-detected if not provided.",
+    )
 
     # Arguments for mark operation
     parser.add_argument(
@@ -487,6 +518,11 @@ def main():
     elif remaining_args:
         # If there are remaining args for non-mark operations, it's an error
         parser.error(f"unrecognized arguments: {' '.join(remaining_args)}")
+    
+    # Auto-detect architecture if not provided
+    if not args.architecture:
+        args.architecture = get_system_architecture()
+        print(f"Auto-detected architecture: {args.architecture}", file=sys.stderr)
 
     # Connect to PostgreSQL
     try:
@@ -523,6 +559,7 @@ def main():
                 repo=args.repo,
                 branch=args.branch,
                 max_commits=args.max_commits,
+                architecture=args.architecture,
                 config=config,
                 enable_subset_detection=enable_subset_detection,
             )
@@ -552,6 +589,7 @@ def main():
                 repo=args.repo,
                 shas=args.shas,
                 status=args.status,
+                architecture=args.architecture,
                 config=config,
             )
 
@@ -571,16 +609,16 @@ def main():
                         summary = f"(io-threads={first.get('io-threads', 'N/A')}, cluster={first.get('cluster_mode', 'N/A')}, tls={first.get('tls_mode', 'N/A')})"
                     print(f"  Config {i}: {summary}", file=sys.stderr)
             else:
-                commits = get_commits_by_config(conn, config)
+                commits = get_commits_by_config(conn, args.architecture, config)
                 count = len(commits)
                 if config:
                     summary = ""
                     if isinstance(config, list) and len(config) > 0:
                         cfg = config[0]
                         summary = f" (io-threads={cfg.get('io-threads', 'N/A')}, cluster={cfg.get('cluster_mode', 'N/A')}, tls={cfg.get('tls_mode', 'N/A')})"
-                    print(f"Config{summary}: {count} commits", file=sys.stderr)
+                    print(f"Config{summary} on {args.architecture}: {count} commits", file=sys.stderr)
                 else:
-                    print(f"All commits: {count}", file=sys.stderr)
+                    print(f"All commits on {args.architecture}: {count}", file=sys.stderr)
 
         elif args.operation == "cleanup":
             cleanup_incomplete_commits(conn)
