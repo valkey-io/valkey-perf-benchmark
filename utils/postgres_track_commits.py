@@ -15,16 +15,16 @@ from psycopg2.extras import Json
 
 def get_system_architecture() -> str:
     """Detect the system architecture.
-    
+
     Returns:
         Architecture string (e.g., 'x86_64', 'aarch64', 'arm64')
     """
     machine = platform.machine().lower()
     # Normalize common architecture names
-    if machine in ('aarch64', 'arm64'):
-        return 'arm64'
-    elif machine in ('x86_64', 'amd64'):
-        return 'x86_64'
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    elif machine in ("x86_64", "amd64"):
+        return "x86_64"
     return machine
 
 
@@ -84,7 +84,12 @@ def _git_commit_time(repo: Path, sha: str) -> str:
 
 
 def mark_commits(
-    conn, repo: Path, shas: List[str], status: str, architecture: str, config: Optional[dict] = None
+    conn,
+    repo: Path,
+    shas: List[str],
+    status: str,
+    architecture: str,
+    config: Optional[dict] = None,
 ) -> None:
     """Mark commits with status, architecture, and config.
 
@@ -238,7 +243,9 @@ def _is_config_array_subset(
     return True
 
 
-def _find_superset_configs(conn, sha: str, target_config: dict, architecture: str) -> List[dict]:
+def _find_superset_configs(
+    conn, sha: str, target_config: dict, architecture: str
+) -> List[dict]:
     """Find completed configs for a commit that are supersets of target_config.
 
     Args:
@@ -378,7 +385,9 @@ def determine_commits_to_benchmark(
     return commits
 
 
-def get_commits_by_config(conn, architecture: str, config: Optional[dict] = None) -> List[Dict]:
+def get_commits_by_config(
+    conn, architecture: str, config: Optional[dict] = None
+) -> List[Dict]:
     """Get commits filtered by architecture and config.
 
     Args:
@@ -518,7 +527,7 @@ def main():
     elif remaining_args:
         # If there are remaining args for non-mark operations, it's an error
         parser.error(f"unrecognized arguments: {' '.join(remaining_args)}")
-    
+
     # Auto-detect architecture if not provided
     if not args.architecture:
         args.architecture = get_system_architecture()
@@ -616,9 +625,14 @@ def main():
                     if isinstance(config, list) and len(config) > 0:
                         cfg = config[0]
                         summary = f" (io-threads={cfg.get('io-threads', 'N/A')}, cluster={cfg.get('cluster_mode', 'N/A')}, tls={cfg.get('tls_mode', 'N/A')})"
-                    print(f"Config{summary} on {args.architecture}: {count} commits", file=sys.stderr)
+                    print(
+                        f"Config{summary} on {args.architecture}: {count} commits",
+                        file=sys.stderr,
+                    )
                 else:
-                    print(f"All commits on {args.architecture}: {count}", file=sys.stderr)
+                    print(
+                        f"All commits on {args.architecture}: {count}", file=sys.stderr
+                    )
 
         elif args.operation == "cleanup":
             cleanup_incomplete_commits(conn)
