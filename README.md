@@ -35,13 +35,13 @@ valkey-perf-benchmark/
 ├── configs/                  # Benchmark configuration files
 │   ├── benchmark-configs.json
 │   └── benchmark-configs-cluster-tls.json
-├── dashboards/              # Grafana dashboards and deployment configs
-│   ├── *.json              # Grafana dashboard definitions
-│   ├── grafana-values.yaml # Helm configuration
-│   ├── alb-ingress.yaml    # Kubernetes Ingress config
+├── dashboards/              # Grafana dashboards and AWS infrastructure
+│   ├── grafana/            # Grafana dashboard definitions and Helm config
+│   ├── kubernetes/         # Kubernetes manifests (ALB Ingress)
 │   ├── infrastructure/     # CloudFormation templates
-│   ├── deploy-stack.sh     # Infrastructure deployment script
-│   └── *.md                # Deployment documentation
+│   ├── scripts/            # Phase-based deployment scripts (00-06)
+│   ├── schema.sql          # PostgreSQL database schema
+│   └── README.md           # Deployment documentation
 ├── utils/                   # Utility scripts
 │   ├── postgres_track_commits.py  # Commit tracking and management
 │   └── compare_benchmark_results.py  # Result comparison utilities
@@ -295,14 +295,7 @@ The project includes several GitHub Actions workflows for automated testing and 
 
 ### Commit Tracking
 
-The system uses PostgreSQL to track benchmarking progress. Commits are stored in the `benchmark_commits` table with their status and configuration.
-
-#### Status Flow
-
-Commits progress through the following statuses during the benchmarking workflow:
-
-1. **`in_progress`** - Marked by the workflow when commits are selected for benchmarking
-2. **`complete`** - Marked by the workflow after metrics are successfully pushed to PostgreSQL
+The system uses PostgreSQL to track benchmarking progress. Commits are stored in the `benchmark_commits` table with their status, configuration, and architecture.
 
 #### Status Descriptions
 
@@ -327,105 +320,24 @@ Each commit is tracked with the actual configuration content used for benchmarki
 - Benchmarking the same commit with different configs
 - Reproducibility by storing complete config data
 
-#### Manual Commit Management
+### Performance Dashboard
 
-You can manually manage commit statuses using the PostgreSQL-based utility script:
+The project includes a complete AWS infrastructure for visualizing benchmark results using Grafana:
 
-```bash
-# Mark commits with config tracking (loads config content from file)
-python utils/postgres_track_commits.py mark \
-  --repo /path/to/valkey \
-  --status in_progress \
-  --config-file ./configs/benchmark-config-arm.json \
-  abc123 def456
+- **AWS EKS Fargate** - Serverless Kubernetes (no EC2 nodes)
+- **Amazon RDS PostgreSQL** - Stores benchmark metrics and Grafana configuration
+- **CloudFront CDN** - Global content delivery with HTTPS
+- **Application Load Balancer** - Secured for CloudFront-only access
 
-# Mark commits as benchmark_complete
-python utils/postgres_track_commits.py mark \
-  --repo /path/to/valkey \
-  --status benchmark_complete \
-  --config-file ./configs/benchmark-config-arm.json \
-  abc123
-
-# Mark commits as complete
-python utils/postgres_track_commits.py mark \
-  --repo /path/to/valkey \
-  --status complete \
-  --config-file ./configs/benchmark-config-arm.json \
-  abc123
-
-# Determine which commits need benchmarking (any config)
-python utils/postgres_track_commits.py determine \
-  --repo /path/to/valkey \
-  --branch unstable \
-  --max-commits 5
-
-# Determine which commits need benchmarking for specific config
-# (allows same commit to be benchmarked with different configs)
-python utils/postgres_track_commits.py determine \
-  --repo /path/to/valkey \
-  --branch unstable \
-  --max-commits 5 \
-  --config-file ./configs/benchmark-config-arm.json
-
-# Disable subset detection (force exact config matching)
-python utils/postgres_track_commits.py determine \
-  --repo /path/to/valkey \
-  --branch unstable \
-  --max-commits 5 \
-  --config-file ./configs/benchmark-config-arm.json \
-  --disable-subset-detection
-
-# Query commits by config file
-python utils/postgres_track_commits.py query \
-  --config-file ./configs/benchmark-config-arm.json
-
-# List all config files used
-python utils/postgres_track_commits.py query \
-  --list-configs
-
-# Show all commits with full config data (no filter)
-python utils/postgres_track_commits.py query
-```
-
-### Grafana Dashboard
-
-The `dashboards/` directory contains a Grafana dashboard solution:
-
-**Features:**
-
-- PostgreSQL backend for data persistence
-- Deployment on AWS EKS with CloudFront CDN
-- Public dashboard sharing capabilities
-- Visualization and alerting
-- Real-time performance metrics
-- Historical trend analysis
-- Commit-level performance tracking
-
-**Contents:**
-
-- Grafana dashboard JSON files (3 variants)
-- AWS infrastructure as code (CloudFormation)
-- Kubernetes manifests and Helm values
-- Deployment scripts
-- Documentation
-
-**Quick Start:**
-
-```bash
-cd dashboards/
-./deploy-stack.sh  # Deploy AWS infrastructure
-# Follow GRAFANA_DEPLOYMENT_GUIDE.md for complete setup
-```
-
-See `dashboards/README.md` for detailed deployment instructions.
+See `dashboards/README.md` for complete deployment guide and architecture details.
 
 ## Utilities
 
 ### Commit Management
 
 - `utils/postgres_track_commits.py`: Manages commit tracking, status updates, and cleanup operations using PostgreSQL
-- `utils/push_to_postgres.py`: Pushes benchmark metrics to PostgreSQL with **dynamic schema support** - creates database columns for new metrics added to `metrics.json` files
-- `utils/compare_benchmark_results.py`: Utilities for comparing benchmark results across commits
+- `utils/push_to_postgres.py`: Pushes benchmark metrics to PostgreSQL with dynamic schema support
+- `utils/compare_benchmark_results.py`: Compares benchmarparing benchmark results across commits
 
 ### Configuration Files
 
@@ -437,9 +349,8 @@ See `dashboards/README.md` for detailed deployment instructions.
 ### Local Development
 
 For local development, simply run:
-
 ```bash
-python benchmark.py --commits HEAD
+python benchmark.py
 ```
 
 ### Adding New Configurations
