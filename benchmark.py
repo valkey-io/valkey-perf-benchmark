@@ -237,11 +237,14 @@ def ensure_results_dir(root: Path, commit_id: str) -> Path:
     return d
 
 
-def init_logging(log_path: Path) -> None:
+def init_logging(log_path: Path, log_level: str = "INFO") -> None:
     """Set up logging to both file and stdout/stderr."""
 
+    # Convert string log level to logging constant
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+
     logging.basicConfig(
-        level=logging.INFO,
+        level=numeric_level,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.FileHandler(log_path, mode="w"),
@@ -323,7 +326,7 @@ def run_benchmark_matrix(
         config_data: Full config data including file path and content for tracking
     """
     results_dir = ensure_results_dir(args.results_dir, commit_id)
-    init_logging(results_dir / "logs.txt")
+    init_logging(results_dir / "logs.txt", args.log_level)
     logging.info(f"Loaded config: {cfg}")
 
     # Detect system architecture

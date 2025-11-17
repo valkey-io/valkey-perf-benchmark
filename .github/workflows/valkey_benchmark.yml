@@ -9,7 +9,7 @@ on:
         default: "3"
         type: string
   schedule:
-    - cron: '0 */5 * * *'
+    - cron: "0 */5 * * *"
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group

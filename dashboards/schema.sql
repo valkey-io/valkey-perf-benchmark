@@ -1,12 +1,41 @@
--- Valkey Benchmark Metrics Database Schema
--- This schema matches the one in utils/push_to_postgres.py
--- NOTE: push_to_postgres.py automatically creates this table, so this file is optional
--- Use this if you want to pre-create the schema before running benchmarks
+-- ========================================
+-- RDS Database Setup for Valkey Benchmark
+-- ========================================
+-- Creates two databases:
+-- 1. grafana - for Grafana metrics and settings
+-- 2. postgres - for valkey_benchmark_metrics
+--
+-- Creates two users:
+-- 1. Admin (postgres) - full access to all databases
+-- 2. github_actions - IAM-enabled user for GitHub Actions
+-- ========================================
 
--- Connect to the grafana database first
-\c grafana
+-- Create databases
+SELECT 'CREATE DATABASE grafana' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'grafana')\gexec
+SELECT 'CREATE DATABASE postgres' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'postgres')\gexec
 
--- Create benchmark_metrics table (matches push_to_postgres.py)
+-- Create IAM-enabled user for GitHub Actions
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_user WHERE usename = 'github_actions') THEN
+    CREATE USER github_actions WITH LOGIN;
+    RAISE NOTICE 'Created user: github_actions';
+  ELSE
+    RAISE NOTICE 'User github_actions already exists';
+  END IF;
+END
+$$;
+
+-- Grant rds_iam role for IAM authentication to github_actions
+GRANT rds_iam TO github_actions;
+
+-- Ensure postgres user (Admin) has rds_iam role as well
+GRANT rds_iam TO postgres;
+
+-- Connect to postgres database and set up schema for valkey_benchmark_metrics
+\c postgres
+
+-- Create benchmark_metrics table in postgres database
 CREATE TABLE IF NOT EXISTS benchmark_metrics (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ NOT NULL,
@@ -34,103 +63,56 @@ CREATE TABLE IF NOT EXISTS benchmark_metrics (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Create benchmark_commits table for tracking commit benchmarking status
+CREATE TABLE IF NOT EXISTS benchmark_commits (
+    id SERIAL PRIMARY KEY,
+    sha VARCHAR(40) NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    status VARCHAR(20) NOT NULL CHECK (status IN ('in_progress', 'complete')),
+    config JSONB NOT NULL,
+    architecture VARCHAR(50),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    -- Unique constraint: same commit + config + architecture can only exist once
+    CONSTRAINT unique_sha_config_arch UNIQUE(sha, config, architecture)
+);
+
 -- Create indexes for better query performance
-CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_commit ON benchmark_metrics(commit);
-CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_timestamp ON benchmark_metrics(timestamp);
-CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_command ON benchmark_metrics(command);
+CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_unique 
+    ON benchmark_metrics(timestamp, commit, command, data_size, pipeline, rps, cluster_mode, tls, io_threads, architecture);
+CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_timestamp_command ON benchmark_metrics(timestamp, command);
+CREATE INDEX IF NOT EXISTS idx_commits_sha_status ON benchmark_commits(sha, status);
+CREATE INDEX IF NOT EXISTS idx_commits_status ON benchmark_commits(status);
+CREATE INDEX IF NOT EXISTS idx_commits_config ON benchmark_commits USING GIN(config);
 
--- Create unique index to prevent duplicate entries
-CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmark_metrics_unique 
-    ON benchmark_metrics(timestamp, commit, command, data_size, pipeline);
+-- Grant permissions to github_actions user for postgres database
+GRANT CONNECT ON DATABASE postgres TO github_actions;
+GRANT USAGE ON SCHEMA public TO github_actions;
+GRANT SELECT, INSERT, UPDATE ON benchmark_metrics TO github_actions;
+GRANT SELECT, INSERT, UPDATE, DELETE ON benchmark_commits TO github_actions;
+GRANT USAGE, SELECT ON SEQUENCE benchmark_metrics_id_seq TO github_actions;
+GRANT USAGE, SELECT ON SEQUENCE benchmark_commits_id_seq TO github_actions;
 
--- Create a view for latest metrics per commit
-CREATE OR REPLACE VIEW latest_commit_metrics AS
-SELECT DISTINCT ON (commit, command)
-    commit,
-    timestamp,
-    command,
-    rps,
-    p50_latency_ms,
-    p95_latency_ms,
-    p99_latency_ms,
-    clients,
-    pipeline,
-    data_size,
-    cluster_mode,
-    tls,
-    created_at
-FROM benchmark_metrics
-ORDER BY commit, command, timestamp DESC;
+-- Grant permissions to postgres (admin) user for postgres database
+GRANT ALL PRIVILEGES ON DATABASE postgres TO postgres;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO postgres;
 
--- Create a view for performance trends over time
-CREATE OR REPLACE VIEW performance_trends AS
-SELECT 
-    DATE_TRUNC('day', timestamp) as day,
-    commit,
-    command,
-    AVG(rps) as avg_rps,
-    AVG(p50_latency_ms) as avg_p50,
-    AVG(p95_latency_ms) as avg_p95,
-    AVG(p99_latency_ms) as avg_p99,
-    COUNT(*) as test_count
-FROM benchmark_metrics
-GROUP BY DATE_TRUNC('day', timestamp), commit, command
-ORDER BY day DESC;
+-- Connect to grafana database and grant permissions
+\c grafana
+GRANT CONNECT ON DATABASE grafana TO postgres;
+GRANT ALL PRIVILEGES ON DATABASE grafana TO postgres;
 
--- Create a view for command comparison
-CREATE OR REPLACE VIEW command_comparison AS
-SELECT 
-    command,
-    COUNT(DISTINCT commit) as commit_count,
-    AVG(rps) as avg_rps,
-    MAX(rps) as max_rps,
-    MIN(rps) as min_rps,
-    AVG(p99_latency_ms) as avg_p99_latency,
-    COUNT(*) as total_tests
-FROM benchmark_metrics
-GROUP BY command
-ORDER BY avg_rps DESC;
+-- Allow github_actions to read from grafana database (for datasource access)
+GRANT CONNECT ON DATABASE grafana TO github_actions;
+GRANT USAGE ON SCHEMA public TO github_actions;
 
--- Grant permissions to the IAM-enabled database user
-GRANT SELECT, INSERT, UPDATE ON benchmark_metrics TO CURRENT_USER;
-GRANT USAGE, SELECT ON SEQUENCE benchmark_metrics_id_seq TO CURRENT_USER;
-GRANT SELECT ON latest_commit_metrics TO CURRENT_USER;
-GRANT SELECT ON performance_trends TO CURRENT_USER;
-GRANT SELECT ON command_comparison TO CURRENT_USER;
-
--- Grant rds_iam role for IAM authentication (required for IAM database auth)
-GRANT rds_iam TO CURRENT_USER;
-
--- Display table info
-\d benchmark_metrics
-
--- Show sample query
-SELECT 
-    commit,
-    command,
-    rps,
-    p99_latency_ms,
-    timestamp
-FROM benchmark_metrics
-ORDER BY timestamp DESC
-LIMIT 10;
-
--- Show summary statistics
-SELECT 
-    command,
-    COUNT(*) as test_count,
-    AVG(rps)::NUMERIC(10,2) as avg_rps,
-    AVG(p99_latency_ms)::NUMERIC(10,3) as avg_p99_ms
-FROM benchmark_metrics
-GROUP BY command
-ORDER BY avg_rps DESC;
-
-COMMENT ON TABLE benchmark_metrics IS 'Stores Valkey performance benchmark results';
-COMMENT ON COLUMN benchmark_metrics.commit IS 'Git commit SHA from valkey repository';
-COMMENT ON COLUMN benchmark_metrics.command IS 'Benchmark command (GET, SET, LPUSH, etc.)';
-COMMENT ON COLUMN benchmark_metrics.rps IS 'Requests per second (throughput)';
-COMMENT ON COLUMN benchmark_metrics.p50_latency_ms IS 'P50 latency in milliseconds';
-COMMENT ON COLUMN benchmark_metrics.p99_latency_ms IS 'P99 latency in milliseconds';
-COMMENT ON COLUMN benchmark_metrics.cluster_mode IS 'Whether cluster mode was enabled';
-COMMENT ON COLUMN benchmark_metrics.tls IS 'Whether TLS was enabled';
-COMMENT ON COLUMN benchmark_metrics.architecture IS 'System architecture (e.g., x86_64, aarch64, arm64)';
+-- Summary - show what was created
+\c postgres
+\dt
+SELECT 'Database initialization complete!' as status;
+SELECT 'Created databases: grafana (for Grafana), postgres (for benchmark data)' as summary;
+SELECT 'Created tables: benchmark_metrics, benchmark_commits' as tables;
+SELECT 'Created users: postgres (Admin with full access), github_actions (IAM-enabled)' as users;

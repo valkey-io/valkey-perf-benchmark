@@ -27,14 +27,9 @@ resources:
     cpu: 500m
     memory: 1Gi
 
-# Persistence for plugins and other data - Fargate compatible
+# Persistence disabled for Fargate - using external PostgreSQL database
 persistence:
-  enabled: true
-  type: pvc
-  storageClassName: gp2
-  accessModes:
-    - ReadWriteOnce
-  size: 10Gi
+  enabled: false
 
 # Admin credentials
 adminUser: admin
@@ -67,7 +62,7 @@ grafana.ini:
 
   database:
     type: postgres
-    host: <your-rds-endpoint>:5432 # Update with your RDS endpoint from CloudFormation outputs
+    host: <RDS_ENDPOINT>:5432 # Will be replaced by deploy script
     name: grafana
     ssl_mode: require
     max_idle_conn: 2
@@ -113,10 +108,10 @@ datasources:
   datasources.yaml:
     apiVersion: 1
     datasources:
-      - name: PostgreSQL-Valkey
+      - name: PostgreSQL-Valkey-Metrics
         type: postgres
-        url: <your-rds-endpoint>:5432 # Update with your RDS endpoint
-        database: grafana
+        url: <RDS_ENDPOINT>:5432 # Will be replaced by deploy script
+        database: postgres
         user: $__env{GF_DATABASE_USER}
         secureJsonData:
           password: $__env{GF_DATABASE_PASSWORD}
@@ -126,6 +121,7 @@ datasources:
           maxIdleConns: 2
           connMaxLifetime: 14400
         editable: true
+        isDefault: true
 
 # Dashboard providers
 dashboardProviders:

@@ -1001,7 +1001,6 @@ def generate_comparison_graphs(
         return []
 
     if not config_groups:
-        print("No data available for graph generation")
         return []
 
     output_path = Path(output_dir)
@@ -1021,7 +1020,6 @@ def generate_comparison_graphs(
         config_info.append(config_str)
 
     if not all_rows:
-        print("No table rows available for graph generation")
         return []
 
     # Get unique config string for legends
@@ -1095,7 +1093,7 @@ def generate_variance_line_graphs(
                 generated_files.append(graph_path)
 
     except Exception as e:
-        print(f"Error generating variance line graphs: {e}")
+        pass  # Silently handle errors in graph generation
 
     return generated_files
 
@@ -1282,11 +1280,9 @@ def _generate_single_variance_graph(
         plt.savefig(graph_path, dpi=300, bbox_inches="tight")
         plt.close()
 
-        print(f"Variance line graph saved to: {graph_path}")
         return str(graph_path)
 
     except Exception as e:
-        print(f"Error generating variance graph for {config_key}: {e}")
         return None
 
 
@@ -1300,7 +1296,6 @@ def generate_consolidated_metrics_graph(
     """Generate a single consolidated comparison graph for all metrics with proper legend format."""
     try:
         if not rows:
-            print("No data available for consolidated metrics graph")
             return None
 
         # Group data by metric type
@@ -1429,11 +1424,9 @@ def generate_consolidated_metrics_graph(
         plt.savefig(graph_path, dpi=300, bbox_inches="tight")
         plt.close()
 
-        print(f"Consolidated benchmark comparison graph saved to: {graph_path}")
         return str(graph_path)
 
     except Exception as e:
-        print(f"Error generating consolidated metrics graph: {e}")
         return None
 
 
@@ -1533,7 +1526,6 @@ def main():
         sys.exit(1)
 
     # Load benchmark data
-    print("Loading benchmark data...")
     baseline_data = load_benchmark_data(baseline_file)
     new_data = load_benchmark_data(new_file)
 
@@ -1542,7 +1534,6 @@ def main():
     original_new_count = len(new_data)
 
     # Always apply dynamic averaging for consistent comparisons
-    print("Processing and averaging multiple runs...")
     baseline_data = average_multiple_runs(baseline_data)
     new_data = average_multiple_runs(new_data)
 
@@ -1552,25 +1543,13 @@ def main():
     )
     new_avg_runs = original_new_count / len(new_data) if new_data else 0
 
-    print(
-        f"Baseline: {original_baseline_count} runs → {len(baseline_data)} configurations "
-        f"(avg {baseline_avg_runs:.2f} runs per config)"
-    )
-    print(
-        f"New: {original_new_count} runs → {len(new_data)} configurations "
-        f"(avg {new_avg_runs:.2f} runs per config)"
-    )
-
     # Generate comparison data
-    print("Generating comparison report...")
     config_groups, baseline_version, new_version = create_comparison_table_data(
         baseline_data, new_data, metrics_filter
     )
 
     # Generate graphs if requested
     if generate_graphs:
-        print("Generating consolidated comparison graphs...")
-
         # Load raw data again for variance analysis
         raw_baseline_data = load_benchmark_data(baseline_file)
         raw_new_data = load_benchmark_data(new_file)
@@ -1588,8 +1567,6 @@ def main():
             print(f"Generated {len(generated_files)} graph(s):")
             for file_path in generated_files:
                 print(f"  - {file_path}")
-        else:
-            print("No graphs were generated")
 
     # Format the comparison report
     comparison_table = format_comparison_report(

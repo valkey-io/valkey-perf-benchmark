@@ -408,7 +408,7 @@ Resources:
         SubnetIds:
           - !Ref PrivateSubnet1
           - !Ref PrivateSubnet2
-        EndpointPublicAccess: false
+        EndpointPublicAccess: true
         EndpointPrivateAccess: true
       Logging:
         ClusterLogging:
@@ -651,7 +651,7 @@ Resources:
       StorageEncrypted: true
       MasterUsername: !Ref DBMasterUsername
       MasterUserPassword: !Ref DBMasterPassword
-      DBName: grafana
+      # Don't specify DBName - we'll create databases via init script
       VPCSecurityGroups:
         - !Ref RDSSecurityGroup
       DBSubnetGroupName: !Ref RDSSubnetGroup
