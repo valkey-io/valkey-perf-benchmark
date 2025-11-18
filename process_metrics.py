@@ -1,7 +1,6 @@
 """Helpers for parsing benchmark results."""
 
 import json
-import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -30,28 +29,33 @@ class MetricsProcessor:
         tls_mode: bool,
         commit_time: str,
         io_threads: Optional[int] = None,
+        benchmark_threads: Optional[int] = None,
+        architecture: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
         self.tls_mode = tls_mode
         self.commit_time = commit_time
         self.io_threads = io_threads
+        self.benchmark_threads = benchmark_threads
+        self.architecture = architecture
 
     def create_metrics(
         self,
-        output: str,
+        benchmark_csv_data: str,
         command: str,
         data_size: int,
         pipeline: int,
         clients: int,
-        requests: int,
+        requests: Optional[int] = None,
         warmup: Optional[int] = None,
+        duration: Optional[int] = None,
     ) -> Optional[Dict[str, object]]:
         """Create a complete metrics dictionary from CSV output and benchmark parameters.
 
         Parameters
         ----------
-        output : str
+        benchmark_csv_data : str
             Raw CSV output from ``valkey-benchmark``.
         command : str
             Benchmark command that was executed.
@@ -66,14 +70,16 @@ class MetricsProcessor:
         warmup : int, optional
             Warmup time in seconds.
         """
-        if not output or not output.strip():
+        if not benchmark_csv_data or not benchmark_csv_data.strip():
             logging.warning("Empty benchmark output received")
             return None
 
         try:
-            lines = output.strip().split("\n")
+            lines = benchmark_csv_data.strip().split("\n")
             if len(lines) < 2:
-                logging.warning(f"Unexpected CSV format in benchmark output: {output}")
+                logging.warning(
+                    f"Unexpected CSV format in benchmark output: {benchmark_csv_data}"
+                )
                 return None
 
             labels = [label.strip().replace('"', "") for label in lines[0].split(",")]
@@ -106,7 +112,6 @@ class MetricsProcessor:
                 "data_size": int(data_size),
                 "pipeline": int(pipeline),
                 "clients": int(clients),
-                "requests": int(requests),
                 "rps": safe_float(data.get("rps")),
                 "avg_latency_ms": safe_float(data.get("avg_latency_ms")),
                 "min_latency_ms": safe_float(data.get("min_latency_ms")),
@@ -118,18 +123,37 @@ class MetricsProcessor:
                 "tls": self.tls_mode,
             }
 
+            # Add requests or duration based on benchmark mode
+            if requests is not None:
+                metrics_dict["requests"] = int(requests)
+                metrics_dict["benchmark_mode"] = "requests"
+            elif duration is not None:
+                metrics_dict["duration"] = int(duration)
+                metrics_dict["benchmark_mode"] = "duration"
+            else:
+                logging.warning("Neither requests nor duration specified")
+                metrics_dict["benchmark_mode"] = "unknown"
+
             # Add io_threads to metrics if it was specified
             if self.io_threads is not None:
                 metrics_dict["io_threads"] = self.io_threads
+
+            # Add benchmark_threads to metrics if it was specified
+            if self.benchmark_threads is not None:
+                metrics_dict["valkey_benchmark_threads"] = self.benchmark_threads
 
             # Add warmup to metrics if it was specified
             if warmup is not None:
                 metrics_dict["warmup"] = warmup
 
+            # Add architecture to metrics if it was specified
+            if self.architecture is not None:
+                metrics_dict["architecture"] = self.architecture
+
             return metrics_dict
         except Exception:
             logging.exception(f"Error parsing CSV output")
-            logging.debug(f"Raw output: {output}")
+            logging.debug(f"Raw output: {benchmark_csv_data}")
             return None
 
     def write_metrics(

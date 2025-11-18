@@ -18,7 +18,15 @@ env/
 *.swp
 *.swo
 *~
+*.pem
 
 # Runtime files - automatically created during benchmarking
-results/
-completed_commits.json
+results*/
+
+# CloudFormation and AWS deployment artifacts
+dashboards/stack-outputs.json
+dashboards/*.pem
+*.pem
+
+# Logs
+*.log

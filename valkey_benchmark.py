@@ -12,6 +12,7 @@ from typing import Iterable, List, Optional
 import valkey
 
 from process_metrics import MetricsProcessor
+from valkey_server import ServerLauncher
 
 # Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
@@ -59,6 +60,10 @@ class ClientRunner:
         cores: Optional[str] = None,
         io_threads: Optional[int] = None,
         valkey_benchmark_path: Optional[str] = None,
+        benchmark_threads: Optional[int] = None,
+        runs: int = 1,
+        server_launcher: Optional[ServerLauncher] = None,
+        architecture: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -66,13 +71,18 @@ class ClientRunner:
         self.tls_mode = tls_mode
         self.target_ip = target_ip
         self.results_dir = results_dir
-        self.valkey_path = valkey_path
+        self.valkey_path = Path(valkey_path)
         self.cores = cores
         self.io_threads = io_threads
         self.valkey_benchmark_path = valkey_benchmark_path or VALKEY_BENCHMARK
+        self.benchmark_threads = benchmark_threads
+        self.runs = runs
+        self.server_launcher = server_launcher
+        self.architecture = architecture
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
+        print(f"Connecting to {self.target_ip}")
         kwargs = {
             "host": self.target_ip,
             "port": DEFAULT_PORT,
@@ -117,7 +127,7 @@ class ClientRunner:
         cwd: Optional[Path] = None,
         capture_output: bool = False,
         text: bool = True,
-        timeout: int = 300,
+        timeout: Optional[int] = 300,
     ) -> Optional[subprocess.CompletedProcess]:
         """Execute a command with proper error handling and timeout."""
         cmd_list = list(command)
@@ -133,7 +143,7 @@ class ClientRunner:
                 check=True,
                 timeout=timeout,
             )
-            if result and result.stderr:
+            if result.stderr:
                 logging.warning(f"Command stderr: {result.stderr}")
             return result if capture_output else None
         except subprocess.TimeoutExpired as e:
@@ -174,12 +184,14 @@ class ClientRunner:
     def get_commit_time(self, commit_id: str) -> str:
         """Return timestamp for a commit."""
         try:
-            commit_time = self._run(
+            result = self._run(
                 ["git", "show", "-s", "--format=%cI", commit_id],
                 cwd=self.valkey_path,
                 capture_output=True,
             )
-            return commit_time.stdout.strip()
+            if result is None:
+                raise RuntimeError("Failed to get commit time: no result returned")
+            return result.stdout.strip()
         except Exception as e:
             logging.exception(f"Failed to get commit time for {commit_id}: {e}")
             raise
@@ -237,6 +249,8 @@ class ClientRunner:
             self.tls_mode,
             commit_time,
             self.io_threads,
+            self.benchmark_threads,
+            self.architecture,
         )
         metric_json = []
 
@@ -252,6 +266,7 @@ class ClientRunner:
             clients,
             command,
             warmup,
+            duration,
         ) in self._generate_combinations():
 
             if command not in READ_COMMANDS + WRITE_COMMANDS:
@@ -264,74 +279,86 @@ class ClientRunner:
                 )
                 continue
 
-            logging.info(
-                f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | requests={requests} | keyspacelen={keyspacelen} | warmup={warmup}"
-            )
+            # Show either requests or duration, not both
+            if duration is not None:
+                mode_info = f"duration={duration}s"
+            else:
+                mode_info = f"requests={requests}"
 
-            seed_val = random.randint(0, 1000000)
-            logging.info(f"Using seed value: {seed_val}")
+            # Run the benchmark multiple times based on self.runs
+            for run_num in range(self.runs):
+                if self.runs > 1:
+                    logging.info(f"=== Run {run_num + 1}/{self.runs} ===")
 
-            # Flush database before each benchmark run for clean state
-            self._flush_database()
+                logging.info(
+                    f"--> Running {command} | size={data_size} | pipeline={pipeline} | clients={clients} | {mode_info} | keyspacelen={keyspacelen} | warmup={warmup}"
+                )
 
-            # Data injection for read commands
-            if command in READ_COMMANDS:
-                self._populate_keyspace(
-                    command,
+                seed_val = random.randint(0, 1000000)
+                logging.info(f"Using seed value: {seed_val}")
+
+                # Restart server before each test for clean state
+                if self.server_launcher:
+                    self._restart_server()
+                else:
+                    # Flush database if server restart is not available
+                    self._flush_database()
+
+                # Data injection for read commands
+                if command in READ_COMMANDS:
+                    # For duration mode, use keyspacelen as the number of keys to populate
+                    populate_requests = (
+                        requests if requests is not None else keyspacelen
+                    )
+                    self._populate_keyspace(
+                        command,
+                        populate_requests,
+                        keyspacelen,
+                        data_size,
+                        pipeline,
+                        clients,
+                        seed_val,
+                    )
+                bench_cmd = self._build_benchmark_command(
+                    self.tls_mode,
                     requests,
                     keyspacelen,
                     data_size,
                     pipeline,
                     clients,
+                    command,
                     seed_val,
+                    sequential=False,
+                    duration=duration,
+                    warmup=warmup,
                 )
-            bench_cmd = self._build_benchmark_command(
-                self.tls_mode,
-                requests,
-                keyspacelen,
-                data_size,
-                pipeline,
-                clients,
-                command,
-                seed_val,
-                sequential=False,
-            )
 
-            if warmup:
-                logging.info(f"Starting warmup for {warmup}s...")
-                proc = subprocess.Popen(
-                    bench_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    cwd=self.valkey_path,
+                # Run actual benchmark
+                logging.info("Running main benchmark command")
+                proc = self._run(
+                    bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None
                 )
-                time.sleep(warmup)
-                proc.terminate()
-                proc.wait(timeout=5)
-                logging.info("Warmup phase complete.")
+                if proc is None:
+                    logging.error("Benchmark command failed to return results")
+                    continue
 
-            # Run actual benchmark
-            logging.info("Running main benchmark command")
-            proc = self._run(
-                bench_cmd, cwd=self.valkey_path, capture_output=True, timeout=None
-            )
-            logging.info(f"Benchmark output:\n{proc.stdout}")
-            if proc.stderr:
-                logging.warning(f"Benchmark stderr:\n{proc.stderr}")
+                logging.info(f"Benchmark output:\n{proc.stdout}")
+                if proc.stderr:
+                    logging.warning(f"Benchmark stderr:\n{proc.stderr}")
 
-            metrics = metrics_processor.create_metrics(
-                proc.stdout,
-                command,
-                data_size,
-                pipeline,
-                clients,
-                requests,
-                warmup,
-            )
-            if metrics:
-                logging.info(f"Parsed metrics: {metrics}")
-                metric_json.append(metrics)
+                metrics = metrics_processor.create_metrics(
+                    proc.stdout,
+                    command,
+                    data_size,
+                    pipeline,
+                    clients,
+                    requests,
+                    warmup,
+                    duration,
+                )
+                if metrics:
+                    logging.info(f"Parsed metrics: {metrics}")
+                    metric_json.append(metrics)
 
         if not metric_json:
             logging.warning("No metrics collected, skipping write.")
@@ -341,15 +368,19 @@ class ClientRunner:
 
     def _generate_combinations(self) -> List[tuple]:
         """Cartesian product of parameters within a single config item."""
+        # Use requests if available, otherwise None for duration mode
+        requests_list = self.config.get("requests", [None])
+
         return list(
             product(
-                self.config["requests"],
+                requests_list,
                 self.config["keyspacelen"],
                 self.config["data_sizes"],
                 self.config["pipelines"],
                 self.config["clients"],
                 self.config["commands"],
                 [self.config["warmup"]],
+                [self.config.get("duration")],
             )
         )
 
@@ -365,6 +396,8 @@ class ClientRunner:
         seed_val: int,
         *,
         sequential: bool = True,
+        duration: Optional[int] = None,
+        warmup: Optional[int] = None,
     ) -> List[str]:
         cmd = []
         if self.cores:
@@ -377,14 +410,44 @@ class ClientRunner:
             cmd += ["--cacert", "./tests/tls/ca.crt"]
         cmd += ["-h", self.target_ip]
         cmd += ["-p", "6379"]
-        cmd += ["-n", str(requests)]
+        # Use --duration if specified, otherwise use -n (requests)
+        if duration is not None:
+            cmd += ["--duration", str(duration)]
+        else:
+            cmd += ["-n", str(requests)]
         cmd += ["-r", str(keyspacelen)]
         cmd += ["-d", str(data_size)]
         cmd += ["-P", str(pipeline)]
         cmd += ["-c", str(clients)]
         cmd += ["-t", command]
+        if self.benchmark_threads is not None:
+            cmd += ["--threads", str(self.benchmark_threads)]
+        if warmup is not None and warmup > 0:
+            cmd += ["--warmup", str(warmup)]
         if sequential:
             cmd += ["--sequential"]
         cmd += ["--seed", str(seed_val)]
         cmd += ["--csv"]
         return cmd
+
+    def _restart_server(self) -> None:
+        """Restart the Valkey server for a clean state."""
+        if self.server_launcher is None:
+            logging.error("No server launcher available for restart")
+            return
+
+        logging.info("Restarting Valkey server for clean state...")
+
+        # Shutdown current server
+        self.server_launcher.shutdown(self.tls_mode)
+
+        # Start fresh server
+        self.server_launcher.launch(
+            cluster_mode=self.cluster_mode,
+            tls_mode=self.tls_mode,
+            io_threads=self.io_threads,
+        )
+
+        # Wait for server to be ready
+        self.wait_for_server_ready()
+        logging.info("Server restarted successfully")

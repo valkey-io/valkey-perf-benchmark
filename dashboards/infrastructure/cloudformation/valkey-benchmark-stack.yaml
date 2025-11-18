@@ -1,0 +1,743 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Valkey Performance Benchmark Infrastructure with EKS Fargate, RDS PostgreSQL, and CloudFront"
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: valkey-perf-cluster
+    Description: Name of the EKS cluster
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues:
+      [
+        db.t4g.micro,
+        db.t4g.small,
+        db.t4g.medium,
+      ]
+    Description: RDS instance class
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+    Description: RDS allocated storage in GB
+
+  DBMasterUsername:
+    Type: String
+    Default: postgres
+    Description: RDS master username
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 128
+    Description: RDS master password (8-128 characters)
+
+  ProjectName:
+    Type: String
+    Default: valkey-benchmark
+    Description: Project name for resource tagging
+
+  GitHubOIDCProviderArn:
+    Type: String
+    Default: ""
+    Description: ARN of the existing GitHub OIDC Provider
+
+  GrafanaAlbDnsName:
+    Type: String
+    Default: ""
+    Description: DNS name of the Grafana ALB created by the AWS Load Balancer Controller
+    AllowedPattern: "^$|([a-z0-9-]+\\.)+elb\\.amazonaws\\.com$"
+    ConstraintDescription: Must be empty or a valid AWS ALB hostname
+
+Conditions:
+  HasGitHubOIDCProvider: !Not [!Equals [!Ref GitHubOIDCProviderArn, ""]]
+  NeedsGitHubOIDCProvider: !Equals [!Ref GitHubOIDCProviderArn, ""]
+  HasGrafanaAlbDns: !Not [!Equals [!Ref GrafanaAlbDnsName, ""]]
+
+Resources:
+  # VPC and Networking (same as original)
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnets
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-1"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-2"
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+
+  # Private Subnets for Fargate
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.0.10.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-subnet-1"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.0.11.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-subnet-2"
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+
+  # NAT Gateways
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-eip-1"
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-eip-2"
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-1"
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat-2"
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-routes"
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-routes-1"
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-routes-2"
+
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+
+  # Security Groups - Optimized for Fargate
+  EKSClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EKS Fargate cluster
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref FargatePodSecurityGroup
+          Description: Allow Fargate pods to access EKS API
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-eks-cluster-sg"
+
+  # Fargate Pod Security Group
+  FargatePodSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Fargate pods
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow ALB to access Grafana on port 3000
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic for container pulls and external APIs
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-fargate-pod-sg"
+
+  # ALB Security Group
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer - CloudFront access only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP from anywhere (will be updated to CloudFront-only by deploy script)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS from anywhere (will be updated to CloudFront-only by deploy script)
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-alb-sg"
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS PostgreSQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref FargatePodSecurityGroup
+          Description: Allow Fargate pods to access PostgreSQL
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rds-sg"
+
+  # IAM Roles
+  EKSClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-eks-cluster-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+  # Fargate Pod Execution Role
+  FargatePodExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-fargate-pod-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks-fargate-pods.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy
+
+  # GitHub OIDC Provider
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: NeedsGitHubOIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-github-oidc-provider"
+
+  # GitHub Actions Role for RDS
+  GitHubActionsRDSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-github-actions-rds-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - HasGitHubOIDCProvider
+                - !Ref GitHubOIDCProviderArn
+                - !GetAtt GitHubOIDCProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+              StringLike:
+                "token.actions.githubusercontent.com:sub": "repo:valkey-io/valkey-perf-benchmark:*"
+      Policies:
+        - PolicyName: RDSConnect
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${RDSInstance.DbiResourceId}/*"
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                Resource: !GetAtt RDSInstance.DBInstanceArn
+
+  # EKS Cluster - Fargate Only
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: "1.33"
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref EKSClusterSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: true
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: api
+            - Type: audit
+
+  # EKS OIDC Provider
+  EKSOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 9e99a48a9960b14926bb7f3b02e22da2b0ab7280
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-eks-oidc-provider"
+
+  # Fargate Profile for all workloads
+  FargateProfile:
+    Type: AWS::EKS::FargateProfile
+    Properties:
+      ClusterName: !Ref EKSCluster
+      FargateProfileName: default-profile
+      PodExecutionRoleArn: !GetAtt FargatePodExecutionRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Selectors:
+        - Namespace: grafana
+        - Namespace: kube-system
+
+  # AWS Load Balancer Controller Role
+  AWSLoadBalancerControllerRole:
+    Type: AWS::IAM::Role
+    DependsOn: EKSOIDCProvider
+    Properties:
+      RoleName: !Sub "${ProjectName}-aws-load-balancer-controller-role"
+      AssumeRolePolicyDocument:
+        Fn::Sub:
+          - |
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "${OIDCProviderArn}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${IssuerUrl}:aud": "sts.amazonaws.com",
+                      "${IssuerUrl}:sub": "system:serviceaccount:kube-system:aws-load-balancer-controller"
+                    }
+                  }
+                }
+              ]
+            }
+          - OIDCProviderArn: !GetAtt EKSOIDCProvider.Arn
+            IssuerUrl: !GetAtt EKSCluster.OpenIdConnectIssuerUrl
+      ManagedPolicyArns:
+        - !Ref AWSLoadBalancerControllerPolicy
+
+  # Load Balancer Controller Policy (same as original)
+  AWSLoadBalancerControllerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${ProjectName}-aws-load-balancer-controller-policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:CreateServiceLinkedRole
+            Resource: "*"
+            Condition:
+              StringEquals:
+                "iam:AWSServiceName": elasticloadbalancing.amazonaws.com
+          - Effect: Allow
+            Action:
+              - ec2:DescribeAccountAttributes
+              - ec2:DescribeAddresses
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribeInternetGateways
+              - ec2:DescribeVpcs
+              - ec2:DescribeVpcPeeringConnections
+              - ec2:DescribeSubnets
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeInstances
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeTags
+              - ec2:GetCoipPoolUsage
+              - ec2:DescribeCoipPools
+              - elasticloadbalancing:DescribeLoadBalancers
+              - elasticloadbalancing:DescribeLoadBalancerAttributes
+              - elasticloadbalancing:DescribeListeners
+              - elasticloadbalancing:DescribeListenerCertificates
+              - elasticloadbalancing:DescribeSSLPolicies
+              - elasticloadbalancing:DescribeRules
+              - elasticloadbalancing:DescribeTargetGroups
+              - elasticloadbalancing:DescribeTargetGroupAttributes
+              - elasticloadbalancing:DescribeTargetHealth
+              - elasticloadbalancing:DescribeTags
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - cognito-idp:DescribeUserPoolClient
+              - acm:ListCertificates
+              - acm:DescribeCertificate
+              - iam:ListServerCertificates
+              - iam:GetServerCertificate
+              - waf-regional:GetWebACL
+              - waf-regional:GetWebACLForResource
+              - waf-regional:AssociateWebACL
+              - waf-regional:DisassociateWebACL
+              - wafv2:GetWebACL
+              - wafv2:GetWebACLForResource
+              - wafv2:AssociateWebACL
+              - wafv2:DisassociateWebACL
+              - shield:GetSubscriptionState
+              - shield:DescribeProtection
+              - shield:CreateProtection
+              - shield:DeleteProtection
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:CreateSecurityGroup
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - ec2:CreateTags
+            Resource: "arn:aws:ec2:*:*:security-group/*"
+            Condition:
+              StringEquals:
+                "ec2:CreateAction": CreateSecurityGroup
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - ec2:CreateTags
+              - ec2:DeleteTags
+            Resource: "arn:aws:ec2:*:*:security-group/*"
+            Condition:
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "true"
+                "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:CreateLoadBalancer
+              - elasticloadbalancing:CreateTargetGroup
+            Resource: "*"
+            Condition:
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:CreateListener
+              - elasticloadbalancing:DeleteListener
+              - elasticloadbalancing:CreateRule
+              - elasticloadbalancing:DeleteRule
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+              - elasticloadbalancing:RemoveTags
+            Resource:
+              - "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*"
+              - "arn:aws:elasticloadbalancer:*:*:loadbalancer/app/*/*"
+            Condition:
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "true"
+                "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+              - elasticloadbalancing:RemoveTags
+            Resource:
+              - "arn:aws:elasticloadbalancing:*:*:listener/net/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener/app/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener-rule/net/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:ModifyLoadBalancerAttributes
+              - elasticloadbalancing:SetIpAddressType
+              - elasticloadbalancing:SetSecurityGroups
+              - elasticloadbalancing:SetSubnets
+              - elasticloadbalancing:DeleteLoadBalancer
+              - elasticloadbalancing:ModifyTargetGroup
+              - elasticloadbalancing:ModifyTargetGroupAttributes
+              - elasticloadbalancing:DeleteTargetGroup
+            Resource: "*"
+            Condition:
+              "Null":
+                "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:RegisterTargets
+              - elasticloadbalancing:DeregisterTargets
+            Resource: "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:SetWebAcl
+              - elasticloadbalancing:ModifyListener
+              - elasticloadbalancing:AddListenerCertificates
+              - elasticloadbalancing:RemoveListenerCertificates
+              - elasticloadbalancing:ModifyRule
+            Resource: "*"
+
+  # RDS Components (same as original)
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "${ProjectName}-rds-subnet-group"
+      DBSubnetGroupDescription: Subnet group for RDS PostgreSQL
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rds-subnet-group"
+
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${ProjectName}-postgres"
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: postgres
+      EngineVersion: "17"
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterPassword
+      # Don't specify DBName - we'll create databases via init script
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      BackupRetentionPeriod: 3
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      MultiAZ: true
+      PubliclyAccessible: false
+      DeletionProtection: false
+      EnablePerformanceInsights: false
+      MonitoringInterval: 0
+      EnableIAMDatabaseAuthentication: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-postgres"
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasGrafanaAlbDns
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "CloudFront distribution for ${ProjectName} Grafana dashboards"
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: grafana-alb-origin
+            DomainName: !Ref GrafanaAlbDnsName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 30
+              OriginKeepaliveTimeout: 5
+        DefaultCacheBehavior:
+          TargetOriginId: grafana-alb-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [HEAD, DELETE, POST, GET, OPTIONS, PUT, PATCH]
+          CachedMethods: [HEAD, GET]
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # CachingDisabled
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3 # AllViewerExceptHostHeader
+        CacheBehaviors:
+          - PathPattern: "/public-dashboards/*"
+            TargetOriginId: grafana-alb-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [HEAD, GET]
+            CachedMethods: [HEAD, GET]
+            Compress: true
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # CachingOptimized
+          - PathPattern: "/api/*"
+            TargetOriginId: grafana-alb-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [HEAD, DELETE, POST, GET, OPTIONS, PUT, PATCH]
+            CachedMethods: [HEAD, GET]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # CachingDisabled
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3 # AllViewerExceptHostHeader
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-cloudfront"
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC-ID"
+
+  EKSClusterName:
+    Description: EKS Cluster Name
+    Value: !Ref EKSCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-EKS-Cluster-Name"
+
+  RDSEndpoint:
+    Description: RDS PostgreSQL Endpoint
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Condition: HasGrafanaAlbDns
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  AWSLoadBalancerControllerRoleArn:
+    Description: AWS Load Balancer Controller IAM Role ARN
+    Value: !GetAtt AWSLoadBalancerControllerRole.Arn

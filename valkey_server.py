@@ -13,7 +13,6 @@ import valkey
 VALKEY_SERVER = "src/valkey-server"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 15
-MAX_SHUTDOWN_WAIT = 10
 
 
 class ServerLauncher:
@@ -56,7 +55,7 @@ class ServerLauncher:
         return valkey.Valkey(**kwargs)
 
     def _run(
-        self, command: Iterable[str], cwd: Optional[Path] = None, timeout: int = 60
+        self, command: Iterable[str], cwd: Optional[str] = None, timeout: int = 60
     ) -> subprocess.CompletedProcess:
         """Execute a command with proper error handling and timeout."""
         cmd_list = list(command)
@@ -154,6 +153,7 @@ class ServerLauncher:
         cmd += ["--daemonize", "yes"]
         cmd += ["--maxmemory-policy", "allkeys-lru"]
         cmd += ["--appendonly", "no"]
+        cmd += ["--protected-mode", "no"]
         cmd += ["--logfile", log_file]
         cmd += ["--save", "''"]
 
@@ -170,10 +170,68 @@ class ServerLauncher:
             with self._client_context(tls_mode) as client:
                 client.execute_command("CLUSTER", "RESET", "HARD")
                 client.execute_command("CLUSTER", "ADDSLOTSRANGE", "0", "16383")
+
+                # Wait for cluster to become ready
+                self._wait_for_cluster_ready(client)
                 logging.info("Cluster configuration completed successfully.")
         except Exception as e:
             logging.error(f"Failed to setup cluster: {e}")
             raise RuntimeError(f"Cluster setup failed: {e}") from e
+
+    def _wait_for_cluster_ready(self, client: valkey.Valkey, timeout: int = 30) -> None:
+        """Wait for cluster to become fully operational after slot assignment."""
+        logging.info("Verifying cluster state after slot assignment...")
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                if self._check_cluster_state(client):
+                    logging.info(
+                        "Cluster is fully operational and ready for connections."
+                    )
+                    return
+                time.sleep(1)
+            except Exception as e:
+                logging.warning(f"Error checking cluster state: {e}")
+                time.sleep(1)
+
+        elapsed = time.time() - start_time
+        raise RuntimeError(f"Cluster failed to become ready within {elapsed:.1f}s")
+
+    def _check_cluster_state(self, client: valkey.Valkey) -> bool:
+        """Check if cluster is in a ready state."""
+        cluster_info = client.execute_command("CLUSTER", "INFO")
+        info_dict = self._parse_cluster_info(cluster_info)
+
+        state_ok = info_dict.get("cluster_state") == "ok"
+        slots_assigned = int(info_dict.get("cluster_slots_assigned", "0")) == 16384
+        slots_ok = int(info_dict.get("cluster_slots_ok", "0")) == 16384
+        nodes_ok = int(info_dict.get("cluster_known_nodes", "0")) >= 1
+
+        self._log_cluster_state(info_dict)
+
+        return state_ok and slots_assigned and slots_ok and nodes_ok
+
+    def _parse_cluster_info(self, cluster_info: str) -> dict:
+        """Parse cluster info response into a dictionary."""
+        info_dict = {}
+        for line in cluster_info.strip().split("\r\n"):
+            if ":" in line:
+                key, value = line.split(":", 1)
+                info_dict[key] = value
+        return info_dict
+
+    def _log_cluster_state(self, info_dict: dict) -> None:
+        """Log current cluster state information."""
+        cluster_state = info_dict.get("cluster_state", "fail")
+        cluster_slots_assigned = int(info_dict.get("cluster_slots_assigned", "0"))
+        cluster_slots_ok = int(info_dict.get("cluster_slots_ok", "0"))
+        cluster_known_nodes = int(info_dict.get("cluster_known_nodes", "0"))
+
+        logging.info(
+            f"Cluster state check: state={cluster_state}, slots_assigned={cluster_slots_assigned}, "
+            f"slots_ok={cluster_slots_ok}, known_nodes={cluster_known_nodes}"
+        )
 
     def launch(
         self, cluster_mode: bool, tls_mode: bool, io_threads: Optional[int] = None
@@ -208,4 +266,63 @@ class ServerLauncher:
                 logging.error(f"Failed to kill Valkey server process: {kill_error}")
 
         # Wait for process to actually stop
-        time.sleep(2)
+        self._wait_for_process_shutdown()
+
+    def _wait_for_process_shutdown(self, timeout: int = 10) -> None:
+        """Wait for Valkey server process to fully terminate."""
+        logging.info("Waiting for Valkey server process to terminate...")
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                # Check if any valkey-server processes are still running
+                result = subprocess.run(
+                    ["ps", "aux"], capture_output=True, text=True, timeout=5
+                )
+
+                # Filter for valkey-server processes (excluding grep itself)
+                valkey_processes = []
+                for line in result.stdout.splitlines():
+                    if "valkey-server" in line and "grep" not in line:
+                        valkey_processes.append(line.strip())
+
+                if not valkey_processes:
+                    logging.info("Valkey server process has terminated successfully.")
+                    return
+
+                # Log found processes for debugging
+                logging.info(
+                    f"Found {len(valkey_processes)} valkey-server process(es) still running:"
+                )
+                for proc in valkey_processes:
+                    logging.info(f"  {proc}")
+
+                time.sleep(0.5)
+
+            except subprocess.TimeoutExpired:
+                logging.warning("Process check timed out, continuing to wait...")
+                time.sleep(0.5)
+            except Exception as e:
+                logging.warning(f"Error checking process status: {e}")
+                time.sleep(0.5)
+
+        # Timeout reached - log warning but don't fail
+        elapsed = time.time() - start_time
+        logging.warning(f"Process shutdown verification timed out after {elapsed:.1f}s")
+
+        # Final check to log any remaining processes
+        try:
+            result = subprocess.run(
+                ["ps", "aux"], capture_output=True, text=True, timeout=5
+            )
+            remaining_processes = [
+                line.strip()
+                for line in result.stdout.splitlines()
+                if "valkey-server" in line and "grep" not in line
+            ]
+            if remaining_processes:
+                logging.warning("Remaining valkey-server processes:")
+                for proc in remaining_processes:
+                    logging.warning(f"  {proc}")
+        except Exception as e:
+            logging.warning(f"Could not perform final process check: {e}")

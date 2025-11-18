@@ -1,0 +1,213 @@
+# Grafana Helm Chart Values for Fargate
+# This configures Grafana to run on AWS Fargate with PostgreSQL backend
+
+replicas: 1
+
+image:
+  repository: grafana/grafana
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Service configuration - ClusterIP with ALB Ingress
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+# Ingress configuration disabled (using separate ALB Ingress)
+ingress:
+  enabled: false
+
+# Resource limits - Fargate requires explicit resource definitions
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Persistence disabled for Fargate - using external PostgreSQL database
+persistence:
+  enabled: false
+
+# Admin credentials
+adminUser: admin
+adminPassword: "ChangeThisPassword123!"
+
+# PostgreSQL database configuration
+envFromSecret: grafana-postgres-secret
+
+env:
+  GF_SERVER_ROOT_URL: "https://your-cloudfront-domain.cloudfront.net" # Update with your CloudFront domain
+  GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+
+  # Enable shared/public dashboards
+  GF_FEATURE_TOGGLES_ENABLE: "publicDashboards"
+  GF_DASHBOARDS_PUBLIC_ENABLED: "true"
+
+  # Security settings
+  GF_SECURITY_ALLOW_EMBEDDING: "true"
+  GF_AUTH_ANONYMOUS_ENABLED: "false"
+
+  # Logging
+  GF_LOG_MODE: "console"
+  GF_LOG_LEVEL: "info"
+
+# Grafana.ini configuration
+grafana.ini:
+  server:
+    root_url: "https://your-cloudfront-domain.cloudfront.net" # Update with your CloudFront domain
+    enable_gzip: true
+
+  database:
+    type: postgres
+    host: <RDS_ENDPOINT>:5432 # Will be replaced by deploy script
+    name: grafana
+    ssl_mode: require
+    max_idle_conn: 2
+    max_open_conn: 10
+    conn_max_lifetime: 14400
+
+  remote_cache:
+    type: database
+
+  analytics:
+    reporting_enabled: false
+    check_for_updates: true
+
+  security:
+    admin_user: admin
+    cookie_secure: true
+    cookie_samesite: lax
+    allow_embedding: true
+
+  users:
+    allow_sign_up: false
+    auto_assign_org: true
+    auto_assign_org_role: Viewer
+
+  auth.anonymous:
+    enabled: false
+
+  dashboards:
+    versions_to_keep: 20
+    min_refresh_interval: 5s
+
+  feature_toggles:
+    enable: publicDashboards
+
+# Plugins to install
+plugins:
+  - grafana-clock-panel
+  - grafana-simple-json-datasource
+  - grafana-piechart-panel
+
+# Data sources to provision
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: PostgreSQL-Valkey-Metrics
+        type: postgres
+        url: <RDS_ENDPOINT>:5432 # Will be replaced by deploy script
+        database: postgres
+        user: $__env{GF_DATABASE_USER}
+        secureJsonData:
+          password: $__env{GF_DATABASE_PASSWORD}
+        jsonData:
+          sslmode: require
+          maxOpenConns: 10
+          maxIdleConns: 2
+          connMaxLifetime: 14400
+        editable: true
+        isDefault: true
+
+# Dashboard providers
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: "default"
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+# Sidecar for dashboard discovery
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    folder: /tmp/dashboards
+    defaultFolderName: "General"
+  datasources:
+    enabled: true
+    label: grafana_datasource
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: 3000
+  initialDelaySeconds: 60
+  timeoutSeconds: 30
+  failureThreshold: 10
+
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: 3000
+  initialDelaySeconds: 30
+  timeoutSeconds: 30
+
+# Affinity rules for high availability - Fargate compatible
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - grafana
+          topologyKey: kubernetes.io/hostname
+
+# Node selector - not needed for Fargate
+nodeSelector: {}
+
+# Tolerations - not needed for Fargate
+tolerations: []
+
+# Fargate-specific configurations
+# These ensure the pod runs correctly on Fargate
+podLabels:
+  fargate: "true"
+
+# Disable host networking (not supported on Fargate)
+hostNetwork: false
+
+# Pod security context - Fargate compatible
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  capabilities:
+    drop:
+      - ALL

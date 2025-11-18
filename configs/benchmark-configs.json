@@ -1,6 +1,6 @@
 [
   {
-    "requests": [10000000],
+    "duration": 120,
     "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
@@ -20,6 +20,7 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 10
+    "warmup": 10,
+    "benchmark-threads": 2
   }
 ]
