@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 4,
+  "id": 0,
   "links": [],
   "panels": [
     {
@@ -40,8 +40,8 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
@@ -49,6 +49,9 @@
             },
             "insertNulls": false,
             "lineInterpolation": "smooth",
+            "lineStyle": {
+              "fill": "solid"
+            },
             "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
@@ -68,8 +71,8 @@
           "links": [
             {
               "targetBlank": true,
-              "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "title": "View Commit on GitHub",
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -99,13 +102,19 @@
       "options": {
         "legend": {
           "calcs": [
-            "lastNotNull",
-            "max"
+            "max",
+            "min",
+            "mean"
           ],
           "displayMode": "table",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": false
         },
+        "timezone": [
+          "utc"
+        ],
         "tooltip": {
           "hideZeros": false,
           "mode": "multi",
@@ -115,16 +124,76 @@
       "pluginVersion": "12.2.1",
       "targets": [
         {
+          "dataset": "postgres",
           "datasource": {
             "type": "grafana-postgresql-datasource",
             "uid": "df3ap35djgtfke"
           },
+          "editorMode": "code",
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SET' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
-          "refId": "A"
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SET' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SET'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "SET Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -175,7 +244,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -226,11 +295,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'GET' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'GET' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'GET'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "GET Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -281,7 +389,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -332,11 +440,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPUSH' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPUSH' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPUSH'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "LPUSH Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -387,7 +534,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -438,11 +585,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'RPUSH' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'RPUSH' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'RPUSH'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "RPUSH Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -493,7 +679,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -544,11 +730,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SADD' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SADD' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SADD'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "SADD Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -599,7 +824,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -650,11 +875,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPOP' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPOP' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'LPOP'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "LPOP Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -705,7 +969,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -756,11 +1020,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'HSET' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'HSET' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'HSET'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "HSET Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     },
     {
@@ -811,7 +1114,7 @@
             {
               "targetBlank": true,
               "title": "View Commit",
-              "url": "https://github.com/valkey-io/valkey/commit/${__field.labels.commit}"
+              "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}"
             }
           ],
           "mappings": [],
@@ -862,11 +1165,50 @@
             "uid": "df3ap35djgtfke"
           },
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, P', pipeline) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SPOP' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, CONCAT(data_size, 'B, IO ', io_threads, ', P', pipeline,', ', architecture) AS metric FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SPOP' GROUP BY timestamp, command, data_size, pipeline, clients, requests, cluster_mode, tls, io_threads, architecture ORDER BY timestamp",
           "refId": "A"
+        },
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "df3ap35djgtfke"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": false,
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash FROM benchmark_metrics WHERE $__timeFilter(timestamp) AND command = 'SPOP'  ORDER BY timestamp",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
         }
       ],
       "title": "SPOP Command - RPS",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "Time",
+            "mode": "outer"
+          }
+        }
+      ],
       "type": "timeseries"
     }
   ],
@@ -919,8 +1261,8 @@
       },
       {
         "current": {
-          "text": "All",
-          "value": "$__all"
+          "text": "1",
+          "value": "1"
         },
         "datasource": {
           "type": "grafana-postgresql-datasource",
@@ -938,8 +1280,8 @@
       },
       {
         "current": {
-          "text": "All",
-          "value": "$__all"
+          "text": "false",
+          "value": "false"
         },
         "datasource": {
           "type": "grafana-postgresql-datasource",
@@ -957,8 +1299,8 @@
       },
       {
         "current": {
-          "text": "All",
-          "value": "All"
+          "text": "false",
+          "value": "false"
         },
         "datasource": {
           "type": "grafana-postgresql-datasource",
@@ -983,12 +1325,12 @@
           "type": "grafana-postgresql-datasource",
           "uid": "df3ap35djgtfke"
         },
-        "definition": "SELECT DISTINCT architecture FROM benchmark_metrics WHERE architecture IS NOT NULL AND architecture != '' ORDER BY architecture ASC",
+        "definition": "SELECT DISTINCT architecture FROM benchmark_metrics",
         "includeAll": true,
         "label": "Architecture",
         "name": "architecture",
         "options": [],
-        "query": "SELECT DISTINCT architecture FROM benchmark_metrics WHERE architecture IS NOT NULL AND architecture != '' ORDER BY architecture ASC",
+        "query": "SELECT DISTINCT architecture FROM benchmark_metrics",
         "refresh": 1,
         "regex": "",
         "type": "query"
@@ -996,12 +1338,12 @@
     ]
   },
   "time": {
-    "from": "now-24h",
+    "from": "now-7d",
     "to": "now"
   },
   "timepicker": {},
-  "timezone": "browser",
-  "title": "Valkey Performance - Public View",
-  "uid": "adzmqnw",
-  "version": 2
+  "timezone": "UTC",
+  "title": "Valkey Performance - Per Command",
+  "uid": "a9eed8c9-d160-4440-b5d7-c91f112d3267",
+  "version": 1
 }
