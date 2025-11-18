@@ -28,8 +28,8 @@ def create_tables(conn):
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
                 
-                -- Unique constraint: same commit + config can only exist once
-                CONSTRAINT unique_sha_config UNIQUE(sha, config, architecture)
+                -- Unique constraint: same commit + config + architecture can only exist once
+                CONSTRAINT unique_sha_config_arch UNIQUE(sha, config, architecture)
             );
             
             -- Indexes for fast lookups
