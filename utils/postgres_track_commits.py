@@ -13,21 +13,6 @@ import psycopg2
 from psycopg2.extras import Json
 
 
-def get_system_architecture() -> str:
-    """Detect the system architecture.
-
-    Returns:
-        Architecture string (e.g., 'x86_64', 'aarch64', 'arm64')
-    """
-    machine = platform.machine().lower()
-    # Normalize common architecture names
-    if machine in ("aarch64", "arm64"):
-        return "arm64"
-    elif machine in ("x86_64", "amd64"):
-        return "x86_64"
-    return machine
-
-
 def create_tables(conn):
     """Create benchmark tracking tables if they don't exist."""
     with conn.cursor() as cur:
@@ -530,7 +515,7 @@ def main():
 
     # Auto-detect architecture if not provided
     if not args.architecture:
-        args.architecture = get_system_architecture()
+        args.architecture = platform.machine()
         print(f"Auto-detected architecture: {args.architecture}", file=sys.stderr)
 
     # Connect to PostgreSQL
