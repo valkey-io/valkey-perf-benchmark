@@ -4,17 +4,16 @@ Description: "Valkey Performance Benchmark Infrastructure with EKS Fargate, RDS 
 Parameters:
   ClusterName:
     Type: String
-    Default: valkey-perf-cluster
+    Default: valkey-perf-grafana-cluster
     Description: Name of the EKS cluster
 
   DBInstanceClass:
     Type: String
-    Default: db.t4g.micro
+    Default: db.t4g.medium
     AllowedValues:
       [
-        db.t4g.micro,
-        db.t4g.small,
         db.t4g.medium,
+        db.t4g.large,
       ]
     Description: RDS instance class
 
@@ -313,6 +312,11 @@ Resources:
           ToPort: 5432
           SourceSecurityGroupId: !Ref FargatePodSecurityGroup
           Description: Allow Fargate pods to access PostgreSQL
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !GetAtt EKSCluster.ClusterSecurityGroupId
+          Description: Allow EKS cluster pods to access PostgreSQL
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-sg"
@@ -505,6 +509,9 @@ Resources:
               - ec2:DescribeTags
               - ec2:GetCoipPoolUsage
               - ec2:DescribeCoipPools
+              - ec2:GetSecurityGroupsForVpc
+              - ec2:DescribeIpamPools
+              - ec2:DescribeRouteTables
               - elasticloadbalancing:DescribeLoadBalancers
               - elasticloadbalancing:DescribeLoadBalancerAttributes
               - elasticloadbalancing:DescribeListeners
@@ -515,6 +522,9 @@ Resources:
               - elasticloadbalancing:DescribeTargetGroupAttributes
               - elasticloadbalancing:DescribeTargetHealth
               - elasticloadbalancing:DescribeTags
+              - elasticloadbalancing:DescribeTrustStores
+              - elasticloadbalancing:DescribeListenerAttributes
+              - elasticloadbalancing:DescribeCapacityReservation
             Resource: "*"
           - Effect: Allow
             Action:
@@ -598,6 +608,44 @@ Resources:
               - "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
           - Effect: Allow
             Action:
+              - elasticloadbalancing:AddTags
+            Resource:
+              - "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
+            Condition:
+              StringEquals:
+                "elasticloadbalancing:CreateAction":
+                  - CreateTargetGroup
+                  - CreateLoadBalancer
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+            Resource:
+              - "arn:aws:elasticloadbalancing:*:*:listener/net/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener/app/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener-rule/net/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
+            Condition:
+              StringEquals:
+                "elasticloadbalancing:CreateAction":
+                  - CreateListener
+                  - CreateRule
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:DeleteSecurityGroup
+            Resource: "*"
+            Condition:
+              "Null":
+                "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
               - elasticloadbalancing:ModifyLoadBalancerAttributes
               - elasticloadbalancing:SetIpAddressType
               - elasticloadbalancing:SetSecurityGroups
@@ -636,7 +684,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-subnet-group"
-
 
   RDSInstance:
     Type: AWS::RDS::DBInstance

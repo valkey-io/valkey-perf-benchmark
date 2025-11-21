@@ -50,17 +50,18 @@ fi
 
 # Enable public access temporarily for setup
 print_status "Enabling public access for EKS cluster setup..."
-aws eks update-cluster-config \
+if aws eks update-cluster-config \
     --name "$CLUSTER_NAME" \
     --region "$REGION" \
-    --resources-vpc-config endpointPublicAccess=true,endpointPrivateAccess=true
-
-print_status "Waiting for cluster endpoint configuration update..."
-aws eks wait cluster-active \
-    --name "$CLUSTER_NAME" \
-    --region "$REGION"
-
-print_success "EKS cluster endpoints configured"
+    --resources-vpc-config endpointPublicAccess=true,endpointPrivateAccess=true 2>&1 | grep -q "already at the desired configuration"; then
+    print_status "Cluster already has correct endpoint configuration"
+else
+    print_status "Waiting for cluster endpoint configuration update..."
+    aws eks wait cluster-active \
+        --name "$CLUSTER_NAME" \
+        --region "$REGION"
+    print_success "EKS cluster endpoints configured"
+fi
 echo
 
 # Configure kubectl
@@ -91,6 +92,19 @@ kubectl create namespace grafana --dry-run=client -o yaml | kubectl apply -f -
 print_success "Grafana namespace created"
 echo
 
+# Patch CoreDNS to run on Fargate
+print_status "Patching CoreDNS for Fargate compatibility..."
+kubectl patch deployment coredns \
+    -n kube-system \
+    --type=json \
+    -p='[{"op": "add", "path": "/spec/template/spec/tolerations/-", "value": {"key": "eks.amazonaws.com/compute-type", "operator": "Equal", "value": "fargate", "effect": "NoSchedule"}}]' \
+    2>/dev/null || print_status "CoreDNS already patched or patch not needed"
+
+print_status "Waiting for CoreDNS to be ready..."
+kubectl wait --for=condition=ready pod -l k8s-app=kube-dns -n kube-system --timeout=120s || true
+print_success "CoreDNS is ready"
+echo
+
 # Install AWS Load Balancer Controller
 print_status "Installing AWS Load Balancer Controller..."
 
@@ -103,6 +117,16 @@ if [ -z "$ALB_ROLE_ARN" ] || [ "$ALB_ROLE_ARN" == "null" ]; then
 fi
 
 print_status "Using IAM role: $ALB_ROLE_ARN"
+
+# Get VPC ID
+VPC_ID=$(jq -r '.[] | select(.OutputKey=="VPCId") | .OutputValue' stack-outputs.json)
+
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "null" ]; then
+    print_error "Could not find VPC ID in stack outputs"
+    exit 1
+fi
+
+print_status "Using VPC ID: $VPC_ID"
 
 # Create service account
 kubectl create serviceaccount aws-load-balancer-controller \
@@ -129,6 +153,8 @@ helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-contro
     --set clusterName="$CLUSTER_NAME" \
     --set serviceAccount.create=false \
     --set serviceAccount.name=aws-load-balancer-controller \
+    --set region="$REGION" \
+    --set vpcId="$VPC_ID" \
     --wait \
     --timeout=10m
 

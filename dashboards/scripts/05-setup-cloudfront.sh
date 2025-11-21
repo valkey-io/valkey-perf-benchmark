@@ -61,11 +61,16 @@ params=(
     "ParameterKey=ProjectName,ParameterValue=$PROJECT_NAME"
     "ParameterKey=ClusterName,ParameterValue=$CLUSTER_NAME"
     "ParameterKey=DBMasterPassword,ParameterValue=$DB_PASSWORD"
+    "ParameterKey=DBMasterUsername,UsePreviousValue=true"
+    "ParameterKey=DBInstanceClass,UsePreviousValue=true"
+    "ParameterKey=DBAllocatedStorage,UsePreviousValue=true"
     "ParameterKey=GrafanaAlbDnsName,ParameterValue=$ALB_DNS"
 )
 
 if [ -n "$GITHUB_OIDC_PROVIDER_ARN" ]; then
     params+=("ParameterKey=GitHubOIDCProviderArn,ParameterValue=$GITHUB_OIDC_PROVIDER_ARN")
+else
+    params+=("ParameterKey=GitHubOIDCProviderArn,UsePreviousValue=true")
 fi
 
 # Create change set
@@ -147,8 +152,8 @@ kubectl rollout status deployment grafana -n grafana --timeout=300s
 print_success "Grafana updated with CloudFront URL"
 echo
 
-# Secure ALB for CloudFront-only access
-print_status "Securing ALB for CloudFront-only access..."
+# Verify ALB security (should already be secured from Phase 03)
+print_status "Verifying ALB security configuration..."
 
 # Get CloudFront managed prefix list
 CLOUDFRONT_PREFIX_LIST=$(aws ec2 describe-managed-prefix-lists \
@@ -197,21 +202,21 @@ CLUSTER_SG=$(aws eks describe-cluster \
 
 print_status "EKS cluster security group: $CLUSTER_SG"
 
-# Remove public access rule
-print_status "Removing public access rule (0.0.0.0/0)..."
+# Verify and ensure public access is removed (should already be done in Phase 03)
+print_status "Ensuring public access rule (0.0.0.0/0) is removed..."
 aws ec2 revoke-security-group-ingress \
     --group-id "$ALB_SG" \
     --region "$REGION" \
     --ip-permissions '[{"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]' \
-    2>/dev/null && print_status "Removed public access rule" || print_status "Public access rule not found or already removed"
+    2>/dev/null && print_warning "Removed public access rule (should have been done in Phase 03)" || print_success "Public access already removed"
 
-# Add CloudFront prefix list rule
-print_status "Adding CloudFront prefix list rule..."
+# Verify CloudFront prefix list rule exists
+print_status "Ensuring CloudFront prefix list rule exists..."
 aws ec2 authorize-security-group-ingress \
     --group-id "$ALB_SG" \
     --region "$REGION" \
     --ip-permissions "[{\"IpProtocol\": \"tcp\", \"FromPort\": 80, \"ToPort\": 80, \"PrefixListIds\": [{\"PrefixListId\": \"$CLOUDFRONT_PREFIX_LIST\", \"Description\": \"CloudFront origin access\"}]}]" \
-    2>/dev/null && print_status "Added CloudFront access rule" || print_status "CloudFront rule already exists"
+    2>/dev/null && print_warning "Added CloudFront access rule (should have been done in Phase 03)" || print_success "CloudFront access already configured"
 
 # Ensure EKS pods can receive traffic from ALB
 print_status "Ensuring EKS pods can receive traffic from ALB..."
@@ -221,7 +226,7 @@ aws ec2 authorize-security-group-ingress \
     --ip-permissions "[{\"IpProtocol\": \"tcp\", \"FromPort\": 3000, \"ToPort\": 3000, \"UserIdGroupPairs\": [{\"GroupId\": \"$ALB_SG\", \"Description\": \"Allow ALB to reach Grafana pods\"}]}]" \
     2>/dev/null && print_status "Added ALB to EKS pod rule" || print_status "ALB to EKS pod rule already exists"
 
-print_success "ALB security hardening complete!"
+print_success "ALB security verification complete!"
 echo
 
 echo "=== CloudFront Setup Complete ==="
