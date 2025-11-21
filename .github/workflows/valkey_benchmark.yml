@@ -6,10 +6,15 @@ on:
       max_commits:
         description: "Maximum number of commits to benchmark"
         required: false
-        default: "3"
+        default: "1"
+        type: string
+      num_runs:
+        description: "Number of runs to benchmark"
+        required: false
+        default: "1"
         type: string
   schedule:
-    - cron: "0 */5 * * *"
+    - cron: "0 */8 * * *"
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
@@ -30,10 +35,10 @@ jobs:
   valkey_continuous_benchmark:
     env:
       BRANCH: unstable
-      MAX_COMMITS: ${{ inputs.max_commits || '3' }}
-
+      MAX_COMMITS: ${{ inputs.max_commits || '1' }}
+      NUM_RUN: ${{ inputs.num_runs || '5' }}
     runs-on: [self-hosted, ec2-al-2023-benchmarking-arm64]
-
+    timeout-minutes: 7200
     steps:
       - name: Set up Python
         uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
@@ -161,7 +166,8 @@ jobs:
             --config ./configs/benchmark-config-arm.json \
             --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH" \
             --target-ip ${{ secrets.EC2_ARM64_IP }} \
-            --results-dir "results"
+            --results-dir "results" \
+            --runs $NUM_RUN
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
