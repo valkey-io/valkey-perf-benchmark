@@ -250,28 +250,15 @@ Resources:
     Properties:
       GroupDescription: Security group for EKS Fargate cluster
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref FargatePodSecurityGroup
-          Description: Allow Fargate pods to access EKS API
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-eks-cluster-sg"
 
-  # Fargate Pod Security Group
   FargatePodSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for Fargate pods
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 3000
-          ToPort: 3000
-          SourceSecurityGroupId: !Ref ALBSecurityGroup
-          Description: Allow ALB to access Grafana on port 3000
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -279,27 +266,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-fargate-pod-sg"
-
-  # ALB Security Group
-  ALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for Application Load Balancer - CloudFront access only
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-          Description: Allow HTTP from anywhere (will be updated to CloudFront-only by deploy script)
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: Allow HTTPS from anywhere (will be updated to CloudFront-only by deploy script)
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-alb-sg"
 
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -312,14 +278,30 @@ Resources:
           ToPort: 5432
           SourceSecurityGroupId: !Ref FargatePodSecurityGroup
           Description: Allow Fargate pods to access PostgreSQL
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          SourceSecurityGroupId: !GetAtt EKSCluster.ClusterSecurityGroupId
-          Description: Allow EKS cluster pods to access PostgreSQL
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-sg"
+
+  EKSClusterSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EKSClusterSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref FargatePodSecurityGroup
+      Description: Allow Fargate pods to access EKS API
+
+  RDSSecurityGroupIngressFromEKS:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: EKSCluster
+    Properties:
+      GroupId: !Ref RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt EKSCluster.ClusterSecurityGroupId
+      Description: Allow EKS cluster pods to access PostgreSQL
 
   # IAM Roles
   EKSClusterRole:

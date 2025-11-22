@@ -74,6 +74,32 @@ fi
 print_status "RDS Endpoint: $RDS_ENDPOINT"
 echo
 
+# Get VPC ID from stack outputs
+VPC_ID=$(jq -r '.[] | select(.OutputKey=="VPCId") | .OutputValue' stack-outputs.json)
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "null" ]; then
+    print_error "Could not find VPC ID in stack outputs"
+    exit 1
+fi
+
+# Create or verify ALB Security Group
+export VPC_ID REGION PROJECT_NAME
+ALB_SG_ID=$(./create-alb-security-group.sh)
+
+if [ -z "$ALB_SG_ID" ]; then
+    print_error "Failed to create/verify ALB security group"
+    exit 1
+fi
+
+# Save ALB_SG_ID to config
+if ! grep -q "^ALB_SG_ID=" "$CONFIG_FILE"; then
+    echo "ALB_SG_ID=$ALB_SG_ID" >> "$CONFIG_FILE"
+else
+    sed -i.bak "s|^ALB_SG_ID=.*|ALB_SG_ID=$ALB_SG_ID|" "$CONFIG_FILE"
+fi
+
+print_status "ALB Security Group ID: $ALB_SG_ID"
+echo
+
 # Skip deployment steps if user chose not to update
 if [ "$SKIP_DEPLOYMENT" = true ]; then
     print_status "Skipping Helm and Ingress deployment steps..."
@@ -183,14 +209,18 @@ else
 fi
 echo
 
+# Prepare ALB Ingress with security group ID
+print_status "Preparing ALB Ingress configuration..."
+sed "s|__ALB_SECURITY_GROUP_ID__|$ALB_SG_ID|g" ../kubernetes/alb-ingress.yaml > alb-ingress-configured.yaml
+
 # Apply ALB Ingress
 if kubectl get ingress grafana-ingress -n grafana &>/dev/null; then
     print_status "ALB Ingress already exists, updating..."
-    kubectl apply -f ../kubernetes/alb-ingress.yaml
+    kubectl apply -f alb-ingress-configured.yaml
     print_success "ALB Ingress updated"
 else
     print_status "Creating ALB Ingress..."
-    kubectl apply -f ../kubernetes/alb-ingress.yaml
+    kubectl apply -f alb-ingress-configured.yaml
     print_success "ALB Ingress created"
 fi
 echo

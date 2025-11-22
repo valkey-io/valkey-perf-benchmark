@@ -202,13 +202,25 @@ CLUSTER_SG=$(aws eks describe-cluster \
 
 print_status "EKS cluster security group: $CLUSTER_SG"
 
-# Verify and ensure public access is removed (should already be done in Phase 03)
-print_status "Ensuring public access rule (0.0.0.0/0) is removed..."
-aws ec2 revoke-security-group-ingress \
-    --group-id "$ALB_SG" \
+# Check current ingress rules
+print_status "Checking current security group rules..."
+CURRENT_RULES=$(aws ec2 describe-security-groups \
+    --group-ids "$ALB_SG" \
     --region "$REGION" \
-    --ip-permissions '[{"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]' \
-    2>/dev/null && print_warning "Removed public access rule (should have been done in Phase 03)" || print_success "Public access already removed"
+    --query 'SecurityGroups[0].IpPermissions[?FromPort==`80`]' \
+    --output json)
+
+# Remove public access rule if it exists
+PUBLIC_RULE=$(echo "$CURRENT_RULES" | jq -r '.[] | select(.IpRanges[]?.CidrIp == "0.0.0.0/0")')
+if [ -n "$PUBLIC_RULE" ]; then
+    print_status "Removing public access rule (0.0.0.0/0)..."
+    aws ec2 revoke-security-group-ingress \
+        --group-id "$ALB_SG" \
+        --region "$REGION" \
+        --ip-permissions '[{"IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]}]' \
+        2>/dev/null && print_success "Removed public access rule" || print_warning "Failed to remove public access rule"
+else
+    print_suc
 
 # Verify CloudFront prefix list rule exists
 print_status "Ensuring CloudFront prefix list rule exists..."
