@@ -24,7 +24,12 @@ env/
 results*/
 
 # CloudFormation and AWS deployment artifacts
-dashboards/stack-outputs.json
+dashboards/scripts/stack-outputs.json
+dashboards/scripts/deployment-config.env
+dashboards/scripts/alb-dns-name.txt
+dashboards/scripts/grafana-deployment-summary.json
+dashboards/scripts/grafana-values-updated.yaml
+dashboards/scripts/alb-ingress-configured.yaml
 dashboards/*.pem
 *.pem
 
