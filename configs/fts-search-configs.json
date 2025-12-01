@@ -1,0 +1,458 @@
+[
+  {
+    "test_name": "FTS Development Testing",
+    "fts_tests": [
+      {
+        "group": 1,
+        "description": "10K doc baseline",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default", 
+          "dataset": "datasets/enwiki-latest-pages-articles.xml",
+          "xml_root_element": "page",
+          "maxdocs": 10000,
+          "concurrent_clients": 50,
+          "command": "HSET \"rd0-__rand_int__\" title \"__field:title__\" body \"__field:text__\" url \"__field:origin__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Single term basic",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:term__\""
+          },
+          {
+            "sub": "b", 
+            "description": "Proximity basic",
+            "dataset": "datasets/proximity_phrases.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:phrase__\""
+          }
+        ]
+      },
+      {
+        "group": 2,
+        "description": "Production single field",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/enwiki-latest-pages-articles.xml", 
+          "xml_root_element": "page",
+          "maxdocs": 100000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Single term production", 
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:term__\""
+          },
+          {
+            "sub": "b",
+            "description": "Proximity production",
+            "dataset": "datasets/proximity_phrases.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:phrase__\""
+          }
+        ]
+      },
+      {
+        "group": 3,
+        "description": "Multi-field comprehensive",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/field_explosion_50k.xml",
+          "xml_root_element": "doc", 
+          "maxdocs": 50000,
+          "field_range": "1-64",
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" title \"__field:field1__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Single term all fields",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:term__\""
+          },
+          {
+            "sub": "b", 
+            "description": "Single term specific field",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term__\""
+          },
+          {
+            "sub": "c",
+            "description": "Proximity all fields", 
+            "dataset": "datasets/proximity_phrases.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:phrase__\""
+          },
+          {
+            "sub": "d",
+            "description": "Proximity specific inorder",
+            "dataset": "datasets/proximity_phrases.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\""
+          },
+          {
+            "sub": "e",
+            "description": "Proximity mixed match inorder",
+            "dataset": "datasets/proximity_phrases.csv,datasets/miss_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\""
+          }
+        ]
+      },
+      {
+        "group": 4,
+        "description": "WITHOFFSETS feature",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "WITHOFFSETS",
+          "dataset": "datasets/field_explosion_50k.xml",
+          "xml_root_element": "doc",
+          "maxdocs": 50000, 
+          "field_range": "1-64",
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" title \"__field:field1__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Phrase search",
+            "dataset": "datasets/proximity_phrases.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:phrase__\""
+          },
+          {
+            "sub": "b",
+            "description": "Proximity slop=3", 
+            "dataset": "datasets/proximity_phrases.csv,datasets/miss_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\" SLOP 3"
+          },
+          {
+            "sub": "c",
+            "description": "10-term proximity slop=3",
+            "dataset": "datasets/extended_proximity.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\" SLOP 3"
+          }
+        ]
+      },
+      {
+        "group": 5,
+        "description": "WITHSUFFIXTRIE feature", 
+        "ingestion": {
+          "operation": "HSET",
+          "config": "WITHSUFFIXTRIE",
+          "dataset": "datasets/enwiki-latest-pages-articles.xml",
+          "xml_root_element": "page",
+          "maxdocs": 100000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Wildcard prefix",
+            "dataset": "datasets/wildcard_patterns.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:pattern__*\""
+          },
+          {
+            "sub": "b",
+            "description": "Wildcard suffix",
+            "dataset": "datasets/wildcard_patterns.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"*__field:pattern__\""
+          }
+        ]
+      },
+      {
+        "group": 6,
+        "description": "Pathological documents",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/enwiki-latest-pages-articles.xml",
+          "xml_root_element": "page", 
+          "maxdocs": 10000,
+          "concatenate": true,
+          "target_words": 100000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Search huge documents",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:term__\""
+          }
+        ]
+      },
+      {
+        "group": 7,
+        "description": "Massive scale",
+        "ingestion": {
+          "operation": "HSET", 
+          "config": "Default",
+          "dataset": "datasets/enwiki-latest-pages-articles.xml",
+          "xml_root_element": "page",
+          "maxdocs": 500000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Search massive index",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:term__\""
+          }
+        ]
+      },
+      {
+        "group": 8,
+        "description": "Postings explosion stress",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default", 
+          "dataset": "datasets/popular_term_100k.xml",
+          "xml_root_element": "doc",
+          "maxdocs": 100000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a", 
+            "description": "Popular term search",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"search\""
+          }
+        ]
+      },
+      {
+        "group": 9,
+        "description": "Term frequency explosion",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/term_repetition_5k.xml", 
+          "xml_root_element": "doc",
+          "maxdocs": 5000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "High frequency term search",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"performance\""
+          }
+        ]
+      },
+      {
+        "group": 10,
+        "description": "RadixTree breadth stress",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/prefix_explosion_500k.xml",
+          "xml_root_element": "doc", 
+          "maxdocs": 500000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Common prefix search", 
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"term_*\""
+          }
+        ]
+      },
+      {
+        "group": 11,
+        "description": "Concurrent mutex stress",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/enwiki-latest-pages-articles.xml",
+          "xml_root_element": "page",
+          "maxdocs": 100000,
+          "concurrent_clients": 20,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Search after concurrency", 
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"__field:term__\""
+          }
+        ]
+      },
+      {
+        "group": 12,
+        "description": "Backfill testing",
+        "test_type": "backfill",
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/enwiki-latest-pages-articles.xml",
+          "xml_root_element": "page",
+          "maxdocs": 100000,
+          "concurrent_clients": 50,
+          "command": "HSET rd0-__rand_int__ title \"__field:title__\" body \"__field:text__\" url \"__field:origin__\"",
+          "skip_index_creation": true
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Search during backfill",
+            "dataset": "datasets/search_terms.csv",
+            "command": "FT.SEARCH rd0 \"__field:term__\"",
+            "concurrent_with_backfill": true
+          },
+          {
+            "sub": "b",
+            "description": "Ingestion during backfill",
+            "dataset": "datasets/enwiki-latest-pages-articles.xml",
+            "xml_root_element": "page",
+            "maxdocs": 10000,
+            "command": "HSET rd0-__rand_int__ title \"__field:title__\" body \"__field:text__\" url \"__field:origin__\"",
+            "concurrent_with_backfill": true,
+            "test_phase": "ingestion"
+          }
+        ]
+      },
+      {
+        "group": 16,
+        "description": "Postings explosion stress",
+        "dev_only": true,
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/popular_term_100k.xml",
+          "xml_root_element": "doc",
+          "maxdocs": 100000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Popular term search",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"search\""
+          }
+        ]
+      },
+      {
+        "group": 17,
+        "description": "Term frequency explosion",
+        "dev_only": true,
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/term_repetition_5k.xml",
+          "xml_root_element": "doc",
+          "maxdocs": 5000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "High frequency term search",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"performance\""
+          }
+        ]
+      },
+      {
+        "group": 18,
+        "description": "RadixTree breadth stress",
+        "dev_only": true,
+        "ingestion": {
+          "operation": "HSET",
+          "config": "Default",
+          "dataset": "datasets/prefix_explosion_500k.xml",
+          "xml_root_element": "doc",
+          "maxdocs": 500000,
+          "concurrent_clients": 50,
+          "command": "HSET doc:__rand_int__ content \"__field:text__\""
+        },
+        "searches": [
+          {
+            "sub": "a",
+            "description": "Common prefix search",
+            "dataset": "datasets/search_terms.csv",
+            "concurrent_clients": 50,
+            "command": "FT.SEARCH rd0 \"term_*\""
+          }
+        ]
+      }
+    ],
+    "standalone_ingestion": [
+      {
+        "test": "I1",
+        "description": "Pipeline batch efficiency",
+        "operation": "HSET",
+        "config": "Default", 
+        "dataset": "datasets/enwiki-latest-pages-articles.xml",
+        "xml_root_element": "page",
+        "maxdocs": 100000,
+        "concurrent_clients": 50,
+        "batch_size": 1000,
+        "command": "HSET doc:__rand_int__ content \"__field:text__\""
+      },
+      {
+        "test": "I2",
+        "description": "Update vs insert cost",
+        "operation": "HSET", 
+        "config": "Default",
+        "dataset": "datasets/enwiki-latest-pages-articles.xml",
+        "xml_root_element": "page", 
+        "maxdocs": 100000,
+        "concurrent_clients": 50,
+        "update_mode": true,
+        "command": "HSET existing_doc:__rand_int__ content \"__field:text__\""
+      }
+    ],
+    "duration": 60,
+    "clients": [10],
+    "pipelines": [1],
+    "warmup": 5,
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false,
+    "profiling": {
+      "enabled": true,
+      "tool": "perf", 
+      "frequency": 99,
+      "per_scenario": true
+    }
+  }
+]

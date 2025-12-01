@@ -30,3 +30,18 @@ dashboards/*.pem
 
 # Logs
 *.log
+
+# Large FTS datasets - generated/downloaded via scripts/setup_datasets.py
+datasets/enwiki-latest-pages-articles.xml
+datasets/enwiki-latest-pages-articles.xml.bz2
+datasets/field_explosion_50k.xml
+datasets/popular_term_100k.xml
+datasets/term_repetition_5k.xml
+datasets/prefix_explosion_500k.xml
+
+# Keep small CSV datasets committed
+!datasets/*.csv
+
+# Temp config files
+configs/fts-filtered-config.json
+configs/fts-port-override.json

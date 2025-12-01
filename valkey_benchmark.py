@@ -85,7 +85,7 @@ class ClientRunner:
         print(f"Connecting to {self.target_ip}")
         kwargs = {
             "host": self.target_ip,
-            "port": DEFAULT_PORT,
+            "port": self.config.get("port", DEFAULT_PORT),
             "decode_responses": True,
             "socket_timeout": 10,
             "socket_connect_timeout": 10,
@@ -136,7 +136,8 @@ class ClientRunner:
 
         try:
             result = subprocess.run(
-                cmd_list,
+                cmd_str,
+                shell=True,
                 cwd=cwd,
                 capture_output=capture_output,
                 text=text,
@@ -409,7 +410,7 @@ class ClientRunner:
             cmd += ["--key", "./tests/tls/valkey.key"]
             cmd += ["--cacert", "./tests/tls/ca.crt"]
         cmd += ["-h", self.target_ip]
-        cmd += ["-p", "6379"]
+        cmd += ["-p", str(self.config.get("port", DEFAULT_PORT))]
         # Use --duration if specified, otherwise use -n (requests)
         if duration is not None:
             cmd += ["--duration", str(duration)]
