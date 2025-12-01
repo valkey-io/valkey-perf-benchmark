@@ -13,6 +13,11 @@ on:
         required: false
         default: "1"
         type: string
+      commits:
+        description: "List of commits to benchmark"
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: "0 */8 * * *"
 
@@ -30,6 +35,9 @@ defaults:
 permissions:
   id-token: write
   contents: read
+
+env:
+  benchmarking-manual-commits: ${{ github.event_name == 'workflow_dispatch' && inputs.commits || 'false' }}
 
 jobs:
   valkey_continuous_benchmark:
@@ -91,22 +99,30 @@ jobs:
         id: determine_commits
         working-directory: valkey-perf-benchmark
         run: |
-          PGPASSWORD=$(aws rds generate-db-auth-token \
-            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
-            --port 5432 \
-            --region ${{ secrets.AWS_REGION }} \
-            --username ${{ secrets.RDS_USERNAME }})
-          CONFIG_FILE="./configs/benchmark-config-arm.json"
-          commits=$(python utils/postgres_track_commits.py determine \
-            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
-            --port 5432 \
-            --database ${{ secrets.RDS_DATABASE }} \
-            --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD" \
-            --repo ../valkey \
-            --branch "$BRANCH" \
-            --max-commits "$MAX_COMMITS" \
-            --config-file "$CONFIG_FILE")
+          if [ "${{ env.benchmarking-manual-commits }}" == "false" ]; then
+            echo "Determining commits to benchmark..."
+            PGPASSWORD=$(aws rds generate-db-auth-token \
+              --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+              --port 5432 \
+              --region ${{ secrets.AWS_REGION }} \
+              --username ${{ secrets.RDS_USERNAME }})
+
+            CONFIG_FILE="./configs/benchmark-config-arm.json"
+            commits=$(python utils/postgres_track_commits.py determine \
+              --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+              --port 5432 \
+              --database ${{ secrets.RDS_DATABASE }} \
+              --username ${{ secrets.RDS_USERNAME }} \
+              --password "$PGPASSWORD" \
+              --repo ../valkey \
+              --branch "$BRANCH" \
+              --max-commits "$MAX_COMMITS" \
+              --config-file "$CONFIG_FILE")
+          else
+            echo "Using manual commits..."
+            commits="${{ inputs.commits }}"
+          fi
+
           echo "commit_ids=$commits" >> "$GITHUB_OUTPUT"
 
       - name: Mark commits as in progress
