@@ -87,16 +87,19 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
     return schema
 
 
-def get_existing_columns(conn: psycopg2.extensions.connection) -> Set[str]:
-    """Get existing column names from the benchmark_metrics table."""
+def get_existing_columns(
+    conn: psycopg2.extensions.connection, table_name: str
+) -> Set[str]:
+    """Get existing column names from the specified table."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT column_name 
             FROM information_schema.columns 
-            WHERE table_name = 'benchmark_metrics' 
+            WHERE table_name = %s 
             AND table_schema = 'public'
-        """
+        """,
+            (table_name,),
         )
         result = cur.fetchall()
         if result is None:
@@ -105,7 +108,9 @@ def get_existing_columns(conn: psycopg2.extensions.connection) -> Set[str]:
 
 
 def create_or_update_table(
-    conn: psycopg2.extensions.connection, required_schema: Dict[str, str]
+    conn: psycopg2.extensions.connection,
+    required_schema: Dict[str, str],
+    table_name: str,
 ) -> None:
     """Create table or add missing columns dynamically."""
     with conn.cursor() as cur:
@@ -115,9 +120,10 @@ def create_or_update_table(
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
                 WHERE table_schema = 'public' 
-                AND table_name = 'benchmark_metrics'
+                AND table_name = %s
             )
-        """
+        """,
+            (table_name,),
         )
         result = cur.fetchone()
         if result is None:
@@ -132,18 +138,20 @@ def create_or_update_table(
                 columns_def.append(f"{field} {column_type}")
 
             create_sql = f"""
-                CREATE TABLE benchmark_metrics (
+                CREATE TABLE {table_name} (
                     {', '.join(columns_def)}
                 )
             """
             cur.execute(create_sql)
-            print(f"Created new table with {len(required_schema)} columns")
+            print(
+                f"Created new table '{table_name}' with {len(required_schema)} columns"
+            )
 
             # Create indexes for performance
-            create_indexes(cur)
+            create_indexes(cur, table_name)
         else:
             # Table exists, check for missing columns
-            existing_columns = get_existing_columns(conn)
+            existing_columns = get_existing_columns(conn, table_name)
             missing_columns = []
 
             for field, column_type in required_schema.items():
@@ -152,9 +160,7 @@ def create_or_update_table(
 
             # Add missing columns
             for field, column_type in missing_columns:
-                alter_sql = (
-                    f"ALTER TABLE benchmark_metrics ADD COLUMN {field} {column_type}"
-                )
+                alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {field} {column_type}"
                 cur.execute(alter_sql)
                 print(f"Added new column: {field} ({column_type})")
 
@@ -164,13 +170,13 @@ def create_or_update_table(
     conn.commit()
 
 
-def create_indexes(cur) -> None:
+def create_indexes(cur, table_name: str) -> None:
     """Create performance indexes on the table."""
     indexes = [
-        "CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_commit ON benchmark_metrics(commit)",
-        "CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_timestamp ON benchmark_metrics(timestamp)",
-        "CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_command ON benchmark_metrics(command)",
-        "CREATE INDEX IF NOT EXISTS idx_benchmark_metrics_config ON benchmark_metrics(commit, command, data_size, pipeline, clients)",
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_commit ON {table_name}(commit)",
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(timestamp)",
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_command ON {table_name}(command)",
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_config ON {table_name}(commit, command, data_size, pipeline, clients)",
     ]
 
     for index_sql in indexes:
@@ -233,6 +239,7 @@ def convert_metrics_to_rows(
 def push_to_postgres(
     metrics_data: List[Dict[str, Any]],
     conn: Optional[psycopg2.extensions.connection],
+    table_name: str,
     dry_run: bool = False,
 ) -> int:
     """Push metrics to PostgreSQL with dynamic schema support.
@@ -240,6 +247,7 @@ def push_to_postgres(
     Args:
         metrics_data: List of benchmark metric dictionaries from metrics.json file.
         conn: PostgreSQL database connection.
+        table_name: Name of the PostgreSQL table to insert into.
         dry_run: If True, only show what would be inserted without actually inserting.
 
     Returns:
@@ -260,7 +268,7 @@ def push_to_postgres(
                 "Database connection is required for non-dry-run operations"
             )
         # Create or update table schema
-        create_or_update_table(conn, required_schema)
+        create_or_update_table(conn, required_schema, table_name)
 
     # Get column order (excluding auto-generated columns)
     column_order = [
@@ -285,14 +293,14 @@ def push_to_postgres(
     # Build dynamic INSERT statement
     columns_str = ", ".join(column_order)
     insert_sql = f"""
-        INSERT INTO benchmark_metrics ({columns_str}) 
+        INSERT INTO {table_name} ({columns_str}) 
         VALUES %s
     """
 
     if conn is None:
         raise ValueError("Database connection is required for inserting data")
 
-    print(f"  Inserting {len(rows)} rows into database...")
+    print(f"  Inserting {len(rows)} rows into {table_name}...")
     with conn.cursor() as cur:
         execute_values(cur, insert_sql, rows)
         inserted_count = cur.rowcount
@@ -303,13 +311,14 @@ def push_to_postgres(
     if inserted_count != len(rows):
         print(f"  Skipped {len(rows) - inserted_count} rows during insert (expected 0)")
 
-    print(f"Successfully inserted {inserted_count} rows")
+    print(f"Successfully inserted {inserted_count} rows into {table_name}")
     return len(rows)
 
 
 def process_commit_metrics(
     commit_dir: Path,
     conn: Optional[psycopg2.extensions.connection],
+    table_name: str,
     dry_run: bool = False,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
@@ -317,6 +326,7 @@ def process_commit_metrics(
     Args:
         commit_dir: Path to directory containing metrics.json file.
         conn: PostgreSQL database connection.
+        table_name: Name of the PostgreSQL table to insert into.
         dry_run: If True, only show what would be inserted without actually inserting.
 
     Returns:
@@ -335,7 +345,7 @@ def process_commit_metrics(
         return 0, True
 
     print(f"\n=== Processing {commit_dir.name} ===")
-    count = push_to_postgres(metrics_data, conn, dry_run)
+    count = push_to_postgres(metrics_data, conn, table_name, dry_run)
 
     status = "Would insert" if dry_run else "Inserted"
     print(f"{status} {count} metrics")
@@ -356,6 +366,7 @@ def main() -> None:
     parser.add_argument(
         "--password", help="Database password (not required for dry-run)"
     )
+    parser.add_argument("--table-name", required=True, help="PostgreSQL table name")
 
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
@@ -425,7 +436,7 @@ def main() -> None:
             print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
             try:
                 count, was_skipped = process_commit_metrics(
-                    commit_dir, conn, args.dry_run
+                    commit_dir, conn, args.table_name, args.dry_run
                 )
                 total_processed += count
                 if was_skipped:

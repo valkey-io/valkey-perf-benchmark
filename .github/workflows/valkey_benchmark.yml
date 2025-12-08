@@ -222,7 +222,8 @@ jobs:
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD"
+            --password "$PGPASSWORD" \
+            --table-name "benchmark_metrics"
 
       - name: Mark commits as complete after successful PostgreSQL push
         working-directory: valkey-perf-benchmark
