@@ -12,7 +12,7 @@ on:
         required: false
         default: "5"
         type: string
-  
+
   workflow_call:
     inputs:
       tags:
@@ -58,6 +58,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: valkey-io/valkey
+          ref: unstable
           fetch-depth: 0
           path: valkey
 
@@ -73,20 +74,10 @@ jobs:
           sudo dnf install -y gcc gcc-c++ make python3-devel openssl-devel bzip2-devel libffi-devel
           pip install -r requirements.txt
 
-      - name: Checkout valkey to build latest benchmark.
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
-        with:
-          repository: valkey-io/valkey
-          ref: "unstable"
-          path: valkey_latest
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Build latest valkey_latest
-        working-directory: valkey_latest
+      - name: Build latest benchmark and move to a different dir.
+        working-directory: valkey
         run: |
-          echo "Building latest valkey-benchmark for latest benchmark executable..."
-          make distclean || true
+          echo "Building latest valkey-benchmark..."
           make -j$(nproc)
           if [[ -f "src/valkey-benchmark" ]]; then
             echo "Successfully built latest valkey-benchmark"
@@ -96,9 +87,16 @@ jobs:
             echo "Failed to build valkey-benchmark"
             exit 1
           fi
-          VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
+
+          # Move benchmark executable to a permanent location
+          mkdir -p ../benchmark_bin
+          cp src/valkey-benchmark ../benchmark_bin/
+          VALKEY_BENCHMARK_PATH="$(cd ../benchmark_bin && pwd)/valkey-benchmark"
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
+
+          # Clean up build directory to save space
+          make distclean || true
 
       - name: benchmark_tags
         working-directory: valkey-perf-benchmark
