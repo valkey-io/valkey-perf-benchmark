@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Set, Optional
 
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extras import execute_values
 
 
@@ -135,13 +136,15 @@ def create_or_update_table(
             # Create new table with all required columns
             columns_def = []
             for field, column_type in required_schema.items():
-                columns_def.append(f"{field} {column_type}")
-
-            create_sql = f"""
-                CREATE TABLE {table_name} (
-                    {', '.join(columns_def)}
+                columns_def.append(
+                    sql.SQL("{} {}").format(
+                        sql.Identifier(field), sql.SQL(column_type)
+                    )
                 )
-            """
+
+            create_sql = sql.SQL("CREATE TABLE {} ({})").format(
+                sql.Identifier(table_name), sql.SQL(", ").join(columns_def)
+            )
             cur.execute(create_sql)
             print(
                 f"Created new table '{table_name}' with {len(required_schema)} columns"
@@ -160,7 +163,11 @@ def create_or_update_table(
 
             # Add missing columns
             for field, column_type in missing_columns:
-                alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {field} {column_type}"
+                alter_sql = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                    sql.Identifier(table_name),
+                    sql.Identifier(field),
+                    sql.SQL(column_type),
+                )
                 cur.execute(alter_sql)
                 print(f"Added new column: {field} ({column_type})")
 
@@ -173,13 +180,36 @@ def create_or_update_table(
 def create_indexes(cur, table_name: str) -> None:
     """Create performance indexes on the table."""
     indexes = [
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_commit ON {table_name}(commit)",
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_timestamp ON {table_name}(timestamp)",
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_command ON {table_name}(command)",
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_config ON {table_name}(commit, command, data_size, pipeline, clients)",
+        (
+            f"idx_{table_name}_commit",
+            [sql.Identifier("commit")],
+        ),
+        (
+            f"idx_{table_name}_timestamp",
+            [sql.Identifier("timestamp")],
+        ),
+        (
+            f"idx_{table_name}_command",
+            [sql.Identifier("command")],
+        ),
+        (
+            f"idx_{table_name}_config",
+            [
+                sql.Identifier("commit"),
+                sql.Identifier("command"),
+                sql.Identifier("data_size"),
+                sql.Identifier("pipeline"),
+                sql.Identifier("clients"),
+            ],
+        ),
     ]
 
-    for index_sql in indexes:
+    for index_name, columns in indexes:
+        index_sql = sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} ({})").format(
+            sql.Identifier(index_name),
+            sql.Identifier(table_name),
+            sql.SQL(", ").join(columns),
+        )
         cur.execute(index_sql)
 
 
@@ -291,11 +321,10 @@ def push_to_postgres(
         return len(rows)
 
     # Build dynamic INSERT statement
-    columns_str = ", ".join(column_order)
-    insert_sql = f"""
-        INSERT INTO {table_name} ({columns_str}) 
-        VALUES %s
-    """
+    insert_sql = sql.SQL("INSERT INTO {} ({}) VALUES %s").format(
+        sql.Identifier(table_name),
+        sql.SQL(", ").join(sql.Identifier(col) for col in column_order),
+    )
 
     if conn is None:
         raise ValueError("Database connection is required for inserting data")
