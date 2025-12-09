@@ -10,8 +10,8 @@ on:
       num_runs:
         description: "Number of runs to benchmark"
         required: false
-        default: "5"
-        type: string
+        default: 5
+        type: number
 
   workflow_call:
     inputs:
@@ -22,8 +22,8 @@ on:
       num_runs:
         description: "Number of runs to benchmark"
         required: false
-        default: "5"
-        type: string
+        default: 5
+        type: number
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
@@ -43,7 +43,7 @@ permissions:
 jobs:
   valkey_tags_benchmark:
     env:
-      NUM_RUN: ${{ inputs.num_runs || '5' }}
+      NUM_RUN: ${{ inputs.num_runs || 5 }}
       TAGS: ${{ inputs.tags }}
     runs-on: [self-hosted, ec2-al-2023-benchmarking-arm64]
     timeout-minutes: 7200
@@ -108,7 +108,7 @@ jobs:
             --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH" \
             --target-ip ${{ secrets.EC2_ARM64_IP }} \
             --results-dir "results" \
-            --runs $NUM_RUN
+            --runs "$NUM_RUN"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

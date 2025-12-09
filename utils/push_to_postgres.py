@@ -137,9 +137,7 @@ def create_or_update_table(
             columns_def = []
             for field, column_type in required_schema.items():
                 columns_def.append(
-                    sql.SQL("{} {}").format(
-                        sql.Identifier(field), sql.SQL(column_type)
-                    )
+                    sql.SQL("{} {}").format(sql.Identifier(field), sql.SQL(column_type))
                 )
 
             create_sql = sql.SQL("CREATE TABLE {} ({})").format(
