@@ -356,7 +356,19 @@ def main() -> None:
     parser.add_argument(
         "--password", help="Database password (not required for dry-run)"
     )
-
+    parser.add_argument(
+        "--test-type",
+        default="core",
+        help="Test type identifier (e.g., 'core', 'fts') for filtering in dashboards",
+    )
+    parser.add_argument(
+        "--module",
+        help="Module name being tested (e.g., 'valkey-search' for FTS tests)",
+    )
+    parser.add_argument(
+        "--module-commit",
+        help="Module commit SHA (for tracking module-specific versions)",
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
     )
@@ -407,33 +419,64 @@ def main() -> None:
             sys.exit(1)
 
     try:
-        # Process all commit directories
+        # Process all commit directories or direct metrics.json file
         # Note: Table creation/updates happen dynamically during processing
-        print(f"Scanning {results_dir} for commit directories...")
-        commit_dirs = [
-            d
-            for d in results_dir.iterdir()
-            if d.is_dir() and (d / "metrics.json").exists()
-        ]
-        commit_dirs.sort()
+        print(f"Scanning {results_dir} for metrics...")
 
-        print(f"Found {len(commit_dirs)} commit directories to process")
+        # Check if results_dir directly contains metrics.json (FTS structure)
+        if (results_dir / "metrics.json").exists():
+            print("Found metrics.json directly in results directory (FTS structure)")
 
-        total_processed = 0
+            # Load and augment metrics with additional fields
+            with open(results_dir / "metrics.json") as f:
+                metrics_data = json.load(f)
 
-        for i, commit_dir in enumerate(commit_dirs, 1):
-            print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
-            try:
-                count, was_skipped = process_commit_metrics(
-                    commit_dir, conn, args.dry_run
-                )
-                total_processed += count
-                if was_skipped:
-                    print(f"Warning: Skipped {commit_dir.name} (no valid metrics)")
-                print(f"Completed {commit_dir.name} ({count} metrics)")
-            except Exception as e:
-                print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
-                sys.exit(1)
+            # Add test_type, module, and module_commit to each metric
+            for metric in metrics_data:
+                metric["test_type"] = args.test_type
+                if args.module:
+                    metric["module"] = args.module
+                if args.module_commit:
+                    metric["module_commit"] = args.module_commit
+
+            print(f"Processing {len(metrics_data)} FTS metrics...")
+            count = push_to_postgres(metrics_data, conn, args.dry_run)
+            total_processed = count
+
+        else:
+            # Standard commit directory structure
+            commit_dirs = [
+                d
+                for d in results_dir.iterdir()
+                if d.is_dir() and (d / "metrics.json").exists()
+            ]
+            commit_dirs.sort()
+
+            print(f"Found {len(commit_dirs)} commit directories to process")
+
+            total_processed = 0
+
+            for i, commit_dir in enumerate(commit_dirs, 1):
+                print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
+                try:
+                    # Load and augment metrics
+                    with open(commit_dir / "metrics.json") as f:
+                        metrics_data = json.load(f)
+
+                    # Add test_type, module, and module_commit
+                    for metric in metrics_data:
+                        metric["test_type"] = args.test_type
+                        if args.module:
+                            metric["module"] = args.module
+                        if args.module_commit:
+                            metric["module_commit"] = args.module_commit
+
+                    count = push_to_postgres(metrics_data, conn, args.dry_run)
+                    total_processed += count
+                    print(f"Completed {commit_dir.name} ({count} metrics)")
+                except Exception as e:
+                    print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
+                    sys.exit(1)
 
         status = "[DRY RUN] Would process" if args.dry_run else "Successfully processed"
         print(f"\n{status} {total_processed} total metrics")

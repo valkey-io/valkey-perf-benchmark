@@ -114,6 +114,24 @@ def parse_args() -> argparse.Namespace:
         help="Number of times to run each benchmark configuration (default: 1)",
     )
 
+    parser.add_argument(
+        "--module",
+        choices=["core", "search"],
+        default="core",
+        help="Module to test: 'core' for standard Valkey commands, 'search' for valkey-search module (FTS, vector, etc.) (default: core)",
+    )
+
+    parser.add_argument(
+        "--groups",
+        help="Test groups to run (search module only, e.g., '1,2,3')",
+    )
+
+    parser.add_argument(
+        "--profiling",
+        action="store_true",
+        help="Enable performance profiling with flamegraphs (search module only)",
+    )
+
     args, unknown = parser.parse_known_args()
     if unknown:
         parser.error(f"Unrecognized arguments: {' '.join(unknown)}")
@@ -444,6 +462,66 @@ def main() -> None:
         print("ERROR: --runs must be a positive integer")
         sys.exit(1)
 
+    # Module-specific dispatch
+    if args.module == "search":
+        from fts_benchmark import run_fts_benchmarks
+        import subprocess
+
+        if not args.valkey_path:
+            print("ERROR: Search module testing requires --valkey-path")
+            sys.exit(1)
+
+        # Load config
+        with open(args.config, "r") as f:
+            search_config = json.load(f)[0]
+
+        logging.basicConfig(
+            level=getattr(logging, args.log_level),
+            format="%(asctime)s [%(levelname)s] %(message)s",
+        )
+
+        # Check for missing XML datasets from config
+        required_datasets = set()
+        for test_group in search_config.get("fts_tests", []):
+            if "ingestion" in test_group and "dataset" in test_group["ingestion"]:
+                required_datasets.add(test_group["ingestion"]["dataset"])
+            for search in test_group.get("searches", []):
+                if "dataset" in search:
+                    required_datasets.add(search["dataset"])
+
+        # Check only XML files (CSV files are committed)
+        missing_xml = [
+            Path(d)
+            for d in required_datasets
+            if d.endswith(".xml") and not Path(d).exists()
+        ]
+
+        if missing_xml:
+            logging.info(f"Missing datasets: {[str(f.name) for f in missing_xml]}")
+            logging.info("Running setup script (first run: ~30-60 min)...")
+            subprocess.run(["python3", "scripts/setup_datasets.py"], check=True)
+
+        results_dir = args.results_dir / f"{args.module}_tests"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        valkey_benchmark_path = str(
+            args.valkey_benchmark_path or args.valkey_path / "src" / "valkey-benchmark"
+        )
+        client_cores = search_config.get("client_cpu_range")
+
+        run_fts_benchmarks(
+            target_ip=args.target_ip,
+            config_file=args.config,
+            results_dir=results_dir,
+            valkey_path=str(args.valkey_path),
+            valkey_benchmark_path=valkey_benchmark_path,
+            cores=client_cores,
+            profiling_enabled=args.profiling,
+            server_type="auto",
+        )
+        return
+
+    # Core testing path (original behavior)
     commits = args.commits.copy()
     if args.baseline and args.baseline not in commits:
         commits.append(args.baseline)
