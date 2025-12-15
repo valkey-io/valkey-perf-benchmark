@@ -1,0 +1,160 @@
+name: Valkey Release Tags Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Space-separated list of tags to benchmark (e.g., '8.0.0 8.0.1')"
+        required: true
+        type: string
+      num_runs:
+        description: "Number of runs to benchmark"
+        required: false
+        default: 5
+        type: number
+
+  workflow_call:
+    inputs:
+      tags:
+        description: "Space-separated list of tags to benchmark (e.g., '8.0.0 8.0.1')"
+        required: true
+        type: string
+      num_runs:
+        description: "Number of runs to benchmark"
+        required: false
+        default: 5
+        type: number
+
+# Prevent concurrent workflow runs to avoid conflicts and resource contention
+# - group: All workflow runs share the same concurrency group
+# - cancel-in-progress: false: Queue new runs instead of canceling existing ones
+concurrency:
+  group: ec2-al-2023-benchmarking-arm64
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  valkey_tags_benchmark:
+    env:
+      NUM_RUN: ${{ inputs.num_runs || 5 }}
+      TAGS: ${{ inputs.tags }}
+    runs-on: [self-hosted, ec2-al-2023-benchmarking-arm64]
+    timeout-minutes: 7200
+    steps:
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Checkout Valkey
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: valkey-io/valkey
+          ref: unstable
+          fetch-depth: 0
+          path: valkey
+
+      - name: Checkout Valkey Benchmark
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: valkey-perf-benchmark
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ make python3-devel openssl-devel bzip2-devel libffi-devel
+          pip install -r requirements.txt
+
+      - name: Build latest benchmark and move to a different dir.
+        working-directory: valkey
+        run: |
+          echo "Building latest valkey-benchmark..."
+          make -j
+          if [[ -f "src/valkey-benchmark" ]]; then
+            echo "Successfully built latest valkey-benchmark"
+            ls -la src/valkey-benchmark
+            ./src/valkey-benchmark --version || echo "Version check completed"
+          else
+            echo "Failed to build valkey-benchmark"
+            exit 1
+          fi
+
+          # Move benchmark executable to a permanent location
+          mkdir -p ../benchmark_bin
+          cp src/valkey-benchmark ../benchmark_bin/
+          VALKEY_BENCHMARK_PATH="$(cd ../benchmark_bin && pwd)/valkey-benchmark"
+          echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
+          echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
+
+          # Clean up build directory to save space
+          make distclean || true
+
+      - name: benchmark_tags
+        working-directory: valkey-perf-benchmark
+        run: |
+          echo "===== BENCHMARKING TAGS: $TAGS ====="
+          python ./benchmark.py \
+            --commits $TAGS \
+            --config ./configs/benchmark-config-tag-arm.json \
+            --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH" \
+            --target-ip ${{ secrets.EC2_ARM64_IP }} \
+            --results-dir "results" \
+            --runs "$NUM_RUN"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: valkey-perf-benchmark/results
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Upload metrics to S3
+        run: |
+          ROOT_DIR="valkey-perf-benchmark/results"
+          for tag in $TAGS; do
+            echo "Uploading metrics for tag $tag"
+            if [ -d "$ROOT_DIR/$tag" ]; then
+              aws s3 cp "$ROOT_DIR/$tag/metrics.json" \
+                "s3://${{ secrets.AWS_S3_BUCKET }}/results/$tag/metrics.json"
+            else
+              echo "Warning: No results directory found for tag $tag"
+            fi
+          done
+
+      - name: Push metrics to PostgreSQL
+        working-directory: valkey-perf-benchmark
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          python utils/push_to_postgres.py \
+            --results-dir ./results \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
+            --table-name "benchmark_tags_metrics"
+
+      - name: Cleanup any running valkey processes and files
+        if: always()
+        continue-on-error: true
+        run: |
+          pkill -f valkey || echo "No valkey processes found to kill"
+          rm -rf *

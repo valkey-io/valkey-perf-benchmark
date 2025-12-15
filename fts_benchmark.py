@@ -83,11 +83,12 @@ class FTSBenchmarkRunner(ClientRunner):
         for standalone_test in fts_config.get("standalone_ingestion", []):
             self._run_standalone_ingestion_test(standalone_test)
 
-        # Save results using MetricsProcessor (same as core tests)
+        # Save results using MetricsProcessor with commit-based directory (same as core tests)
         if self.all_metrics:
-            self.metrics_processor.write_metrics(self.results_dir, self.all_metrics)
+            commit_dir = self.results_dir / self.metrics_processor.commit_id
+            self.metrics_processor.write_metrics(commit_dir, self.all_metrics)
             logging.info(
-                f"Wrote {len(self.all_metrics)} metrics to results/fts_tests/metrics.json"
+                f"Wrote {len(self.all_metrics)} metrics to {commit_dir}/metrics.json"
             )
 
         logging.info("=== FTS Benchmark Testing Complete ===")
