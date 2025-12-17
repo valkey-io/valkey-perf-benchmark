@@ -84,41 +84,49 @@ def generate_field_explosion(output_dir: Path, source_wiki: Path) -> Path:
 
     # Parse Wikipedia and create multi-field documents
     with open(output_file, "w", encoding="utf-8") as out:
-        out.write('<?xml version="1.0" encoding="UTF-8"?>\n<docs>\n')
+        out.write('<?xml version="1.0" encoding="UTF-8"?>\n<corpus>\n')
 
         # Parse Wikipedia XML incrementally
         context = ET.iterparse(source_wiki, events=("end",))
         doc_count = 0
 
         for event, elem in context:
-            if elem.tag.endswith("page") and doc_count < 50000:
-                # Extract text content
-                text_elem = elem.find(
-                    ".//{http://www.mediawiki.org/xml/export-0.10/}text"
-                )
-                if text_elem is not None and text_elem.text:
-                    text = text_elem.text[:1000]  # Limit text size
+            # Namespace-agnostic: remove namespace from tag
+            tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
 
-                    # Create document with 50 fields (Valkey Search max)
-                    out.write("  <doc>\n")
-                    for i in range(1, 51):
-                        # Distribute text across fields
-                        field_text = (
-                            text[i * 20 : (i + 1) * 20]
-                            if len(text) > i * 20
-                            else text[:20]
-                        )
-                        out.write(f"    <field{i}>{field_text}</field{i}>\n")
-                    out.write("  </doc>\n")
+            if tag_name == "page" and doc_count < 50000:
+                # Extract text content - namespace-agnostic search
+                text_elem = None
+                for child in elem.iter():
+                    child_tag = (
+                        child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    )
+                    if child_tag == "text" and child.text:
+                        text_elem = child
+                        break
+
+                if text_elem is not None and text_elem.text:
+                    if text_elem.text.startswith("#REDIRECT"):
+                        elem.clear()
+                        continue
+                    text = text_elem.text[:1012]
 
                     doc_count += 1
+                    out.write("  <doc>\n")
+                    out.write(f"    <id>{doc_count:06d}</id>\n")
+                    for i in range(1, 51):
+                        out.write(f"    <field{i}>{text}</field{i}>\n")
+                    out.write("  </doc>\n")
+
                     if doc_count % 10000 == 0:
                         logging.info(f"Generated {doc_count} documents...")
 
-                # Clear element to save memory
+                    if doc_count >= 50000:
+                        break
+
                 elem.clear()
 
-        out.write("</docs>\n")
+        out.write("</corpus>\n")
 
     logging.info(f"Generated {doc_count} documents with 50 fields each")
     logging.info(f"Output: {output_file}")
