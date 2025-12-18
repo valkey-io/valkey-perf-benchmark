@@ -44,6 +44,6 @@ datasets/prefix_explosion_500k.xml
 !datasets/proximity_phrases.csv
 !datasets/mixed_match.csv
 
-# Temp config files
-configs/fts-filtered-config.json
-configs/fts-port-override.json
+# Flamegraph scripts (downloaded on demand from GitHub)
+scripts/stackcollapse-perf.pl
+scripts/flamegraph.pl

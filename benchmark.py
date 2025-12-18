@@ -127,9 +127,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--profiling",
-        action="store_true",
-        help="Enable performance profiling with flamegraphs (search module only)",
+        "--scenarios",
+        help="Specific scenarios to run (search module only, e.g., 'ingest,a,b')",
     )
 
     args, unknown = parser.parse_known_args()
@@ -464,7 +463,7 @@ def main() -> None:
 
     # Module-specific dispatch
     if args.module == "search":
-        from fts_benchmark import run_fts_benchmarks
+        from search_benchmark import SearchBenchmarkRunner
         import subprocess
 
         if not args.valkey_path:
@@ -480,14 +479,27 @@ def main() -> None:
             format="%(asctime)s [%(levelname)s] %(message)s",
         )
 
-        # Check for missing XML datasets from config
+        # Parse requested groups (if specified)
+        groups_to_run = None
+        if args.groups:
+            groups_to_run = set(int(g.strip()) for g in args.groups.split(","))
+
+        # Parse requested scenarios (if specified)
+        if args.scenarios:
+            scenario_ids = set(s.strip() for s in args.scenarios.split(","))
+            search_config["scenario_filter"] = scenario_ids
+            logging.info(f"Scenario filter enabled: {scenario_ids}")
+
+        # Check for missing XML datasets from config (only for groups being run)
         required_datasets = set()
         for test_group in search_config.get("fts_tests", []):
-            if "ingestion" in test_group and "dataset" in test_group["ingestion"]:
-                required_datasets.add(test_group["ingestion"]["dataset"])
-            for search in test_group.get("searches", []):
-                if "dataset" in search:
-                    required_datasets.add(search["dataset"])
+            # Filter by requested groups
+            if groups_to_run and test_group["group"] not in groups_to_run:
+                continue
+
+            for scenario in test_group.get("scenarios", []):
+                if "dataset" in scenario:
+                    required_datasets.add(scenario["dataset"])
 
         # Check only XML files (CSV files are committed)
         missing_xml = [
@@ -498,8 +510,27 @@ def main() -> None:
 
         if missing_xml:
             logging.info(f"Missing datasets: {[str(f.name) for f in missing_xml]}")
-            logging.info("Running setup script (first run: ~30-60 min)...")
-            subprocess.run(["python3", "scripts/setup_datasets.py"], check=True)
+            logging.info("Running setup script...")
+
+            # Get dataset generation params from config
+            dataset_gen = search_config.get("dataset_generation", {})
+            cmd = ["python3", "scripts/setup_datasets.py", "--files"] + [
+                str(f) for f in missing_xml
+            ]
+
+            # Extract params from first matching dataset (they share same source)
+            for missing_file in missing_xml:
+                if missing_file.name in dataset_gen:
+                    params = dataset_gen[missing_file.name]
+                    if "max_fields" in params:
+                        cmd += ["--max-fields", str(params["max_fields"])]
+                    if "field_size" in params:
+                        cmd += ["--field-size", str(params["field_size"])]
+                    if "doc_count" in params:
+                        cmd += ["--doc-count", str(params["doc_count"])]
+                    break
+
+            subprocess.run(cmd, check=True)
 
         results_dir = args.results_dir / f"{args.module}_tests"
         results_dir.mkdir(parents=True, exist_ok=True)
@@ -507,18 +538,39 @@ def main() -> None:
         valkey_benchmark_path = str(
             args.valkey_benchmark_path or args.valkey_path / "src" / "valkey-benchmark"
         )
-        client_cores = search_config.get("client_cpu_range")
 
-        run_fts_benchmarks(
-            target_ip=args.target_ip,
-            config_file=args.config,
+        # Set target_ip in config (from CLI arg with default)
+        search_config["target_ip"] = args.target_ip
+
+        # Detect architecture
+        architecture = platform.machine()
+
+        # Read parameters from config
+        target_ip = search_config.get("target_ip", "127.0.0.1")
+        cores = search_config.get("client_cpu_range")
+        commit_id = search_config.get("commit_id", "HEAD")
+        profiling_enabled = search_config.get("profiling", {}).get("enabled", False)
+        server_type = search_config.get("server_type", "auto")
+
+        # Create and run search benchmark runner directly
+        runner = SearchBenchmarkRunner(
+            commit_id=commit_id,
+            config=search_config,
+            cluster_mode=search_config.get("cluster_mode", False),
+            tls_mode=search_config.get("tls_mode", False),
+            target_ip=target_ip,
             results_dir=results_dir,
             valkey_path=str(args.valkey_path),
+            cores=cores,
             valkey_benchmark_path=valkey_benchmark_path,
-            cores=client_cores,
-            profiling_enabled=args.profiling,
-            server_type="auto",
+            runs=1,
+            server_launcher=None,
+            architecture=architecture,
+            profiling_enabled=profiling_enabled,
+            server_type=server_type,
         )
+        runner.wait_for_server_ready()
+        runner.run_fts_benchmark_config(search_config)
         return
 
     # Core testing path (original behavior)

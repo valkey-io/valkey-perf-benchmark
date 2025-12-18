@@ -2,7 +2,6 @@
 
 import logging
 import platform
-import signal
 import subprocess
 import time
 from pathlib import Path
@@ -12,155 +11,236 @@ from typing import Optional
 class PerformanceProfiler:
     """Generic performance profiler using perf and flamegraph tools."""
 
-    def __init__(self, results_dir: Path, enabled: bool = True):
-        self.results_dir = results_dir / "flamegraphs"
-        self.results_dir.mkdir(exist_ok=True)
+    def __init__(
+        self,
+        results_dir: Path,
+        enabled: bool = True,
+        config: Optional[dict] = None,
+        commit_id: str = "HEAD",
+    ):
+        """Initialize profiler with config-driven parameters.
+
+        Args:
+            results_dir: Directory for profiling outputs
+            enabled: Whether profiling is enabled
+            config: Configuration dict containing profiling settings
+            commit_id: Commit ID for directory organization
+        """
+        # Store timestamp for filenames
+        from datetime import datetime
+
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = results_dir / commit_id
+        self.results_dir = run_dir / "flamegraphs"
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(f"Profiler output directory: {self.results_dir}")
         self.enabled = enabled
         self.profiler_process = None
+        self.profiling_thread = None
+        self.config = config
+
+        # Ensure flamegraph scripts are available upfront if profiling enabled
+        if self.enabled:
+            self._ensure_flamegraph_scripts()
+
+        # Extract profiling configuration from config dict
+        profiling_config = config.get("profiling", {}) if config else {}
+        self.sampling_freq = profiling_config.get("sampling_freq", 999)
+        self.profile_delay = profiling_config.get("profile_delay", 85)
+        self.profile_duration = profiling_config.get("profile_duration", 10)
+        self.profile_mode = profiling_config.get("mode", "cpu")
+
+        # Validate profile mode
+        valid_modes = ["cpu", "wall-time"]
+        if self.profile_mode not in valid_modes:
+            logging.warning(
+                f"Invalid profile_mode '{self.profile_mode}', defaulting to 'cpu'. "
+                f"Valid modes: {valid_modes}"
+            )
+            self.profile_mode = "cpu"
 
         # Architecture-aware call graph selection
         arch = platform.machine()
         self.call_graph = "fp" if arch in ["aarch64", "arm64"] else "dwarf"
 
+    def _ensure_flamegraph_scripts(self) -> tuple[Path, Path]:
+        """Download flamegraph scripts if not present. Called during init."""
+        scripts_dir = Path(__file__).parent / "scripts"
+        stackcollapse = scripts_dir / "stackcollapse-perf.pl"
+        flamegraph = scripts_dir / "flamegraph.pl"
+
+        if stackcollapse.exists() and flamegraph.exists():
+            logging.info("Flamegraph scripts already cached")
+            return stackcollapse, flamegraph
+
+        logging.info("Downloading flamegraph scripts from GitHub...")
+
+        import urllib.request
+
+        base_url = "https://raw.githubusercontent.com/brendangregg/FlameGraph/master"
+
+        for script_name, path in [
+            ("stackcollapse-perf.pl", stackcollapse),
+            ("flamegraph.pl", flamegraph),
+        ]:
+            url = f"{base_url}/{script_name}"
+            try:
+                urllib.request.urlretrieve(url, path)
+                path.chmod(0o755)  # Make executable
+                logging.info(f"Downloaded and cached: {script_name}")
+            except Exception as e:
+                logging.error(f"Failed to download {script_name}: {e}")
+                raise RuntimeError(
+                    f"Cannot initialize profiling without flamegraph scripts"
+                )
+
+        return stackcollapse, flamegraph
+
     def start_profiling(
-        self, test_id: str, target_process: str = "valkey-server"
+        self,
+        test_id: str,
+        target_process: str = "valkey-server",
     ) -> None:
-        """Start performance profiling for a test."""
+        """Start performance profiling for a test.
+
+        Args:
+            test_id: Identifier for this profiling session (e.g., "ingestion_1", "search_1a")
+            target_process: Process name to profile
+        """
         if not self.enabled:
             return
 
+        # Get phase-specific overrides
+        phase_key = "ingestion" if "ingestion" in test_id.lower() else "search"
+        phase_config = (
+            self.config.get("profiling", {}).get(phase_key, {}) if self.config else {}
+        )
+        delay = phase_config.get("profile_delay", self.profile_delay)
+        duration = phase_config.get("profile_duration", self.profile_duration)
+
+        import threading
+
+        self.profiling_thread = threading.Thread(
+            target=self._profiling_worker,
+            args=(test_id, target_process, delay, duration),
+            daemon=True,
+        )
+        self.profiling_thread.start()
+        logging.info(
+            f"Profiling started: {test_id} (delay={delay}s, duration={duration}s)"
+        )
+
+    def _profiling_worker(
+        self, test_id: str, target_process: str, delay: int, duration: int
+    ) -> None:
+        """Delayed profiling worker."""
         try:
+            time.sleep(delay)
+
             proc = subprocess.run(
                 ["pgrep", "-f", target_process], capture_output=True, text=True
             )
             if proc.returncode != 0:
-                logging.warning(f"No {target_process} process found")
+                logging.warning(f"Process {target_process} not found")
                 return
 
             server_pid = proc.stdout.strip().split()[0]
+            perf_data = self.results_dir / f"{test_id}_{self.timestamp}.perf.data"
 
-            perf_cmd = [
-                "sudo",
-                "perf",
-                "record",
-                "-e",
-                "cycles",
+            perf_cmd = ["sudo", "perf", "record"]
+            if self.profile_mode == "cpu":
+                perf_cmd += ["-e", "cycles"]
+            elif self.profile_mode == "wall-time":
+                perf_cmd += ["-e", "cpu-clock,sched:sched_switch"]
+            perf_cmd += [
                 "-F",
-                "99",
+                str(self.sampling_freq),
                 "--call-graph",
                 self.call_graph,
                 "-p",
                 server_pid,
                 "-o",
-                str(self.results_dir / f"{test_id}.perf.data"),
+                str(perf_data),
             ]
+
+            logging.info(
+                f"Profiling: {self.profile_mode} mode, {self.sampling_freq}Hz, {duration}s"
+            )
 
             self.profiler_process = subprocess.Popen(
                 perf_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            logging.info(f"Using call-graph method: {self.call_graph}")
 
             time.sleep(0.5)
             if self.profiler_process.poll() is not None:
-                stdout, stderr = self.profiler_process.communicate()
-                logging.error(f"Perf failed to start: {stderr.decode()}")
+                logging.error(
+                    f"Perf failed: {self.profiler_process.stderr.read().decode()}"
+                )
                 self.profiler_process = None
                 return
 
-            logging.info(f"Started profiling for {test_id} (PID: {server_pid})")
-            time.sleep(0.5)
+            time.sleep(duration)
+            self._stop_perf_process()
 
         except Exception as e:
-            logging.warning(f"Failed to start profiling: {e}")
+            logging.warning(f"Profiling failed: {e}")
 
-    def stop_profiling(self, test_id: str) -> None:
-        """Stop profiling and generate comprehensive analysis."""
-        if not self.enabled or not self.profiler_process:
+    def _stop_perf_process(self) -> None:
+        """Stop perf process."""
+        if not self.profiler_process:
             return
 
         try:
-            # Stop perf recording gracefully with SIGINT (like Ctrl+C)
-            # This allows perf to finalize the header with correct data_size field
-            # Find the actual perf process PID (not the sudo wrapper)
             perf_pid_search = subprocess.run(
                 ["pgrep", "-P", str(self.profiler_process.pid)],
                 capture_output=True,
                 text=True,
             )
-
             if perf_pid_search.returncode == 0:
                 actual_perf_pid = perf_pid_search.stdout.strip().split()[0]
-                logging.info(f"Sending SIGINT to perf process {actual_perf_pid}")
                 subprocess.run(["sudo", "kill", "-INT", actual_perf_pid], check=False)
             else:
-                # Fallback: signal the subprocess directly
-                logging.warning(
-                    "Could not find perf child process, signaling subprocess"
-                )
                 subprocess.run(
                     ["sudo", "kill", "-INT", str(self.profiler_process.pid)],
                     check=False,
                 )
+        except Exception as e:
+            logging.warning(f"Stop failed: {e}")
 
-            # Wait indefinitely for perf to finish - large files can take several minutes
-            # No timeout - let perf complete its finalization process
-            logging.info("Waiting for perf to finalize data file...")
-            stdout, stderr = self.profiler_process.communicate()
+    def stop_profiling(self, test_id: str) -> None:
+        """Stop profiling and generate analysis."""
+        if not self.enabled:
+            return
 
-            # Check for errors
-            if stderr:
-                stderr_text = stderr.decode() if stderr else ""
-                if stderr_text and "Permission denied" in stderr_text:
-                    logging.error(f"Perf permission error: {stderr_text}")
-                elif stderr_text:
-                    logging.warning(f"Perf stderr: {stderr_text}")
+        try:
+            if self.profiling_thread and self.profiling_thread.is_alive():
+                self.profiling_thread.join()
 
-            perf_data = self.results_dir / f"{test_id}.perf.data"
+            if self.profiler_process:
+                if self.profiler_process.poll() is None:
+                    self._stop_perf_process()
 
-            if perf_data.exists() and perf_data.stat().st_size > 0:
-                logging.info(f"Perf data size: {perf_data.stat().st_size} bytes")
-
-                # Verify perf data header integrity before processing
-                verify_header = subprocess.run(
-                    ["sudo", "perf", "report", "-i", str(perf_data), "--header-only"],
-                    capture_output=True,
-                    text=True,
-                )
-
-                if verify_header.returncode != 0:
-                    logging.error(f"Perf data header is corrupted or invalid")
-                    logging.error(f"Perf verification error: {verify_header.stderr}")
-                    logging.error("File will be preserved but cannot be processed")
+                stdout, stderr = self.profiler_process.communicate()
+                if stderr and b"Permission denied" in stderr:
+                    logging.error(f"Perf permission error")
                     return
 
-                logging.info("Perf data header verified successfully")
+                self.profiler_process = None
 
-                # Generate perf report
+            perf_data = self.results_dir / f"{test_id}_{self.timestamp}.perf.data"
+            if perf_data.exists() and perf_data.stat().st_size > 0:
                 self._generate_perf_report(perf_data, test_id)
-
-                # Generate flamegraph if available
                 self._generate_flamegraph(perf_data, test_id)
-
-                logging.info(f"Preserved raw perf data: {perf_data}")
-            elif perf_data.exists():
-                logging.error(f"Perf data file is empty (0 bytes): {perf_data}")
-                logging.error(
-                    "This usually means perf couldn't collect samples - check permissions"
-                )
             else:
-                logging.error(f"Perf data file not created: {perf_data}")
-
-            self.profiler_process = None
-            logging.info(f"Completed profiling analysis for {test_id}")
+                logging.warning(f"No perf data for {test_id}")
 
         except Exception as e:
-            logging.warning(f"Failed to stop profiling: {e}")
+            logging.warning(f"Stop profiling failed: {e}")
 
     def _generate_perf_report(self, perf_data: Path, test_id: str) -> None:
-        """Generate perf report with function hotspots."""
-        report_output = self.results_dir / f"{test_id}_report.txt"
+        """Generate perf report."""
+        report_output = self.results_dir / f"{test_id}_{self.timestamp}_report.txt"
 
-        # Use sudo for perf report to read the data file
         perf_report = subprocess.run(
             ["sudo", "perf", "report", "-i", str(perf_data), "--stdio"],
             capture_output=True,
@@ -168,65 +248,42 @@ class PerformanceProfiler:
         )
 
         if perf_report.returncode == 0:
-            with open(report_output, "w") as f:
-                f.write(perf_report.stdout)
-            logging.info(f"Generated perf report: {report_output}")
+            report_output.write_text(perf_report.stdout)
+            logging.info(f"Report: {report_output}")
 
     def _generate_flamegraph(self, perf_data: Path, test_id: str) -> None:
-        """Generate flamegraph visualization."""
-        flamegraph_output = self.results_dir / f"{test_id}.svg"
+        """Generate flamegraph."""
+        flamegraph_output = self.results_dir / f"{test_id}_{self.timestamp}.svg"
+        stackcollapse = Path(__file__).parent / "scripts" / "stackcollapse-perf.pl"
+        flamegraph = Path(__file__).parent / "scripts" / "flamegraph.pl"
 
-        # Use local scripts from scripts directory
-        stackcollapse_script = (
-            Path(__file__).parent / "scripts" / "stackcollapse-perf.pl"
-        )
-        flamegraph_script = Path(__file__).parent / "scripts" / "flamegraph.pl"
-
-        if not stackcollapse_script.exists():
-            logging.warning(
-                f"stackcollapse-perf.pl not found at {stackcollapse_script}"
-            )
+        if not stackcollapse.exists() or not flamegraph.exists():
+            logging.warning(f"Flamegraph scripts not found")
             return
 
-        if not flamegraph_script.exists():
-            logging.warning(f"flamegraph.pl not found at {flamegraph_script}")
-            return
-
-        # Pipeline: perf script -> stackcollapse-perf.pl -> flamegraph.pl
-        # Step 1: Get raw perf script output
         perf_script = subprocess.run(
             ["sudo", "perf", "script", "-i", str(perf_data)],
             capture_output=True,
             text=True,
         )
-
         if perf_script.returncode != 0:
-            logging.warning(f"perf script failed: {perf_script.stderr}")
             return
 
-        # Step 2: Collapse stacks
         stackcollapse_proc = subprocess.run(
-            ["perl", str(stackcollapse_script)],
+            ["perl", str(stackcollapse)],
             input=perf_script.stdout,
             capture_output=True,
             text=True,
         )
-
         if stackcollapse_proc.returncode != 0:
-            logging.warning(f"stackcollapse failed: {stackcollapse_proc.stderr}")
             return
 
-        # Step 3: Generate flamegraph
         flamegraph_proc = subprocess.run(
-            ["perl", str(flamegraph_script)],
+            ["perl", str(flamegraph)],
             input=stackcollapse_proc.stdout,
             capture_output=True,
             text=True,
         )
-
         if flamegraph_proc.returncode == 0:
-            with open(flamegraph_output, "w") as f:
-                f.write(flamegraph_proc.stdout)
-            logging.info(f"Generated flamegraph: {flamegraph_output}")
-        else:
-            logging.warning(f"Failed to generate flamegraph: {flamegraph_proc.stderr}")
+            flamegraph_output.write_text(flamegraph_proc.stdout)
+            logging.info(f"Flamegraph: {flamegraph_output}")

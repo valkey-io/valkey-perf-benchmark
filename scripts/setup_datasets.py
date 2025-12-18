@@ -66,36 +66,34 @@ def download_wikipedia(output_dir: Path) -> Path:
         sys.exit(1)
 
 
-def generate_field_explosion(output_dir: Path, source_wiki: Path) -> Path:
-    """Generate field explosion dataset with 50 fields per document (Valkey Search max)."""
-    logging.info("=" * 80)
-    logging.info("Generating field_explosion_50k.xml (50 fields)...")
-    logging.info("=" * 80)
-
+def generate_field_explosion(
+    output_dir: Path,
+    source_wiki: Path,
+    max_fields: int = 50,
+    field_size: int = 1000,
+    doc_count: int = 50000,
+) -> Path:
+    """Generate field explosion dataset with configurable parameters."""
     output_file = output_dir / "field_explosion_50k.xml"
 
     if output_file.exists():
-        logging.info(f"Field explosion dataset already exists: {output_file}")
+        logging.info(f"Dataset already exists: {output_file}")
         return output_file
 
-    logging.info("Parsing Wikipedia XML...")
-    logging.info("Creating 50K documents with 50 TEXT fields each...")
-    logging.info("Note: Valkey Search maximum is 50 fields per index")
+    logging.info(
+        f"Generating {output_file.name} ({max_fields} fields, {field_size} chars, {doc_count} docs)"
+    )
 
-    # Parse Wikipedia and create multi-field documents
     with open(output_file, "w", encoding="utf-8") as out:
         out.write('<?xml version="1.0" encoding="UTF-8"?>\n<corpus>\n')
 
-        # Parse Wikipedia XML incrementally
         context = ET.iterparse(source_wiki, events=("end",))
-        doc_count = 0
+        generated = 0
 
         for event, elem in context:
-            # Namespace-agnostic: remove namespace from tag
             tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
 
-            if tag_name == "page" and doc_count < 50000:
-                # Extract text content - namespace-agnostic search
+            if tag_name == "page" and generated < doc_count:
                 text_elem = None
                 for child in elem.iter():
                     child_tag = (
@@ -109,34 +107,34 @@ def generate_field_explosion(output_dir: Path, source_wiki: Path) -> Path:
                     if text_elem.text.startswith("#REDIRECT"):
                         elem.clear()
                         continue
-                    text = text_elem.text[:1012]
 
-                    doc_count += 1
+                    text = text_elem.text[:field_size]
+                    generated += 1
+
                     out.write("  <doc>\n")
-                    out.write(f"    <id>{doc_count:06d}</id>\n")
-                    for i in range(1, 51):
+                    out.write(f"    <id>{generated:06d}</id>\n")
+                    for i in range(1, max_fields + 1):
                         out.write(f"    <field{i}>{text}</field{i}>\n")
                     out.write("  </doc>\n")
 
-                    if doc_count % 10000 == 0:
-                        logging.info(f"Generated {doc_count} documents...")
+                    if generated % 10000 == 0:
+                        logging.info(f"Generated {generated} documents...")
 
-                    if doc_count >= 50000:
+                    if generated >= doc_count:
                         break
 
                 elem.clear()
 
         out.write("</corpus>\n")
 
-    logging.info(f"Generated {doc_count} documents with 50 fields each")
-    logging.info(f"Output: {output_file}")
+    logging.info(f"Generated {generated} documents with {max_fields} fields each")
     return output_file
 
 
 def main():
     """Main entry point for dataset setup."""
     parser = argparse.ArgumentParser(
-        description="Generate FTS test dataset for Group 1",
+        description="Generate search test datasets with configurable parameters",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -147,35 +145,77 @@ def main():
         help="Output directory for datasets (default: datasets/)",
     )
 
+    parser.add_argument(
+        "--files",
+        nargs="+",
+        help="Specific dataset files to generate (if not specified, generates all)",
+    )
+
+    parser.add_argument(
+        "--max-fields",
+        type=int,
+        default=50,
+        help="Maximum number of fields per document (default: 50)",
+    )
+
+    parser.add_argument(
+        "--field-size",
+        type=int,
+        default=1000,
+        help="Maximum size of each field in characters (default: 1000)",
+    )
+
+    parser.add_argument(
+        "--doc-count",
+        type=int,
+        default=50000,
+        help="Number of documents to generate (default: 50000)",
+    )
+
     args = parser.parse_args()
 
-    # Setup logging
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
     )
-
-    # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download Wikipedia and generate field_explosion dataset
-    wikipedia_file = download_wikipedia(args.output_dir)
+    # Determine which files to generate
+    files_to_generate = args.files or ["field_explosion_50k.xml"]
 
-    if wikipedia_file.exists():
-        logging.info("")
-        generate_field_explosion(args.output_dir, wikipedia_file)
+    # Check if any file needs Wikipedia
+    needs_wikipedia = any(
+        "field_explosion" in f
+        or "popular_term" in f
+        or "term_repetition" in f
+        or "prefix_explosion" in f
+        for f in files_to_generate
+    )
 
-    logging.info("")
+    wikipedia_file = None
+    if needs_wikipedia:
+        wikipedia_file = download_wikipedia(args.output_dir)
+
+    # Generate requested datasets
+    for filename in files_to_generate:
+        if "field_explosion" in filename:
+            if wikipedia_file and wikipedia_file.exists():
+                generate_field_explosion(
+                    args.output_dir,
+                    wikipedia_file,
+                    args.max_fields,
+                    args.field_size,
+                    args.doc_count,
+                )
+            else:
+                logging.error(
+                    f"Cannot generate {filename} - Wikipedia source not available"
+                )
+        else:
+            logging.warning(f"Unknown dataset type: {filename}")
+
     logging.info("=" * 80)
-    logging.info("Dataset setup complete!")
+    logging.info("Dataset setup complete")
     logging.info("=" * 80)
-    logging.info("")
-    logging.info("Generated datasets:")
-    for f in args.output_dir.glob("*.xml"):
-        size_mb = f.stat().st_size / (1024 * 1024)
-        logging.info(f"  {f.name}: {size_mb:.1f} MB")
-    for f in args.output_dir.glob("*.csv"):
-        size_kb = f.stat().st_size / 1024
-        logging.info(f"  {f.name}: {size_kb:.1f} KB")
 
 
 if __name__ == "__main__":

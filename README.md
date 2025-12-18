@@ -53,12 +53,11 @@ valkey-perf-benchmark/
 ├── utils/                   # Utility scripts
 │   ├── postgres_track_commits.py  # Commit tracking and management
 │   └── compare_benchmark_results.py  # Result comparison utilities
-├── benchmark.py             # Main entry point for core tests
-├── run_fts_tests.py         # Entry point for FTS tests
+├── benchmark.py             # Main entry point (core and search modules)
 ├── valkey_build.py          # Handles building Valkey from source
 ├── valkey_server.py         # Manages Valkey server instances
 ├── valkey_benchmark.py      # Runs benchmark tests
-├── fts_benchmark.py         # FTS-specific benchmark execution
+├── search_benchmark.py      # Search module benchmark execution (FTS, vector, numeric, tag)
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # Generic CPU monitoring
 ├── process_metrics.py       # Processes and formats benchmark results
@@ -423,10 +422,9 @@ The framework supports module-specific testing through a unified entry point (`b
    - `process_metrics.py` - Metrics processing
    - `push_to_postgres.py` - Database integration (use `--test-type my_module`)
 
-**Example: Search module (FTS)**
-- Module class: `fts_benchmark.py::FTSBenchmarkRunner`
+**Example: Search module (FTS, vector, numeric, tag)**
+- Module class: `search_benchmark.py::SearchBenchmarkRunner`
 - Dispatch: `benchmark.py` detects `--module search`
-- Wrapper: `run_fts_tests.py` (optional, 15 lines)
 - Usage: `python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1`
 
 ## FTS (Full-Text Search) Testing
@@ -478,13 +476,12 @@ python benchmark.py \
   --config configs/fts-benchmarks.json \
   --groups 1
 
-# With profiling
+# Run specific scenarios only
 python benchmark.py \
   --module search \
   --valkey-path /path/to/valkey \
   --config configs/fts-benchmarks.json \
-  --groups 1 \
-  --profiling
+  --scenarios ingest,a,b
 
 # Against remote server
 python benchmark.py \
@@ -495,7 +492,7 @@ python benchmark.py \
   --groups 1
 ```
 
-Results saved to `results/search_tests/` with optional flamegraphs if profiling enabled.
+Results saved to `results/search_tests/` with optional flamegraphs if profiling enabled in config.
 
 #### CPU Pinning Configuration
 
@@ -514,34 +511,19 @@ FTS tests follow the same pattern as core tests - CPU pinning is configured in t
 taskset -c 0-7 /path/to/valkey-server --loadmodule libsearch.so ...
 
 # Run FTS tests (client uses cores from config: 8-15)
-python benchmark.py --module fts --config configs/fts-benchmarks.json --groups 1
-```
-
-#### Convenience Wrapper (Alternative)
-
-**Alternative:** Convenience wrapper `run_fts_tests.py` (calls `benchmark.py --module search`):
-```bash
-python run_fts_tests.py --valkey-path /path/to/valkey --config configs/fts-benchmarks.json --groups 1
+python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1
 ```
 
 ### FTS Test Groups
 
 **Group 1: Multi-field comprehensive (NOSTEM)**
-- Tests 50-field indexes with NOSTEM configuration
-- Scenarios WITH content return:
-  - 1a: Single term all fields
-  - 1b: Single term specific field
-  - 1c: Proximity all fields
-  - 1d: Proximity specific field
-  - 1e: Mixed pattern (50% hits, 50% misses)
-- Scenarios with NOCONTENT flag:
-  - 1f: Single term all fields + NOCONTENT
-  - 1g: Single term specific field + NOCONTENT
-  - 1h: Proximity all fields + NOCONTENT
-  - 1i: Proximity specific field + NOCONTENT
-  - 1j: Mixed pattern + NOCONTENT
-- Dataset: 50K documents × 50 fields (2.35GB)
-- Measures: RPS, latency, CPU utilization, memory usage
+- 50-field index, 50K documents
+- 11 test runs (1 ingestion + 10 search):
+  - 1a / 1a_nocontent: Single term all fields
+  - 1b / 1b_nocontent: Single term @field1
+  - 1c / 1c_nocontent: Proximity all fields
+  - 1d / 1d_nocontent: Proximity @field1
+  - 1e / 1e_nocontent: Mixed pattern @field1
 
 ### FTS Results
 
@@ -578,27 +560,29 @@ from profiler import PerformanceProfiler
 # Initialize profiler
 profiler = PerformanceProfiler(results_dir, enabled=True)
 
-# Before running benchmark
-profiler.start_profiling("test_name", target_process="valkey-server")
+# Example from search module:
+profiler.start_profiling("search_1a", target_process="valkey-server")
 
 # Run your benchmark
 runner.run_benchmark_config()
 
 # After benchmark completes
-profiler.stop_profiling("test_name")
+profiler.stop_profiling("search_1a")
 # → Generates:
-#    - flamegraph: results_dir/flamegraphs/test_name.svg
-#    - perf report: results_dir/flamegraphs/test_name_report.txt
-#    - raw data: results_dir/flamegraphs/test_name.perf.data
+#    - flamegraph: results_dir/commit_id/flamegraphs/search_1a_20251218_080245.svg
+#    - perf report: results_dir/commit_id/flamegraphs/search_1a_20251218_080245_report.txt
+#    - raw data: results_dir/commit_id/flamegraphs/search_1a_20251218_080245.perf.data
 ```
 
 ### Profiler Features
 
 - **Flamegraph generation**: Visual call stack analysis
+- **Auto-downloads scripts**: Fetches flamegraph tools from GitHub on first use
+- **Profiling modes**: cpu (cycles) or wall-time (all execution time)
 - **Function hotspot analysis**: Identify CPU-intensive code paths
 - **Kernel + user space profiling**: Complete stack traces with DWARF
 - **Generic implementation**: Works with any process (valkey-server, redis-server, etc.)
-- **99Hz sampling**: Low overhead, minimal impact on benchmarks
+- **Configurable sampling**: 999Hz default
 
 ### Manual Profiling
 

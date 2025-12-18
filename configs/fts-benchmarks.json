@@ -1,109 +1,119 @@
 [
   {
     "test_name": "FTS Performance Benchmarks",
+    "dataset_generation": {
+      "field_explosion_50k.xml": {
+        "max_fields": 50,
+        "field_size": 1000,
+        "doc_count": 50000
+      }
+    },
     "fts_tests": [
       {
         "group": 1,
         "description": "Multi-field comprehensive (NOSTEM)",
-        "ingestion": {
-          "operation": "HSET",
-          "dataset": "datasets/field_explosion_50k.xml",
-          "xml_root_element": "doc",
-          "maxdocs": 50000,
-          "create_index_command": "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT NOSTEM field2 TEXT NOSTEM field3 TEXT NOSTEM field4 TEXT NOSTEM field5 TEXT NOSTEM field6 TEXT NOSTEM field7 TEXT NOSTEM field8 TEXT NOSTEM field9 TEXT NOSTEM field10 TEXT NOSTEM field11 TEXT NOSTEM field12 TEXT NOSTEM field13 TEXT NOSTEM field14 TEXT NOSTEM field15 TEXT NOSTEM field16 TEXT NOSTEM field17 TEXT NOSTEM field18 TEXT NOSTEM field19 TEXT NOSTEM field20 TEXT NOSTEM field21 TEXT NOSTEM field22 TEXT NOSTEM field23 TEXT NOSTEM field24 TEXT NOSTEM field25 TEXT NOSTEM field26 TEXT NOSTEM field27 TEXT NOSTEM field28 TEXT NOSTEM field29 TEXT NOSTEM field30 TEXT NOSTEM field31 TEXT NOSTEM field32 TEXT NOSTEM field33 TEXT NOSTEM field34 TEXT NOSTEM field35 TEXT NOSTEM field36 TEXT NOSTEM field37 TEXT NOSTEM field38 TEXT NOSTEM field39 TEXT NOSTEM field40 TEXT NOSTEM field41 TEXT NOSTEM field42 TEXT NOSTEM field43 TEXT NOSTEM field44 TEXT NOSTEM field45 TEXT NOSTEM field46 TEXT NOSTEM field47 TEXT NOSTEM field48 TEXT NOSTEM field49 TEXT NOSTEM title TEXT NOSTEM",
-          "concurrent_clients": 50,
-          "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\" field11 \"__field:field11__\" field12 \"__field:field12__\" field13 \"__field:field13__\" field14 \"__field:field14__\" field15 \"__field:field15__\" field16 \"__field:field16__\" field17 \"__field:field17__\" field18 \"__field:field18__\" field19 \"__field:field19__\" field20 \"__field:field20__\" field21 \"__field:field21__\" field22 \"__field:field22__\" field23 \"__field:field23__\" field24 \"__field:field24__\" field25 \"__field:field25__\" field26 \"__field:field26__\" field27 \"__field:field27__\" field28 \"__field:field28__\" field29 \"__field:field29__\" field30 \"__field:field30__\" field31 \"__field:field31__\" field32 \"__field:field32__\" field33 \"__field:field33__\" field34 \"__field:field34__\" field35 \"__field:field35__\" field36 \"__field:field36__\" field37 \"__field:field37__\" field38 \"__field:field38__\" field39 \"__field:field39__\" field40 \"__field:field40__\" field41 \"__field:field41__\" field42 \"__field:field42__\" field43 \"__field:field43__\" field44 \"__field:field44__\" field45 \"__field:field45__\" field46 \"__field:field46__\" field47 \"__field:field47__\" field48 \"__field:field48__\" field49 \"__field:field49__\" title \"__field:field1__\""
-        },
-        "searches": [
+        "scenarios": [
           {
-            "sub": "a",
+            "id": "a",
+            "type": "ingestion",
+            "create_index_command": "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT NOSTEM field2 TEXT NOSTEM field3 TEXT NOSTEM field4 TEXT NOSTEM field5 TEXT NOSTEM field6 TEXT NOSTEM field7 TEXT NOSTEM field8 TEXT NOSTEM field9 TEXT NOSTEM field10 TEXT NOSTEM field11 TEXT NOSTEM field12 TEXT NOSTEM field13 TEXT NOSTEM field14 TEXT NOSTEM field15 TEXT NOSTEM field16 TEXT NOSTEM field17 TEXT NOSTEM field18 TEXT NOSTEM field19 TEXT NOSTEM field20 TEXT NOSTEM field21 TEXT NOSTEM field22 TEXT NOSTEM field23 TEXT NOSTEM field24 TEXT NOSTEM field25 TEXT NOSTEM field26 TEXT NOSTEM field27 TEXT NOSTEM field28 TEXT NOSTEM field29 TEXT NOSTEM field30 TEXT NOSTEM field31 TEXT NOSTEM field32 TEXT NOSTEM field33 TEXT NOSTEM field34 TEXT NOSTEM field35 TEXT NOSTEM field36 TEXT NOSTEM field37 TEXT NOSTEM field38 TEXT NOSTEM field39 TEXT NOSTEM field40 TEXT NOSTEM field41 TEXT NOSTEM field42 TEXT NOSTEM field43 TEXT NOSTEM field44 TEXT NOSTEM field45 TEXT NOSTEM field46 TEXT NOSTEM field47 TEXT NOSTEM field48 TEXT NOSTEM field49 TEXT NOSTEM title TEXT NOSTEM",
+            "dataset": "datasets/field_explosion_50k.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 50000,
+            "concurrent_clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\" field2 \"__field:field2__\" field3 \"__field:field3__\" field4 \"__field:field4__\" field5 \"__field:field5__\" field6 \"__field:field6__\" field7 \"__field:field7__\" field8 \"__field:field8__\" field9 \"__field:field9__\" field10 \"__field:field10__\" field11 \"__field:field11__\" field12 \"__field:field12__\" field13 \"__field:field13__\" field14 \"__field:field14__\" field15 \"__field:field15__\" field16 \"__field:field16__\" field17 \"__field:field17__\" field18 \"__field:field18__\" field19 \"__field:field19__\" field20 \"__field:field20__\" field21 \"__field:field21__\" field22 \"__field:field22__\" field23 \"__field:field23__\" field24 \"__field:field24__\" field25 \"__field:field25__\" field26 \"__field:field26__\" field27 \"__field:field27__\" field28 \"__field:field28__\" field29 \"__field:field29__\" field30 \"__field:field30__\" field31 \"__field:field31__\" field32 \"__field:field32__\" field33 \"__field:field33__\" field34 \"__field:field34__\" field35 \"__field:field35__\" field36 \"__field:field36__\" field37 \"__field:field37__\" field38 \"__field:field38__\" field39 \"__field:field39__\" field40 \"__field:field40__\" field41 \"__field:field41__\" field42 \"__field:field42__\" field43 \"__field:field43__\" field44 \"__field:field44__\" field45 \"__field:field45__\" field46 \"__field:field46__\" field47 \"__field:field47__\" field48 \"__field:field48__\" field49 \"__field:field49__\" title \"__field:field1__\""
+          },
+          {
+            "id": "a",
+            "type": "search",
             "description": "Single term all fields",
             "dataset": "datasets/search_terms.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"__field:term__\""
+            "concurrent_clients": 1000,
+            "duration": 200,
+            "command": "FT.SEARCH rd0 \"__field:term__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           },
           {
-            "sub": "b",
+            "id": "b",
+            "type": "search",
             "description": "Single term specific field",
             "dataset": "datasets/search_terms.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"@field1:__field:term__\""
+            "concurrent_clients": 1000,
+            "duration": 200,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           },
           {
-            "sub": "c",
+            "id": "c",
+            "type": "search",
             "description": "Proximity all fields",
             "dataset": "datasets/proximity_phrases.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"__field:phrase__\""
+            "concurrent_clients": 1000,
+            "duration": 200,
+            "command": "FT.SEARCH rd0 \"__field:phrase__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           },
           {
-            "sub": "d",
+            "id": "d",
+            "type": "search",
             "description": "Proximity specific inorder",
             "dataset": "datasets/proximity_phrases.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\""
+            "concurrent_clients": 1000,
+            "duration": 200,
+            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           },
           {
-            "sub": "e",
+            "id": "e",
+            "type": "search",
             "description": "Mixed pattern field-specific",
             "dataset": "datasets/mixed_match.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\""
-          },
-          {
-            "sub": "f",
-            "description": "Single term all fields + NOCONTENT",
-            "dataset": "datasets/search_terms.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"__field:term__\" NOCONTENT"
-          },
-          {
-            "sub": "g",
-            "description": "Single term specific field + NOCONTENT",
-            "dataset": "datasets/search_terms.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"@field1:__field:term__\" NOCONTENT"
-          },
-          {
-            "sub": "h",
-            "description": "Proximity all fields + NOCONTENT",
-            "dataset": "datasets/proximity_phrases.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"__field:phrase__\" NOCONTENT"
-          },
-          {
-            "sub": "i",
-            "description": "Proximity specific inorder + NOCONTENT",
-            "dataset": "datasets/proximity_phrases.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\" NOCONTENT"
-          },
-          {
-            "sub": "j",
-            "description": "Mixed pattern field-specific + NOCONTENT",
-            "dataset": "datasets/mixed_match.csv",
-            "concurrent_clients": 50,
-            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\" NOCONTENT"
+            "concurrent_clients": 1000,
+            "duration": 200,
+            "command": "FT.SEARCH rd0 \"@field1:__field:phrase__\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
           }
         ]
       }
     ],
-    "standalone_ingestion": [],
-    "duration": 60,
-    "clients": [10],
-    "pipelines": [1],
-    "warmup": 5,
     "port": 6379,
     "cluster_mode": false,
     "tls_mode": false,
     "server_cpu_range": "0-7",
     "client_cpu_range": "8-15",
     "io-threads": 8,
+    "monitoring": {
+      "cpu_enabled": false,
+      "per_cpu_enabled": false
+    },
     "profiling": {
       "enabled": false,
-      "tool": "perf",
-      "frequency": 99,
-      "per_scenario": true
+      "mode": "wall-time",
+      "sampling_freq": 999,
+      "ingestion": {
+        "profile_delay": 50,
+        "profile_duration": 10
+      },
+      "search": {
+        "profile_delay": 90,
+        "profile_duration": 10
+      }
     }
   }
 ]
