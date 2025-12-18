@@ -1,0 +1,19 @@
+flamegraph.pl License
+=====================
+
+This directory includes flamegraph.pl from the FlameGraph project:
+https://github.com/brendangregg/FlameGraph
+
+Copyright 2016 Netflix, Inc.
+Copyright 2011 Joyent, Inc.  All rights reserved.
+Copyright 2011 Brendan Gregg.  All rights reserved.
+
+Licensed under the Common Development and Distribution License (CDDL) Version 1.0
+
+The full license text is available at:
+https://github.com/brendangregg/FlameGraph/blob/master/docs/cddl1.txt
+
+FlameGraph is a visualization tool for profiling software performance.
+It creates SVG flame graphs from stack trace data.
+
+For more information visit: https://www.brendangregg.com/flamegraphs.html

@@ -75,25 +75,29 @@ class MetricsProcessor:
             return None
 
         try:
+            import csv
+            import io
+
+            # Find last 2 lines that start with quotes (CSV format)
             lines = benchmark_csv_data.strip().split("\n")
-            if len(lines) < 2:
+            csv_lines = [line for line in lines if line.strip().startswith('"')]
+
+            if len(csv_lines) < 2:
+                logging.warning(f"Expected 2 CSV lines, found {len(csv_lines)}")
+                return None
+
+            # Take last 2 CSV lines (header + data)
+            csv_text = "\n".join(csv_lines[-2:])
+            csv_reader = csv.reader(io.StringIO(csv_text))
+            rows = list(csv_reader)
+
+            if len(rows) < 2 or len(rows[0]) != len(rows[1]):
                 logging.warning(
-                    f"Unexpected CSV format in benchmark output: {benchmark_csv_data}"
+                    f"CSV format mismatch: {len(rows[0])} labels vs {len(rows[1])} values"
                 )
                 return None
 
-            labels = [label.strip().replace('"', "") for label in lines[0].split(",")]
-            values = [value.strip().replace('"', "") for value in lines[1].split(",")]
-
-            if len(values) != len(labels):
-                logging.warning(
-                    f"Mismatch between CSV labels ({len(labels)}) and values ({len(values)})"
-                )
-                logging.debug(f"Labels: {labels}")
-                logging.debug(f"Values: {values}")
-                return None
-
-            data = dict(zip(labels, values))
+            data = dict(zip(rows[0], rows[1]))
 
             # Helper function to safely convert to float
             def safe_float(value, default=0.0):

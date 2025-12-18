@@ -14,14 +14,22 @@ A benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-mem
 - Runs continuous benchmarking via GitHub Actions workflow
 - Tracks commits and manages progress automatically
 - Includes Grafana dashboards for visualizing performance metrics
+- **FTS (Full-Text Search) performance testing** with valkey-search module
+- **Performance profiling** with flamegraph generation via `perf`
 
 ## Prerequisites
 
 - Git
 - Python 3.6+
 - Linux environment (for taskset CPU pinning)
-- Build tools required by Valkey. (gcc, make, etc.)
-- Install python modules required for this project: `pip install -r requirements.txt`.
+- Build tools required by Valkey (gcc, make, etc.)
+- Install python modules required for this project: `pip install -r requirements.txt`
+
+### Additional Prerequisites for FTS Tests
+
+- [valkey-search](https://github.com/valkey-io/valkey-search) module (fulltext branch)
+- `perf` tool for profiling (optional: `sudo yum install perf` or `sudo apt-get install linux-tools-generic`)
+- `bunzip2` for dataset extraction (`sudo yum install bzip2` or `sudo apt-get install bzip2`)
 
 ## Project Structure
 
@@ -45,11 +53,22 @@ valkey-perf-benchmark/
 ├── utils/                   # Utility scripts
 │   ├── postgres_track_commits.py  # Commit tracking and management
 │   └── compare_benchmark_results.py  # Result comparison utilities
-├── benchmark.py             # Main entry point
+├── benchmark.py             # Main entry point (core and search modules)
 ├── valkey_build.py          # Handles building Valkey from source
 ├── valkey_server.py         # Manages Valkey server instances
 ├── valkey_benchmark.py      # Runs benchmark tests
+├── search_benchmark.py      # Search module benchmark execution (FTS, vector, numeric, tag)
+├── profiler.py              # Generic performance profiler (flamegraphs)
+├── cpu_monitor.py           # Generic CPU monitoring
 ├── process_metrics.py       # Processes and formats benchmark results
+├── scripts/                 # Helper scripts
+│   ├── setup_datasets.py   # FTS dataset generator
+│   ├── flamegraph.pl       # Flamegraph visualization
+│   └── stackcollapse-perf.pl  # Stack trace processor
+├── datasets/                # FTS test datasets (auto-generated)
+│   ├── field_explosion_50k.xml
+│   ├── search_terms.csv
+│   └── proximity_phrases.csv
 └── requirements.txt         # Python dependencies
 ```
 
@@ -289,6 +308,15 @@ The project includes several GitHub Actions workflows for automated testing and 
   - Uploads results to S3 and pushes metrics to PostgreSQL
   - Supports manual triggering with configurable commit limits
 
+- **`fts_benchmark.yml`**: FTS continuous benchmarking workflow
+  - Tests valkey-search module performance
+  - Builds Valkey + valkey-search from specified branches
+  - Generates/caches FTS datasets on runner
+  - Runs configurable test groups with optional profiling
+  - Uploads results to S3 (`fts-results/` prefix) and PostgreSQL
+  - Scheduled weekly or manual trigger
+  - Parameters: branch, test groups, runs, profiling enable/disable
+
 - **`basic.yml`**: Basic validation and testing
 - **`check_format.yml`**: Code formatting validation
 - **`cluster_tls.yml`**: Tests for cluster and TLS configurations
@@ -356,6 +384,227 @@ python benchmark.py
 ### Adding New Configurations
 
 Create new JSON configuration files in the `configs/` directory following the existing format. Each configuration object represents a benchmark scenario.
+
+### Extending for New Modules
+
+The framework supports module-specific testing through a unified entry point (`benchmark.py`) with `--module` flag:
+
+**For new modules (e.g., JSON, TimeSeries):**
+
+1. **Create module benchmark class** extending `ClientRunner`:
+   ```python
+   # my_module_benchmark.py
+   from valkey_benchmark import ClientRunner
+   
+   class MyModuleBenchmarkRunner(ClientRunner):
+       def run_module_specific_tests(self, config):
+           # Module-specific test logic
+           pass
+   ```
+
+2. **Add module dispatch** in `benchmark.py`:
+   ```python
+   # In benchmark.py main()
+   elif args.module == "my_module":
+       from my_module_benchmark import run_my_module_benchmarks
+       run_my_module_benchmarks(...)
+   ```
+
+3. **Create convenience wrapper** (optional):
+   ```python
+   # run_my_module_tests.py
+   subprocess.run(["python3", "benchmark.py", "--module", "my_module"] + sys.argv[1:])
+   ```
+
+4. **Reuse generic infrastructure**:
+   - `profiler.py` - Performance profiling
+   - `cpu_monitor.py` - CPU monitoring
+   - `process_metrics.py` - Metrics processing
+   - `push_to_postgres.py` - Database integration (use `--test-type my_module`)
+
+**Example: Search module (FTS, vector, numeric, tag)**
+- Module class: `search_benchmark.py::SearchBenchmarkRunner`
+- Dispatch: `benchmark.py` detects `--module search`
+- Usage: `python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1`
+
+## FTS (Full-Text Search) Testing
+
+The framework includes comprehensive FTS performance testing for the valkey-search module.
+
+### Setup FTS Tests
+
+#### 1. Build valkey-search Module
+
+```bash
+# Clone and build valkey-search
+git clone https://github.com/valkey-io/valkey-search
+cd valkey-search
+git checkout fulltext  # or your target branch
+make BUILD_TLS=yes
+
+# Note the path to libsearch.so:
+# valkey-search/.build-release/libsearch.so
+```
+
+#### 2. Start Valkey Server with Search Module
+
+```bash
+# Example: Pin server to cores 0-7, use 8 IO threads
+taskset -c 0-7 /path/to/valkey/src/valkey-server \
+  --bind 0.0.0.0 \
+  --port 6379 \
+  --io-threads 8 \
+  --loadmodule /path/to/valkey-search/.build-release/libsearch.so \
+  --appendonly no \
+  --save "" \
+  --protected-mode no
+```
+
+### Running FTS Tests
+
+**Note:** Datasets are automatically generated on first run if missing. The initial run may take 30-60 minutes to download Wikipedia and generate datasets. Subsequent runs use cached datasets and start immediately.
+
+#### Unified Entry Point (Recommended)
+
+Use `benchmark.py` with `--module search`:
+
+```bash
+# Run FTS test Group 1 (datasets auto-generated if missing)
+python benchmark.py \
+  --module search \
+  --valkey-path /path/to/valkey \
+  --config configs/fts-benchmarks.json \
+  --groups 1
+
+# Run specific scenarios only
+python benchmark.py \
+  --module search \
+  --valkey-path /path/to/valkey \
+  --config configs/fts-benchmarks.json \
+  --scenarios ingest,a,b
+
+# Against remote server
+python benchmark.py \
+  --module search \
+  --valkey-path /path/to/valkey \
+  --target-ip 192.168.1.100 \
+  --config configs/fts-benchmarks.json \
+  --groups 1
+```
+
+Results saved to `results/search_tests/` with optional flamegraphs if profiling enabled in config.
+
+#### CPU Pinning Configuration
+
+FTS tests follow the same pattern as core tests - CPU pinning is configured in the config file:
+
+```json
+{
+  "client_cpu_range": "8-15"  // Pin benchmark client to cores 8-15
+}
+```
+
+**Note:** FTS tests run against an externally managed server. Pin the server separately when starting it:
+
+```bash
+# Start server on cores 0-7
+taskset -c 0-7 /path/to/valkey-server --loadmodule libsearch.so ...
+
+# Run FTS tests (client uses cores from config: 8-15)
+python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1
+```
+
+### FTS Test Groups
+
+**Group 1: Multi-field comprehensive (NOSTEM)**
+- 50-field index, 50K documents
+- 11 test runs (1 ingestion + 10 search):
+  - 1a / 1a_nocontent: Single term all fields
+  - 1b / 1b_nocontent: Single term @field1
+  - 1c / 1c_nocontent: Proximity all fields
+  - 1d / 1d_nocontent: Proximity @field1
+  - 1e / 1e_nocontent: Mixed pattern @field1
+
+### FTS Results
+
+Results are saved to `results/search_tests/`:
+- `metrics.json` - Performance metrics
+- `flamegraphs/` - Profiling data (if enabled)
+
+Sample metrics structure:
+```json
+{
+  "test_id": "1a",
+  "test_phase": "search",
+  "rps": 6596.42,
+  "avg_latency_ms": 7.535,
+  "p50_latency_ms": 5.367,
+  "p95_latency_ms": 20.975,
+  "cpu_avg_percent": 692.84,
+  "cpu_peak_percent": 751.10,
+  "memory_mb": 4469.87
+}
+```
+
+## Performance Profiling
+
+The framework includes a generic profiler that works with both core and FTS tests.
+
+### Using Profiler in Core Tests
+
+The `PerformanceProfiler` class can be integrated into any benchmark script:
+
+```python
+from profiler import PerformanceProfiler
+
+# Initialize profiler
+profiler = PerformanceProfiler(results_dir, enabled=True)
+
+# Example from search module:
+profiler.start_profiling("search_1a", target_process="valkey-server")
+
+# Run your benchmark
+runner.run_benchmark_config()
+
+# After benchmark completes
+profiler.stop_profiling("search_1a")
+# → Generates:
+#    - flamegraph: results_dir/commit_id/flamegraphs/search_1a_20251218_080245.svg
+#    - perf report: results_dir/commit_id/flamegraphs/search_1a_20251218_080245_report.txt
+#    - raw data: results_dir/commit_id/flamegraphs/search_1a_20251218_080245.perf.data
+```
+
+### Profiler Features
+
+- **Flamegraph generation**: Visual call stack analysis
+- **Auto-downloads scripts**: Fetches flamegraph tools from GitHub on first use
+- **Profiling modes**: cpu (cycles) or wall-time (all execution time)
+- **Function hotspot analysis**: Identify CPU-intensive code paths
+- **Kernel + user space profiling**: Complete stack traces with DWARF
+- **Generic implementation**: Works with any process (valkey-server, redis-server, etc.)
+- **Configurable sampling**: 999Hz default
+
+### Manual Profiling
+
+For manual profiling outside the framework:
+
+```bash
+# 1. Start benchmark in loop mode
+taskset -c 8-15 /path/to/valkey-benchmark \
+  -h 10.189.160.64 -p 6379 \
+  --dataset datasets/search_terms.csv -l \
+  -c 50 -P 1 --sequential \
+  -- FT.SEARCH rd0 "__field:term__" NOCONTENT
+
+# 2. In another terminal, profile for 20 seconds
+sudo perf record -F 999 -p $(pgrep valkey-server) -g -- sleep 20
+
+# 3. Generate reports
+sudo perf report --stdio > report.txt
+sudo perf script | ./scripts/stackcollapse-perf.pl | ./scripts/flamegraph.pl > flamegraph.svg
+
+# 4. Stop benchmark (Ctrl+C)
+```
 
 ## License
 

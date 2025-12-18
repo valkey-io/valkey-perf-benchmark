@@ -82,10 +82,11 @@ class ClientRunner:
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
-        print(f"Connecting to {self.target_ip}")
+        port = self.config.get("port", DEFAULT_PORT)
+        logging.info(f"Connecting to {self.target_ip}:{port}")
         kwargs = {
             "host": self.target_ip,
-            "port": DEFAULT_PORT,
+            "port": port,
             "decode_responses": True,
             "socket_timeout": 10,
             "socket_connect_timeout": 10,
@@ -136,7 +137,8 @@ class ClientRunner:
 
         try:
             result = subprocess.run(
-                cmd_list,
+                cmd_str,
+                shell=True,
                 cwd=cwd,
                 capture_output=capture_output,
                 text=text,
@@ -268,7 +270,6 @@ class ClientRunner:
             warmup,
             duration,
         ) in self._generate_combinations():
-
             if command not in READ_COMMANDS + WRITE_COMMANDS:
                 logging.warning(f"Unsupported command: {command}, skipping.")
                 continue
@@ -409,7 +410,7 @@ class ClientRunner:
             cmd += ["--key", "./tests/tls/valkey.key"]
             cmd += ["--cacert", "./tests/tls/ca.crt"]
         cmd += ["-h", self.target_ip]
-        cmd += ["-p", "6379"]
+        cmd += ["-p", str(self.config.get("port", DEFAULT_PORT))]
         # Use --duration if specified, otherwise use -n (requests)
         if duration is not None:
             cmd += ["--duration", str(duration)]

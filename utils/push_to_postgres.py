@@ -347,6 +347,9 @@ def process_commit_metrics(
     conn: Optional[psycopg2.extensions.connection],
     table_name: str,
     dry_run: bool = False,
+    test_type: str = "core",
+    module: Optional[str] = None,
+    module_commit: Optional[str] = None,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
@@ -355,6 +358,9 @@ def process_commit_metrics(
         conn: PostgreSQL database connection.
         table_name: Name of the PostgreSQL table to insert into.
         dry_run: If True, only show what would be inserted without actually inserting.
+        test_type: Test type identifier (e.g., 'core', 'fts') for filtering in dashboards.
+        module: Module name being tested (e.g., 'valkey-search' for FTS tests).
+        module_commit: Module commit SHA (for tracking module-specific versions).
 
     Returns:
         Tuple of (number of metrics processed, whether any records were skipped).
@@ -370,6 +376,14 @@ def process_commit_metrics(
     if not metrics_data:
         print(f"Skipping {commit_dir.name}: empty metrics")
         return 0, True
+
+    # Augment metrics with test_type, module, and module_commit (extension for FTS tests)
+    for metric in metrics_data:
+        metric["test_type"] = test_type
+        if module:
+            metric["module"] = module
+        if module_commit:
+            metric["module_commit"] = module_commit
 
     print(f"\n=== Processing {commit_dir.name} ===")
     count = push_to_postgres(metrics_data, conn, table_name, dry_run)
@@ -394,7 +408,19 @@ def main() -> None:
         "--password", help="Database password (not required for dry-run)"
     )
     parser.add_argument("--table-name", required=True, help="PostgreSQL table name")
-
+    parser.add_argument(
+        "--test-type",
+        default="core",
+        help="Test type identifier (e.g., 'core', 'fts') for filtering in dashboards",
+    )
+    parser.add_argument(
+        "--module",
+        help="Module name being tested (e.g., 'valkey-search' for FTS tests)",
+    )
+    parser.add_argument(
+        "--module-commit",
+        help="Module commit SHA (for tracking module-specific versions)",
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
     )
@@ -445,7 +471,7 @@ def main() -> None:
             sys.exit(1)
 
     try:
-        # Process all commit directories
+        # Process all commit directories (main's approach)
         # Note: Table creation/updates happen dynamically during processing
         print(f"Scanning {results_dir} for commit directories...")
         commit_dirs = [
@@ -463,7 +489,13 @@ def main() -> None:
             print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
             try:
                 count, was_skipped = process_commit_metrics(
-                    commit_dir, conn, args.table_name, args.dry_run
+                    commit_dir,
+                    conn,
+                    args.table_name,
+                    args.dry_run,
+                    test_type=args.test_type,
+                    module=args.module,
+                    module_commit=args.module_commit,
                 )
                 total_processed += count
                 if was_skipped:
