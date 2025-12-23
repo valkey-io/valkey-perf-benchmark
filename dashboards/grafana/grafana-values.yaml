@@ -62,8 +62,9 @@ grafana.ini:
 
   database:
     type: postgres
-    host: <RDS_ENDPOINT>:5432 # Will be replaced by deploy script
+    host: <RDS_ENDPOINT> # Will be replaced by deploy script
     name: grafana
+    port: 5432
     ssl_mode: require
     max_idle_conn: 2
     max_open_conn: 10
@@ -110,7 +111,7 @@ datasources:
     datasources:
       - name: PostgreSQL-Valkey-Metrics
         type: postgres
-        url: <RDS_ENDPOINT>:5432 # Will be replaced by deploy script
+        url: <RDS_ENDPOINT> # Will be replaced by deploy script
         database: postgres
         user: $__env{GF_DATABASE_USER}
         secureJsonData:
