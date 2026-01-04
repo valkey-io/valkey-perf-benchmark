@@ -16,7 +16,9 @@
       "HSET",
       "MGET",
       "LRANGE",
-      "ZPOPMIN"
+      "ZPOPMIN",
+      "XADD",
+      "XRANGE"
     ],
     "cluster_mode": false,
     "tls_mode": false,
