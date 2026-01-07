@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import logging
 
@@ -42,7 +42,7 @@ class MetricsProcessor:
 
     def create_metrics(
         self,
-        benchmark_csv_data: str,
+        benchmark_data: Dict[str, Any],
         command: str,
         data_size: int,
         pipeline: int,
@@ -55,8 +55,8 @@ class MetricsProcessor:
 
         Parameters
         ----------
-        benchmark_csv_data : str
-            Raw CSV output from ``valkey-benchmark``.
+        benchmark_data : Dict[str, Any]
+            CSV output from ``valkey-benchmark``.
         command : str
             Benchmark command that was executed.
         data_size : int
@@ -70,31 +70,11 @@ class MetricsProcessor:
         warmup : int, optional
             Warmup time in seconds.
         """
-        if not benchmark_csv_data or not benchmark_csv_data.strip():
+        if not benchmark_data:
             logging.warning("Empty benchmark output received")
             return None
 
         try:
-            lines = benchmark_csv_data.strip().split("\n")
-            if len(lines) < 2:
-                logging.warning(
-                    f"Unexpected CSV format in benchmark output: {benchmark_csv_data}"
-                )
-                return None
-
-            labels = [label.strip().replace('"', "") for label in lines[0].split(",")]
-            values = [value.strip().replace('"', "") for value in lines[1].split(",")]
-
-            if len(values) != len(labels):
-                logging.warning(
-                    f"Mismatch between CSV labels ({len(labels)}) and values ({len(values)})"
-                )
-                logging.debug(f"Labels: {labels}")
-                logging.debug(f"Values: {values}")
-                return None
-
-            data = dict(zip(labels, values))
-
             # Helper function to safely convert to float
             def safe_float(value, default=0.0):
                 try:
@@ -112,13 +92,13 @@ class MetricsProcessor:
                 "data_size": int(data_size),
                 "pipeline": int(pipeline),
                 "clients": int(clients),
-                "rps": safe_float(data.get("rps")),
-                "avg_latency_ms": safe_float(data.get("avg_latency_ms")),
-                "min_latency_ms": safe_float(data.get("min_latency_ms")),
-                "p50_latency_ms": safe_float(data.get("p50_latency_ms")),
-                "p95_latency_ms": safe_float(data.get("p95_latency_ms")),
-                "p99_latency_ms": safe_float(data.get("p99_latency_ms")),
-                "max_latency_ms": safe_float(data.get("max_latency_ms")),
+                "rps": safe_float(benchmark_data.get("rps")),
+                "avg_latency_ms": safe_float(benchmark_data.get("avg_latency_ms")),
+                "min_latency_ms": safe_float(benchmark_data.get("min_latency_ms")),
+                "p50_latency_ms": safe_float(benchmark_data.get("p50_latency_ms")),
+                "p95_latency_ms": safe_float(benchmark_data.get("p95_latency_ms")),
+                "p99_latency_ms": safe_float(benchmark_data.get("p99_latency_ms")),
+                "max_latency_ms": safe_float(benchmark_data.get("max_latency_ms")),
                 "cluster_mode": self.cluster_mode,
                 "tls": self.tls_mode,
             }

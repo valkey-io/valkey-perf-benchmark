@@ -4,6 +4,7 @@ import logging
 import random
 import subprocess
 import time
+import csv
 from contextlib import contextmanager
 from itertools import product
 from pathlib import Path
@@ -20,7 +21,7 @@ DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
 
 # Supported Valkey benchmark commands
-READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"]
+READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN", "XRANGE"]
 WRITE_COMMANDS = [
     "SET",
     "MSET",
@@ -346,19 +347,42 @@ class ClientRunner:
                 if proc.stderr:
                     logging.warning(f"Benchmark stderr:\n{proc.stderr}")
 
-                metrics = metrics_processor.create_metrics(
-                    proc.stdout,
-                    command,
-                    data_size,
-                    pipeline,
-                    clients,
-                    requests,
-                    warmup,
-                    duration,
-                )
-                if metrics:
-                    logging.info(f"Parsed metrics: {metrics}")
-                    metric_json.append(metrics)
+                try:
+                    reader = csv.DictReader(proc.stdout.splitlines())
+
+                    rows_found = False
+                    for row in reader:
+                        # (e.g., "LRANGE_100", "LPUSH")
+                        test_name = row.get("test", "")
+
+                        # Filter: Skip rows that don't match the requested command
+                        # e.g., if command="LRANGE", we skip "LPUSH" but keep "LRANGE_100"
+                        if not test_name.startswith(command):
+                            continue
+
+                        rows_found = True
+
+                        metrics = metrics_processor.create_metrics(
+                            row,
+                            test_name,
+                            data_size,
+                            pipeline,
+                            clients,
+                            requests,
+                            warmup,
+                            duration,
+                        )
+                        if metrics:
+                            logging.info(f"Parsed metrics for {test_name}: {metrics}")
+                            metric_json.append(metrics)
+
+                    if not rows_found:
+                        logging.warning(
+                            f"No matching metrics found for command {command} in output."
+                        )
+
+                except Exception as e:
+                    logging.error(f"Failed to parse benchmark results: {e}")
 
         if not metric_json:
             logging.warning("No metrics collected, skipping write.")
