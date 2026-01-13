@@ -2,220 +2,203 @@
 """Download and generate FTS test datasets."""
 
 import argparse
+import json
 import logging
 import subprocess
 import sys
-from pathlib import Path
 import urllib.request
 import xml.etree.ElementTree as ET
-
-
-def extract_bz2_file(compressed_file: Path, extracted_file: Path) -> None:
-    """Extract a bz2 compressed file, keeping the original."""
-    logging.info("Extracting (this may take 15-30 minutes)...")
-    subprocess.run(["bunzip2", "-k", str(compressed_file)], check=True)
-    logging.info(f"Extraction complete: {extracted_file}")
-    logging.info(f"Kept compressed file: {compressed_file}")
+from pathlib import Path
 
 
 def download_wikipedia(output_dir: Path) -> Path:
     """Download and extract Wikipedia dataset."""
-    logging.info("=" * 80)
-    logging.info("Downloading Wikipedia dataset...")
-    logging.info("=" * 80)
+    compressed = output_dir / "enwiki-latest-pages-articles.xml.bz2"
+    extracted = output_dir / "enwiki-latest-pages-articles.xml"
 
-    compressed_file = output_dir / "enwiki-latest-pages-articles.xml.bz2"
-    extracted_file = output_dir / "enwiki-latest-pages-articles.xml"
+    if extracted.exists():
+        return extracted
 
-    if extracted_file.exists():
-        logging.info(f"Wikipedia dataset already exists: {extracted_file}")
-        return extracted_file
+    if compressed.exists():
+        logging.info(f"Extracting {compressed.name}...")
+        subprocess.run(["bunzip2", "-k", str(compressed)], check=True)
+        return extracted
 
-    # If compressed file exists but not extracted, just extract it
-    if compressed_file.exists():
-        logging.info(f"Found existing compressed file: {compressed_file}")
-        extract_bz2_file(compressed_file, extracted_file)
-        return extracted_file
-
-    # Download from Wikimedia dumps
     url = (
         "https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2"
     )
-
-    logging.info(f"Downloading from: {url}")
-    logging.info("This is a ~20GB download and may take 30-60 minutes...")
-    logging.info(f"Target: {compressed_file}")
+    logging.info(f"Downloading Wikipedia (~20GB, 30-60 min)...")
 
     try:
-        urllib.request.urlretrieve(url, compressed_file)
-        logging.info("Download complete!")
-
-        # Extract (keep compressed file with -k flag)
-        extract_bz2_file(compressed_file, extracted_file)
-
-        return extracted_file
-
+        urllib.request.urlretrieve(url, compressed)
+        subprocess.run(["bunzip2", "-k", str(compressed)], check=True)
+        return extracted
     except Exception as e:
-        logging.error(f"Failed to download/extract Wikipedia: {e}")
-        logging.error("")
-        logging.error("Manual download instructions:")
-        logging.error("1. Visit: https://dumps.wikimedia.org/enwiki/latest/")
-        logging.error("2. Download: enwiki-latest-pages-articles.xml.bz2")
-        logging.error(f"3. Place in: {output_dir}/")
-        logging.error("4. Extract: bunzip2 enwiki-latest-pages-articles.xml.bz2")
+        logging.error(f"Download failed: {e}")
+        logging.error("Manual: https://dumps.wikimedia.org/enwiki/latest/")
         sys.exit(1)
 
 
-def generate_field_explosion(
-    output_dir: Path,
-    source_wiki: Path,
-    max_fields: int = 50,
-    field_size: int = 1000,
-    doc_count: int = 50000,
-) -> Path:
-    """Generate field explosion dataset with configurable parameters."""
-    output_file = output_dir / "field_explosion_50k.xml"
+def build_field_configs(config: dict) -> list:
+    """Build field configurations from config."""
+    if "generate_fields" in config:
+        # Compact format for field explosion
+        gen = config["generate_fields"]
+        count = gen["count"]
+        prefix = gen.get("prefix", "field")
+        size = gen["size"]
+        transforms = gen["transforms"]
+        return [
+            {"name": f"{prefix}{i}", "size": size, "transforms": transforms}
+            for i in range(1, count + 1)
+        ]
+    elif "fields" in config:
+        # Explicit field definitions
+        return config["fields"]
+    else:
+        raise ValueError("Config needs 'generate_fields' or 'fields'")
 
-    if output_file.exists():
-        logging.info(f"Dataset already exists: {output_file}")
-        return output_file
+
+def apply_transforms(
+    wiki_text: str, transforms: list, field_size: int, doc_num: int, total_docs: int
+) -> str:
+    """Apply transformation pipeline."""
+    content = ""
+
+    for t in transforms:
+        ttype = t.get("type", "wikipedia")
+
+        if ttype == "wikipedia":
+            offset = t.get("offset", 0)
+            end = offset + field_size
+
+            if offset >= len(wiki_text):
+                content = wiki_text[:field_size]
+            elif end > len(wiki_text):
+                content = wiki_text[offset:]
+                if len(content) < field_size:
+                    content += " " + wiki_text[: field_size - len(content)]
+            else:
+                content = wiki_text[offset:end]
+
+        elif ttype == "inject":
+            term = t.get("term", "")
+            pct = t.get("percentage", 1.0)
+            if doc_num <= int(total_docs * pct):
+                content += f" {term}"
+
+        elif ttype == "repeat":
+            content += f" {(t.get('term', '') + ' ') * t.get('count', 1)}"
+
+        elif ttype == "prefix_gen":
+            base = t.get("base", "word")
+            variations = t.get("variations", 10)
+            prefixes = [f"{base}{i}" for i in range(variations)]
+            content += " " + " ".join(prefixes[:10])
+
+    return content[:field_size]
+
+
+def generate_dataset(
+    output_dir: Path, source_wiki: Path, config: dict, filename: str
+) -> Path:
+    """Generate dataset from config."""
+    output = output_dir / filename
+
+    if output.exists():
+        logging.info(f"Exists: {filename}")
+        return output
+
+    doc_count = config["doc_count"]
+    field_configs = build_field_configs(config)
 
     logging.info(
-        f"Generating {output_file.name} ({max_fields} fields, {field_size} chars, {doc_count} docs)"
+        f"Generating {filename} ({len(field_configs)} fields, {doc_count} docs)"
     )
 
-    with open(output_file, "w", encoding="utf-8") as out:
+    with open(output, "w", encoding="utf-8") as out:
         out.write('<?xml version="1.0" encoding="UTF-8"?>\n<corpus>\n')
 
         context = ET.iterparse(source_wiki, events=("end",))
         generated = 0
 
         for event, elem in context:
-            tag_name = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if (elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag) != "page":
+                continue
 
-            if tag_name == "page" and generated < doc_count:
-                text_elem = None
-                for child in elem.iter():
-                    child_tag = (
-                        child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                    )
-                    if child_tag == "text" and child.text:
-                        text_elem = child
-                        break
+            if generated >= doc_count:
+                break
 
-                if text_elem is not None and text_elem.text:
-                    if text_elem.text.startswith("#REDIRECT"):
-                        elem.clear()
-                        continue
+            text_elem = None
+            for child in elem.iter():
+                tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if tag == "text" and child.text:
+                    text_elem = child
+                    break
 
-                    text = text_elem.text[:field_size]
-                    generated += 1
-
-                    out.write("  <doc>\n")
-                    out.write(f"    <id>{generated:06d}</id>\n")
-                    for i in range(1, max_fields + 1):
-                        out.write(f"    <field{i}>{text}</field{i}>\n")
-                    out.write("  </doc>\n")
-
-                    if generated % 10000 == 0:
-                        logging.info(f"Generated {generated} documents...")
-
-                    if generated >= doc_count:
-                        break
-
+            if (
+                text_elem is None
+                or not text_elem.text
+                or text_elem.text.startswith("#REDIRECT")
+            ):
                 elem.clear()
+                continue
+
+            generated += 1
+            out.write(f"  <doc>\n    <id>{generated:06d}</id>\n")
+
+            for field in field_configs:
+                content = apply_transforms(
+                    text_elem.text,
+                    field.get("transforms", [{"type": "wikipedia"}]),
+                    field["size"],
+                    generated,
+                    doc_count,
+                )
+                out.write(f"    <{field['name']}>{content}</{field['name']}>\n")
+
+            out.write("  </doc>\n")
+
+            if generated % 10000 == 0:
+                logging.info(f"Generated {generated} docs")
+
+            elem.clear()
 
         out.write("</corpus>\n")
 
-    logging.info(f"Generated {generated} documents with {max_fields} fields each")
-    return output_file
+    logging.info(f"Complete: {filename} ({generated} docs)")
+    return output
 
 
 def main():
-    """Main entry point for dataset setup."""
-    parser = argparse.ArgumentParser(
-        description="Generate search test datasets with configurable parameters",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-
+    parser = argparse.ArgumentParser(description="Generate FTS test datasets")
+    parser.add_argument("--output-dir", type=Path, default=Path("datasets"))
     parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("datasets"),
-        help="Output directory for datasets (default: datasets/)",
+        "--config", type=Path, help="Config JSON with dataset_generation section"
     )
-
-    parser.add_argument(
-        "--files",
-        nargs="+",
-        help="Specific dataset files to generate (if not specified, generates all)",
-    )
-
-    parser.add_argument(
-        "--max-fields",
-        type=int,
-        default=50,
-        help="Maximum number of fields per document (default: 50)",
-    )
-
-    parser.add_argument(
-        "--field-size",
-        type=int,
-        default=1000,
-        help="Maximum size of each field in characters (default: 1000)",
-    )
-
-    parser.add_argument(
-        "--doc-count",
-        type=int,
-        default=50000,
-        help="Number of documents to generate (default: 50000)",
-    )
-
+    parser.add_argument("--files", nargs="+", help="Specific files to generate")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine which files to generate
-    files_to_generate = args.files or ["field_explosion_50k.xml"]
+    dataset_configs = {}
+    if args.config:
+        with open(args.config) as f:
+            dataset_configs = json.load(f)[0].get("dataset_generation", {})
 
-    # Check if any file needs Wikipedia
-    needs_wikipedia = any(
-        "field_explosion" in f
-        or "popular_term" in f
-        or "term_repetition" in f
-        or "prefix_explosion" in f
-        for f in files_to_generate
-    )
+    files_to_gen = args.files or list(dataset_configs.keys())
 
-    wikipedia_file = None
-    if needs_wikipedia:
-        wikipedia_file = download_wikipedia(args.output_dir)
+    needs_wiki = any("field_explosion" in f or "negation" in f for f in files_to_gen)
+    wiki_file = download_wikipedia(args.output_dir) if needs_wiki else None
 
-    # Generate requested datasets
-    for filename in files_to_generate:
-        if "field_explosion" in filename:
-            if wikipedia_file and wikipedia_file.exists():
-                generate_field_explosion(
-                    args.output_dir,
-                    wikipedia_file,
-                    args.max_fields,
-                    args.field_size,
-                    args.doc_count,
-                )
-            else:
-                logging.error(
-                    f"Cannot generate {filename} - Wikipedia source not available"
-                )
-        else:
-            logging.warning(f"Unknown dataset type: {filename}")
+    for filename in files_to_gen:
+        if filename in dataset_configs and wiki_file:
+            generate_dataset(
+                args.output_dir, wiki_file, dataset_configs[filename], filename
+            )
 
-    logging.info("=" * 80)
     logging.info("Dataset setup complete")
-    logging.info("=" * 80)
 
 
 if __name__ == "__main__":

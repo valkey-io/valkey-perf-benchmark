@@ -427,11 +427,56 @@ The framework supports module-specific testing through a unified entry point (`b
 - Dispatch: `benchmark.py` detects `--module search`
 - Usage: `python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1`
 
-## FTS (Full-Text Search) Testing
+## Module Testing (FTS, JSON, etc.)
 
-The framework includes comprehensive FTS performance testing for the valkey-search module.
+The framework supports generic module testing through a unified `ClientRunner`.
 
-### Setup FTS Tests
+### Module Config Structure
+
+Module tests use structured `test_groups` with `scenarios`:
+
+```json
+{
+  "test_groups": [{
+    "group": 1,
+    "scenarios": [
+      {
+        "type": "ingestion",
+        "setup_commands": ["FT.CREATE idx ..."],
+        "command": "HSET ...",
+        "dataset": "data.xml",
+        "clients": 1000,
+        "maxdocs": 50000
+      },
+      {
+        "type": "search",
+        "command": "FT.SEARCH idx __field:term__",
+        "dataset": "queries.csv",
+        "clients": 1000,
+        "duration": 60,
+        "warmup": 20
+      }
+    ]
+  }],
+  "cluster_mode": false,
+  "tls_mode": false
+}
+```
+
+### Module PR Testing
+
+Module repositories (e.g., valkey-search) follow the same PR testing pattern as valkey core:
+
+1. Add `.github/workflows/benchmark-on-label.yml` in the module repo
+2. Workflow triggered by `run-benchmark` label on PRs
+3. Checks out valkey (stable) + module PR + module baseline
+4. Builds both module versions
+5. Runs benchmarks against each using this framework
+6. Compares results and comments on PR
+
+The workflow lives in the module repo, not here, to avoid duplication.
+
+### Running Module Tests Locally
 
 #### 1. Build valkey-search Module
 
@@ -514,16 +559,59 @@ taskset -c 0-7 /path/to/valkey-server --loadmodule libsearch.so ...
 python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1
 ```
 
+### Dataset Generation System
+
+The framework uses a **transform-based dataset generation system** that supports multiple testing strategies:
+
+**Config Format:**
+```json
+"dataset_generation": {
+  "dataset_name.xml": {
+    "doc_count": 50000,
+    "fields": [
+      {
+        "name": "field0",
+        "size": 100,
+        "transforms": [
+          {"type": "wikipedia"},
+          {"type": "inject", "term": "MARKER_TERM", "percentage": 0.5}
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Supported Transforms:**
+- `wikipedia`: Extract Wikipedia content (base text)
+- `inject`: Add marker terms at specified percentage
+- `repeat`: Duplicate terms N times (for term_repetition tests)
+- `prefix_gen`: Generate prefix variations (for prefix_explosion tests)
+
+**Compact Format (for field explosion):**
+```json
+"field_explosion_50k.xml": {
+  "doc_count": 50000,
+  "generate_fields": {
+    "count": 50,
+    "size": 1000,
+    "transforms": [{"type": "wikipedia"}]
+  }
+}
+```
+
 ### FTS Test Groups
 
 **Group 1: Multi-field comprehensive (NOSTEM)**
-- 50-field index, 50K documents
+- 50-field index, 50K documents, 1000 chars per field
 - 11 test runs (1 ingestion + 10 search):
   - 1a / 1a_nocontent: Single term all fields
   - 1b / 1b_nocontent: Single term @field1
-  - 1c / 1c_nocontent: Proximity all fields
-  - 1d / 1d_nocontent: Proximity @field1
+  - 1c / 1c_nocontent: Composed AND all fields
+  - 1d / 1d_nocontent: Composed AND @field1
   - 1e / 1e_nocontent: Mixed pattern @field1
+  - 1f / 1f_nocontent: Proximity phrase all fields
+  - 1g / 1g_nocontent: Proximity phrase @field1
 
 ### FTS Results
 
@@ -583,28 +671,6 @@ profiler.stop_profiling("search_1a")
 - **Kernel + user space profiling**: Complete stack traces with DWARF
 - **Generic implementation**: Works with any process (valkey-server, redis-server, etc.)
 - **Configurable sampling**: 999Hz default
-
-### Manual Profiling
-
-For manual profiling outside the framework:
-
-```bash
-# 1. Start benchmark in loop mode
-taskset -c 8-15 /path/to/valkey-benchmark \
-  -h 10.189.160.64 -p 6379 \
-  --dataset datasets/search_terms.csv -l \
-  -c 50 -P 1 --sequential \
-  -- FT.SEARCH rd0 "__field:term__" NOCONTENT
-
-# 2. In another terminal, profile for 20 seconds
-sudo perf record -F 999 -p $(pgrep valkey-server) -g -- sleep 20
-
-# 3. Generate reports
-sudo perf report --stdio > report.txt
-sudo perf script | ./scripts/stackcollapse-perf.pl | ./scripts/flamegraph.pl > flamegraph.svg
-
-# 4. Stop benchmark (Ctrl+C)
-```
 
 ## License
 

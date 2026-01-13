@@ -27,6 +27,7 @@ class ServerLauncher:
         self.results_dir = results_dir
         self.valkey_path = valkey_path
         self.cores = cores
+        self.module_path = None  # Will be set during launch
 
     def _create_client(self, tls_mode: bool) -> valkey.Valkey:
         """Return a Valkey client for server management."""
@@ -124,7 +125,11 @@ class ServerLauncher:
                     logging.warning(f"Error closing client connection: {e}")
 
     def _launch_server(
-        self, tls_mode: bool, cluster_mode: bool, io_threads: Optional[int] = None
+        self,
+        tls_mode: bool,
+        cluster_mode: bool,
+        io_threads: Optional[int] = None,
+        module_path: Optional[str] = None,
     ) -> None:
         """Start Valkey server."""
         log_file = f"{Path.cwd()}/{self.results_dir}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}_tls_{'enabled' if tls_mode else 'disabled'}.log"
@@ -148,6 +153,11 @@ class ServerLauncher:
         if io_threads is not None:
             cmd += ["--io-threads", str(io_threads)]
 
+        # Add module loading if specified
+        if module_path is not None:
+            cmd += ["--loadmodule", module_path]
+            logging.info(f"Loading module: {module_path}")
+
         # Add common base server args
         cmd += ["--cluster-enabled", "yes" if cluster_mode else "no"]
         cmd += ["--daemonize", "yes"]
@@ -159,7 +169,7 @@ class ServerLauncher:
 
         self._run(cmd, cwd=self.valkey_path)
         logging.info(
-            f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode} | IO Threads: {io_threads} '"
+            f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode} | IO Threads: {io_threads} | Module: {module_path or 'None'}"
         )
         self._wait_for_server_ready(tls_mode=tls_mode)
 
@@ -234,12 +244,22 @@ class ServerLauncher:
         )
 
     def launch(
-        self, cluster_mode: bool, tls_mode: bool, io_threads: Optional[int] = None
+        self,
+        cluster_mode: bool,
+        tls_mode: bool,
+        io_threads: Optional[int] = None,
+        module_path: Optional[str] = None,
     ) -> None:
         """Launch Valkey server and setup cluster if needed."""
+        # Store module_path for restarts
+        self.module_path = module_path
+
         try:
             self._launch_server(
-                tls_mode=tls_mode, cluster_mode=cluster_mode, io_threads=io_threads
+                tls_mode=tls_mode,
+                cluster_mode=cluster_mode,
+                io_threads=io_threads,
+                module_path=module_path,
             )
             if cluster_mode:
                 self._setup_cluster(tls_mode=tls_mode)

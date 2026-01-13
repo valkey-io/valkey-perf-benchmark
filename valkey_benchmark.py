@@ -64,6 +64,7 @@ class ClientRunner:
         runs: int = 1,
         server_launcher: Optional[ServerLauncher] = None,
         architecture: Optional[str] = None,
+        module_config: Optional[dict] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -79,6 +80,7 @@ class ClientRunner:
         self.runs = runs
         self.server_launcher = server_launcher
         self.architecture = architecture
+        self.module_config = module_config
 
     def _create_client(self) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -244,6 +246,11 @@ class ClientRunner:
 
     def run_benchmark_config(self) -> None:
         """Run benchmark for all config combinations."""
+        # Check if module testing mode
+        if self.module_config:
+            return self._run_module_tests()
+
+        # Core testing mode (existing logic)
         commit_time = self.get_commit_time(self.commit_id)
         metrics_processor = MetricsProcessor(
             self.commit_id,
@@ -431,6 +438,220 @@ class ClientRunner:
         cmd += ["--csv"]
         return cmd
 
+    def _expand_scenario_options(self, scenario: dict) -> List[dict]:
+        """Expand scenario with options to create variants."""
+        options = scenario.get("options")
+
+        # No options: return scenario as-is
+        if not options:
+            return [scenario]
+
+        # Options provided: create variant for each option
+        scenarios = []
+        for flag, suffix in options.items():
+            variant = scenario.copy()
+            variant["id"] = scenario["id"] + suffix
+            variant["command"] = scenario["command"] + (f" {flag}" if flag else "")
+            if "description" in variant and flag:
+                variant["description"] += f" + {flag}"
+            scenarios.append(variant)
+
+        return scenarios
+
+    def _run_module_tests(self) -> None:
+        """Run module test scenarios from config."""
+        commit_time = self.get_commit_time(self.commit_id)
+        metrics_processor = MetricsProcessor(
+            self.commit_id,
+            self.cluster_mode,
+            self.tls_mode,
+            commit_time,
+            self.io_threads,
+            self.benchmark_threads,
+            self.architecture,
+        )
+        metric_json = []
+
+        logging.info("=== Starting Module Benchmark Testing ===")
+
+        # Get test groups from module config
+        for test_group in self.module_config.get("test_groups", []):
+            group_id = test_group.get("group", "unknown")
+            description = test_group.get("description", "")
+
+            logging.info(f"=== Group {group_id}: {description} ===")
+
+            # Run scenarios in the test group
+            for scenario in test_group.get("scenarios", []):
+                # Check scenario filter if present
+                scenario_filter = self.module_config.get("scenario_filter")
+                if scenario_filter and scenario.get("id") not in scenario_filter:
+                    logging.info(
+                        f"Skipping scenario {scenario.get('id')} (not in filter: {scenario_filter})"
+                    )
+                    continue
+
+                # Expand scenario options first (e.g., NOCONTENT variants)
+                expanded_scenarios = self._expand_scenario_options(scenario)
+
+                for expanded_scenario in expanded_scenarios:
+                    scenario_type = expanded_scenario.get("type", "test")
+                    scenario_id = expanded_scenario.get("id", "unknown")
+
+                    logging.info(
+                        f"Running scenario: {scenario_id} (type: {scenario_type})"
+                    )
+
+                    # Flush database BEFORE setup commands if requested
+                    if expanded_scenario.get("flush_before", False):
+                        self._flush_database()
+
+                    # Execute setup commands after flush
+                    for setup_cmd in expanded_scenario.get("setup_commands", []):
+                        self._execute_setup_command(setup_cmd)
+
+                    # Run warmup if specified
+                    warmup_duration = expanded_scenario.get("warmup", 0)
+                    if warmup_duration > 0:
+                        logging.info(f"Running warmup: {warmup_duration}s")
+                        warmup_cmd = self._build_module_benchmark_command(
+                            expanded_scenario, warmup_mode=True
+                        )
+                        self._run(
+                            warmup_cmd,
+                            cwd=self.valkey_path,
+                            capture_output=True,
+                            timeout=None,
+                        )
+                        logging.info("Warmup complete")
+
+                    # Run actual benchmark
+                    bench_cmd = self._build_module_benchmark_command(expanded_scenario)
+                    proc = self._run(
+                        bench_cmd,
+                        cwd=self.valkey_path,
+                        capture_output=True,
+                        timeout=None,
+                    )
+
+                    if proc is None:
+                        logging.error(f"Benchmark failed for scenario {scenario_id}")
+                        continue
+
+                    logging.info(f"Benchmark output:\n{proc.stdout}")
+                    if proc.stderr:
+                        logging.warning(f"Benchmark stderr:\n{proc.stderr}")
+
+                    # Parse metrics
+                    metrics = metrics_processor.create_metrics(
+                        proc.stdout,
+                        expanded_scenario["command"],
+                        expanded_scenario.get("data_size", 100),
+                        expanded_scenario.get("pipeline", 1),
+                        expanded_scenario.get("clients", 1),
+                        expanded_scenario.get("requests"),
+                        warmup_duration,
+                        expanded_scenario.get("duration"),
+                    )
+                    if metrics:
+                        metrics["test_id"] = f"{group_id}_{scenario_id}"
+                        metrics["test_phase"] = scenario_type
+                        if expanded_scenario.get("dataset"):
+                            metrics["dataset"] = expanded_scenario["dataset"]
+                        metric_json.append(metrics)
+
+        if not metric_json:
+            logging.warning("No metrics collected from module tests")
+            return
+
+        metrics_processor.write_metrics(self.results_dir, metric_json)
+        logging.info(
+            f"=== Module Benchmark Testing Complete: {len(metric_json)} metrics collected ==="
+        )
+
+    def _execute_setup_command(self, cmd_str: str) -> None:
+        """Execute a setup command via valkey client."""
+        logging.info(f"Executing setup command: {cmd_str}")
+        try:
+            with self._client_context() as client:
+                cmd_parts = cmd_str.split()
+                result = client.execute_command(*cmd_parts)
+                logging.info(f"Setup command result: {result}")
+        except Exception as e:
+            logging.error(f"Failed to execute setup command '{cmd_str}': {e}")
+            raise
+
+    def _build_module_benchmark_command(
+        self,
+        scenario: dict,
+        warmup_mode: bool = False,
+    ) -> List[str]:
+        """Build valkey-benchmark command for module testing."""
+        cmd = []
+
+        # Add CPU pinning if specified
+        if self.cores:
+            cmd += ["taskset", "-c", self.cores]
+
+        cmd.append(self.valkey_benchmark_path)
+
+        # Connection settings
+        if self.tls_mode:
+            cmd += ["--tls"]
+            cmd += ["--cert", "./tests/tls/valkey.crt"]
+            cmd += ["--key", "./tests/tls/valkey.key"]
+            cmd += ["--cacert", "./tests/tls/ca.crt"]
+
+        cmd += ["-h", self.target_ip]
+        cmd += ["-p", str(self.config.get("port", DEFAULT_PORT))]
+
+        # Dataset support for modules
+        if scenario.get("dataset"):
+            dataset_path = Path(scenario["dataset"])
+            if not dataset_path.is_absolute():
+                dataset_path = Path.cwd() / dataset_path
+            cmd += ["--dataset", str(dataset_path)]
+
+            if scenario.get("xml_root_element"):
+                cmd += ["--xml-root-element", scenario["xml_root_element"]]
+
+            if scenario.get("maxdocs") and scenario.get("type") == "ingestion":
+                cmd += ["--maxdocs", str(scenario["maxdocs"])]
+
+        # Test parameters
+        if warmup_mode:
+            # For warmup, use warmup duration
+            warmup_duration = scenario.get("warmup", 60)
+            cmd += ["--duration", str(warmup_duration)]
+        else:
+            # For actual test
+            if scenario.get("duration"):
+                cmd += ["--duration", str(scenario["duration"])]
+            elif scenario.get("requests"):
+                cmd += ["-n", str(scenario["requests"])]
+            elif scenario.get("maxdocs"):
+                # For ingestion scenarios
+                cmd += ["-n", str(scenario["maxdocs"])]
+            else:
+                # Default duration
+                cmd += ["--duration", str(self.config.get("duration", 60))]
+
+        cmd += ["-c", str(scenario.get("clients", 1))]
+        cmd += ["-P", str(scenario.get("pipeline", 1))]
+
+        keyspacelen = self.config.get("keyspacelen", [1000000])[0]
+        cmd += ["-r", str(keyspacelen)]
+
+        if scenario.get("sequential", False):
+            cmd += ["--sequential"]
+
+        cmd += ["--csv"]
+
+        # Add the command
+        cmd += ["--", scenario["command"]]
+
+        return cmd
+
     def _restart_server(self) -> None:
         """Restart the Valkey server for a clean state."""
         if self.server_launcher is None:
@@ -442,11 +663,12 @@ class ClientRunner:
         # Shutdown current server
         self.server_launcher.shutdown(self.tls_mode)
 
-        # Start fresh server
+        # Start fresh server (module_path is stored in launcher)
         self.server_launcher.launch(
             cluster_mode=self.cluster_mode,
             tls_mode=self.tls_mode,
             io_threads=self.io_threads,
+            module_path=self.server_launcher.module_path,
         )
 
         # Wait for server to be ready
