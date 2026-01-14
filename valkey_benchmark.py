@@ -479,22 +479,33 @@ class ClientRunner:
             group_id = test_group.get("group", "unknown")
             description = test_group.get("description", "")
 
+            # Check group filter
+            groups_to_run = self.module_config.get("groups_to_run")
+            if groups_to_run and group_id not in groups_to_run:
+                logging.info(
+                    f"Skipping group {group_id} (not in filter: {groups_to_run})"
+                )
+                continue
+
             logging.info(f"=== Group {group_id}: {description} ===")
 
             # Run scenarios in the test group
             for scenario in test_group.get("scenarios", []):
-                # Check scenario filter if present
-                scenario_filter = self.module_config.get("scenario_filter")
-                if scenario_filter and scenario.get("id") not in scenario_filter:
-                    logging.info(
-                        f"Skipping scenario {scenario.get('id')} (not in filter: {scenario_filter})"
-                    )
-                    continue
-
                 # Expand scenario options first (e.g., NOCONTENT variants)
                 expanded_scenarios = self._expand_scenario_options(scenario)
 
                 for expanded_scenario in expanded_scenarios:
+                    # Check scenario filter if present (after expansion)
+                    scenario_filter = self.module_config.get("scenario_filter")
+                    if (
+                        scenario_filter
+                        and expanded_scenario.get("id") not in scenario_filter
+                    ):
+                        logging.info(
+                            f"Skipping scenario {expanded_scenario.get('id')} (not in filter: {scenario_filter})"
+                        )
+                        continue
+
                     scenario_type = expanded_scenario.get("type", "test")
                     scenario_id = expanded_scenario.get("id", "unknown")
 

@@ -10,6 +10,57 @@
           "size": 1000,
           "transforms": [{"type": "wikipedia"}]
         }
+      },
+      "proximity_5term_1combo_100k.csv": {
+        "doc_count": 100000,
+        "fields": [{
+          "name": "field1",
+          "size": 200,
+          "transforms": [{
+            "type": "proximity_phrase",
+            "term_count": 5,
+            "combinations": 1,
+            "repeats": 1000
+          }]
+        }]
+      },
+      "proximity_5term_100combo_100k.csv": {
+        "doc_count": 100000,
+        "fields": [{
+          "name": "field1",
+          "size": 500,
+          "transforms": [{
+            "type": "proximity_phrase",
+            "term_count": 5,
+            "combinations": 100,
+            "repeats": 1000
+          }]
+        }]
+      },
+      "proximity_25term_100combo_100k.csv": {
+        "doc_count": 100000,
+        "fields": [{
+          "name": "field1",
+          "size": 2000,
+          "transforms": [{
+            "type": "proximity_phrase",
+            "term_count": 25,
+            "combinations": 100,
+            "repeats": 1000
+          }]
+        }]
+      }
+    },
+    "query_generation": {
+      "proximity_5term_queries.csv": {
+        "type": "proximity_phrase",
+        "doc_count": 100,
+        "term_count": 5
+      },
+      "proximity_25term_queries.csv": {
+        "type": "proximity_phrase",
+        "doc_count": 100,
+        "term_count": 25
       }
     },
     "test_groups": [
@@ -36,6 +87,7 @@
             "dataset": "datasets/search_terms.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 \"__field:term__\"",
             "options": {
               "": "",
@@ -49,6 +101,7 @@
             "dataset": "datasets/search_terms.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 \"@field1:__field:term__\"",
             "options": {
               "": "",
@@ -62,6 +115,7 @@
             "dataset": "datasets/proximity_phrases.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 \"__field:term1__ __field:term2__\"",
             "options": {
               "": "",
@@ -75,6 +129,7 @@
             "dataset": "datasets/proximity_phrases.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__\"",
             "options": {
               "": "",
@@ -88,6 +143,7 @@
             "dataset": "datasets/mixed_match.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 \"@field1:__field:term__\"",
             "options": {
               "": "",
@@ -101,6 +157,7 @@
             "dataset": "datasets/proximity_phrases.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 '\"__field:term1__ __field:term2__\"'",
             "options": {
               "": "",
@@ -114,7 +171,129 @@
             "dataset": "datasets/proximity_phrases.csv",
             "clients": 1000,
             "duration": 200,
+            "warmup": 60,
             "command": "FT.SEARCH rd0 '@field1:\"__field:term1__ __field:term2__\"'",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          }
+        ]
+      },
+      {
+        "group": 2,
+        "description": "Proximity queries - 5-term best case (1 combination)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "ingestion",
+            "setup_commands": ["FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT NOSTEM"],
+            "flush_before": true,
+            "dataset": "datasets/proximity_5term_1combo_100k.csv",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\""
+          },
+          {
+            "id": "a",
+            "type": "search",
+            "description": "5-term proximity, default field, slop=0",
+            "dataset": "datasets/proximity_5term_queries.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"__field:term1__ __field:term2__ __field:term3__ __field:term4__ __field:term5__\" SLOP 0 INORDER",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          },
+          {
+            "id": "b",
+            "type": "search",
+            "description": "5-term proximity, specific field, slop=0",
+            "dataset": "datasets/proximity_5term_queries.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__ @field1:__field:term3__ @field1:__field:term4__ @field1:__field:term5__\" SLOP 0 INORDER",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          }
+        ]
+      },
+      {
+        "group": 3,
+        "description": "Proximity queries - 5-term worst case (100 combinations)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "ingestion",
+            "setup_commands": ["FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT NOSTEM"],
+            "flush_before": true,
+            "dataset": "datasets/proximity_5term_100combo_100k.csv",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\""
+          },
+          {
+            "id": "a",
+            "type": "search",
+            "description": "5-term proximity, specific field, slop=0, 100 combos",
+            "dataset": "datasets/proximity_5term_queries.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__ @field1:__field:term3__ @field1:__field:term4__ @field1:__field:term5__\" SLOP 0 INORDER",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          },
+          {
+            "id": "b",
+            "type": "search",
+            "description": "5-term proximity, specific field, slop=3, 100 combos",
+            "dataset": "datasets/proximity_5term_queries.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__ @field1:__field:term3__ @field1:__field:term4__ @field1:__field:term5__\" SLOP 3 INORDER",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          }
+        ]
+      },
+      {
+        "group": 4,
+        "description": "Proximity queries - 25-term worst case (100 combinations)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "ingestion",
+            "setup_commands": ["FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT NOSTEM"],
+            "flush_before": true,
+            "dataset": "datasets/proximity_25term_100combo_100k.csv",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\""
+          },
+          {
+            "id": "a",
+            "type": "search",
+            "description": "25-term proximity, specific field, slop=3, 100 combos",
+            "dataset": "datasets/proximity_25term_queries.csv",
+            "clients": 1000,
+            "duration": 200,
+            "warmup": 60,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__ @field1:__field:term3__ @field1:__field:term4__ @field1:__field:term5__ @field1:__field:term6__ @field1:__field:term7__ @field1:__field:term8__ @field1:__field:term9__ @field1:__field:term10__ @field1:__field:term11__ @field1:__field:term12__ @field1:__field:term13__ @field1:__field:term14__ @field1:__field:term15__ @field1:__field:term16__ @field1:__field:term17__ @field1:__field:term18__ @field1:__field:term19__ @field1:__field:term20__ @field1:__field:term21__ @field1:__field:term22__ @field1:__field:term23__ @field1:__field:term24__ @field1:__field:term25__\" SLOP 3 INORDER",
             "options": {
               "": "",
               "NOCONTENT": "_nocontent"

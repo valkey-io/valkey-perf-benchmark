@@ -587,6 +587,9 @@ The framework uses a **transform-based dataset generation system** that supports
 - `inject`: Add marker terms at specified percentage
 - `repeat`: Duplicate terms N times (for term_repetition tests)
 - `prefix_gen`: Generate prefix variations (for prefix_explosion tests)
+- `proximity_phrase`: Generate N-term phrases for proximity testing
+  - Parameters: `term_count`, `combinations` (1=best case, 100=worst case), `repeats` (copies per pattern)
+  - Supports CSV output (no Wikipedia needed)
 
 **Compact Format (for field explosion):**
 ```json
@@ -600,11 +603,25 @@ The framework uses a **transform-based dataset generation system** that supports
 }
 ```
 
+**Query Generation:**
+```json
+"query_generation": {
+  "proximity_5term_queries.csv": {
+    "type": "proximity_phrase",
+    "doc_count": 100,
+    "term_count": 5
+  }
+}
+```
+- Auto-generates query CSVs matching ingestion datasets
+- Supports type-based generation (extensible for future query types)
+
 ### FTS Test Groups
 
 **Group 1: Multi-field comprehensive (NOSTEM)**
 - 50-field index, 50K documents, 1000 chars per field
-- 11 test runs (1 ingestion + 10 search):
+- Tests: Single term, 2-term composed AND, 2-term proximity phrase
+- Scenarios: 1a-1g (with/without NOCONTENT variants)
   - 1a / 1a_nocontent: Single term all fields
   - 1b / 1b_nocontent: Single term @field1
   - 1c / 1c_nocontent: Composed AND all fields
@@ -612,6 +629,21 @@ The framework uses a **transform-based dataset generation system** that supports
   - 1e / 1e_nocontent: Mixed pattern @field1
   - 1f / 1f_nocontent: Proximity phrase all fields
   - 1g / 1g_nocontent: Proximity phrase @field1
+
+**Group 2: Proximity queries - 5-term best case (1 combination)**
+- 100K documents, 1 field, 100 queries × 1000 matches
+- Adjacent terms → 1 position tuple check (best case)
+- Tests: Default field and specific field queries with SLOP 0 INORDER
+
+**Group 3: Proximity queries - 5-term worst case (100 combinations)**
+- 100K documents, 1 field, 100 queries × 1000 matches
+- Repeated terms with noise → ~100 position tuple checks before match
+- Tests: SLOP 0 and SLOP 3 variations
+
+**Group 4: Proximity queries - 25-term worst case (100 combinations)**
+- 100K documents, 1 field, 100 queries × 1000 matches
+- 25-term phrases with complexity testing
+- Tests: SLOP 3 INORDER
 
 ### FTS Results
 

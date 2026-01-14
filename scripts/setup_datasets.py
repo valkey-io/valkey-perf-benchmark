@@ -2,6 +2,7 @@
 """Download and generate FTS test datasets."""
 
 import argparse
+import csv
 import json
 import logging
 import subprocess
@@ -96,7 +97,73 @@ def apply_transforms(
             prefixes = [f"{base}{i}" for i in range(variations)]
             content += " " + " ".join(prefixes[:10])
 
+        elif ttype == "proximity_phrase":
+            # Generate unique phrases per query partition
+            # Each unique phrase is repeated N times
+            repeats = t.get("repeats", 1000)
+            query_id = (doc_num - 1) // repeats
+            term_count = t.get("term_count", 5)
+            combinations = t.get("combinations", 1)
+
+            # Generate unique terms for this query partition
+            terms = [f"phrase{query_id}_term{i}" for i in range(1, term_count + 1)]
+
+            if combinations == 1:
+                # Best case: adjacent terms → 1 position tuple check
+                content = " ".join(terms)
+            else:
+                # Worst case: repeated terms with noise, valid combo at end
+                # Pattern from test_fulltext.py doc:5
+                parts = []
+                for term in terms[:-1]:
+                    parts.extend([term, term, term, "x", "x"])
+                parts.extend([terms[-1], terms[-1]])
+                # Valid combination at end
+                parts.extend(terms)
+                content = " ".join(parts)
+
     return content[:field_size]
+
+
+def generate_csv_dataset(output_dir: Path, config: dict, filename: str) -> Path:
+    """Generate CSV dataset without Wikipedia."""
+    output = output_dir / filename
+
+    if output.exists():
+        logging.info(f"Exists: {filename}")
+        return output
+
+    doc_count = config["doc_count"]
+    field_configs = build_field_configs(config)
+
+    logging.info(
+        f"Generating {filename} ({len(field_configs)} fields, {doc_count} docs)"
+    )
+
+    with open(output, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        # Header
+        writer.writerow([field["name"] for field in field_configs])
+
+        # Data rows
+        for doc_num in range(1, doc_count + 1):
+            row = []
+            for field in field_configs:
+                content = apply_transforms(
+                    "",  # No wiki text for proximity transforms
+                    field.get("transforms", []),
+                    field["size"],
+                    doc_num,
+                    doc_count,
+                )
+                row.append(content)
+            writer.writerow(row)
+
+            if doc_num % 10000 == 0:
+                logging.info(f"Generated {doc_num} docs")
+
+    logging.info(f"Complete: {filename} ({doc_count} docs)")
+    return output
 
 
 def generate_dataset(
@@ -170,6 +237,44 @@ def generate_dataset(
     return output
 
 
+def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
+    """Generate query CSV based on type."""
+    output = output_dir / filename
+
+    if output.exists():
+        logging.info(f"Exists: {filename}")
+        return output
+
+    query_type = config.get("type", "proximity_phrase")
+    num_queries = config["doc_count"]
+    term_count = config["term_count"]
+
+    logging.info(
+        f"Generating {filename} ({num_queries} queries, {term_count} terms, type: {query_type})"
+    )
+
+    with open(output, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        if query_type == "proximity_phrase":
+            # Header
+            writer.writerow([f"term{i}" for i in range(1, term_count + 1)])
+
+            # Query rows
+            for query_id in range(num_queries):
+                terms = [f"phrase{query_id}_term{i}" for i in range(1, term_count + 1)]
+                writer.writerow(terms)
+
+        # Future: add other query types here
+        # elif query_type == "single_term":
+        #     writer.writerow(["term"])
+        #     for query_id in range(num_queries):
+        #         writer.writerow([f"term{query_id}"])
+
+    logging.info(f"Complete: {filename} ({num_queries} queries)")
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate FTS test datasets")
     parser.add_argument("--output-dir", type=Path, default=Path("datasets"))
@@ -183,9 +288,12 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_configs = {}
+    query_configs = {}
     if args.config:
         with open(args.config) as f:
-            dataset_configs = json.load(f)[0].get("dataset_generation", {})
+            config_data = json.load(f)[0]
+            dataset_configs = config_data.get("dataset_generation", {})
+            query_configs = config_data.get("query_generation", {})
 
     files_to_gen = args.files or list(dataset_configs.keys())
 
@@ -193,10 +301,21 @@ def main():
     wiki_file = download_wikipedia(args.output_dir) if needs_wiki else None
 
     for filename in files_to_gen:
-        if filename in dataset_configs and wiki_file:
-            generate_dataset(
-                args.output_dir, wiki_file, dataset_configs[filename], filename
-            )
+        if filename in dataset_configs:
+            if filename.endswith(".csv"):
+                # CSV format - no Wikipedia needed
+                generate_csv_dataset(
+                    args.output_dir, dataset_configs[filename], filename
+                )
+            elif wiki_file:
+                # XML format - needs Wikipedia
+                generate_dataset(
+                    args.output_dir, wiki_file, dataset_configs[filename], filename
+                )
+
+    # Generate query CSVs
+    for query_filename, query_config in query_configs.items():
+        generate_queries(args.output_dir, query_config, query_filename)
 
     logging.info("Dataset setup complete")
 

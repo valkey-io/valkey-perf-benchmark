@@ -541,14 +541,10 @@ def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
             if "dataset" in scenario:
                 required_datasets.add(scenario["dataset"])
 
-    missing_xml = [
-        Path(d)
-        for d in required_datasets
-        if d.endswith(".xml") and not Path(d).exists()
-    ]
+    missing_datasets = [Path(d) for d in required_datasets if not Path(d).exists()]
 
-    if missing_xml:
-        logging.info(f"Missing datasets: {[str(f.name) for f in missing_xml]}")
+    if missing_datasets:
+        logging.info(f"Missing datasets: {[str(f.name) for f in missing_datasets]}")
         logging.info("Running setup script...")
         cmd = [
             "python3",
@@ -556,7 +552,7 @@ def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
             "--config",
             args.config,
             "--files",
-        ] + [f.name for f in missing_xml]
+        ] + [f.name for f in missing_datasets]
         subprocess.run(cmd, check=True)
 
     # Setup paths and directories
