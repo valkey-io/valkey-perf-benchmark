@@ -136,7 +136,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Path to module source directory (for building). If omitted, assumes ../valkey-{module}/ relative to valkey-path. Not needed when --use-running-server is set.",
+        help="Path to pre-built module .so file (e.g., ../valkey-search/.build-release/libsearch.so). "
+        "REQUIRED for module testing unless --use-running-server is set. "
+        "Build your module with its native build system (build.sh, make, cmake) before running benchmarks.",
     )
 
     args, unknown = parser.parse_known_args()
@@ -511,7 +513,6 @@ def main() -> None:
 def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
     """Run module tests using unified ClientRunner."""
     import subprocess
-    from module_build import ModuleBuilder
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -561,35 +562,39 @@ def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
 
     valkey_dir = Path(args.valkey_path)
 
-    # Determine module directory
-    if args.module_path:
-        module_dir = Path(args.module_path)
-    else:
-        # Default: assume sibling directory
-        module_dir = valkey_dir.parent / f"valkey-{args.module}"
-
     # Detect architecture
     architecture = platform.machine()
 
-    # Build module only if NOT using running server
+    # Validate and use pre-built module binary
     module_path = None
     if not args.use_running_server:
-        if module_dir.exists():
-            logging.info(f"Building {args.module} module from {module_dir}")
-            module_builder = ModuleBuilder(
-                module_path=str(module_dir),
-                tls_enabled=module_config.get("tls_mode", False),
+        # Require --module-path for module testing
+        if not args.module_path:
+            raise ValueError(
+                f"Module testing requires --module-path pointing to a pre-built .so file.\n"
+                f"Build your {args.module} module first with its native build system "
+                f"(e.g., build.sh, make, cmake), then provide the path to the .so file."
             )
-            module_path = module_builder.build()
-            logging.info(f"Module built: {module_path}")
-        else:
-            logging.warning(f"Module directory not found: {module_dir}")
-            logging.warning(
-                "Assuming module is already loaded or will be loaded externally"
+
+        # Validate that path points to an existing .so file
+        module_binary = Path(args.module_path)
+        if not module_binary.exists():
+            raise FileNotFoundError(
+                f"Module binary not found: {module_binary}\n"
+                f"Please build the module first before running benchmarks."
             )
+
+        if not module_binary.suffix == ".so":
+            raise ValueError(
+                f"--module-path must point to a .so file (pre-built binary), got: {module_binary}\n"
+                f"If you provided a source directory, please build the module first and provide the path to the .so file."
+            )
+
+        module_path = str(module_binary.absolute())
+        logging.info(f"Using pre-built module binary: {module_path}")
     else:
         logging.info(
-            "Skipping module build (using running server with pre-loaded module)"
+            "Skipping module validation (using running server with pre-loaded module)"
         )
 
     # Get benchmark path

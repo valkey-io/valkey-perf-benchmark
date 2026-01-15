@@ -463,47 +463,73 @@ Module tests use structured `test_groups` with `scenarios`:
 }
 ```
 
-### Module PR Testing
+### Setting Up PR Benchmarks
 
-Module repositories (e.g., valkey-search) follow the same PR testing pattern as valkey core:
+Both valkey core and module repositories can set up automated PR benchmarking using our unified workflow template.
 
-1. Add `.github/workflows/benchmark-on-label.yml` in the module repo
-2. Workflow triggered by `run-benchmark` label on PRs
-3. Checks out valkey (stable) + module PR + module baseline
-4. Builds both module versions
-5. Runs benchmarks against each using this framework
-6. Compares results and comments on PR
+#### Quick Start
 
-The workflow lives in the module repo, not here, to avoid duplication.
+1. **Copy the template** from this repo:
+   ```bash
+   cp .github/workflow-templates/pr-benchmark-template.yml \
+      .github/workflows/benchmark-on-label.yml
+   ```
+
+2. **Customize for your repository:**
+   - **Runner label**: Update `runs-on` with your self-hosted runner label
+   - **For module repos**: Update `MODULE_NAME`, `.so` path, and build commands
+   - **For core repo**: Remove or comment out module-specific steps
+
+3. **Trigger benchmarks** by adding the `run-benchmark` label to any PR
+
+#### Template Customization Guide
+
+The template includes clear `CUSTOMIZE` markers for:
+
+**Module Repositories (valkey-search, valkey-json, etc.):**
+- Module build command (build.sh, make, cmake)
+- Path to .so file (e.g., `.build-release/libsearch.so`)
+- Module name for `--module` parameter
+- Benchmark config file path
+
+**Core Repository (valkey/valkey):**
+- Uses conditional steps based on `github.repository`
+- Most sections work without modification
+
+See `.github/workflow-templates/pr-benchmark-template.yml` for detailed inline documentation.
+
+#### Workflow Features
+
+- Triggered by `run-benchmark` label on PRs
+- Compares PR branch against base branch
+- Posts results as PR comment
+- Uploads artifacts for detailed analysis
+- Automatic cleanup and label removal
 
 ### Running Module Tests Locally
 
-#### 1. Build valkey-search Module
+`--module-path` requires a pre-built .so file (not source directory) since modules use different build systems (make, cmake, build.sh) and may need specific compilers.
+
+**Build module first:**
 
 ```bash
-# Clone and build valkey-search
-git clone https://github.com/valkey-io/valkey-search
 cd valkey-search
-git checkout fulltext  # or your target branch
-make BUILD_TLS=yes
-
-# Note the path to libsearch.so:
-# valkey-search/.build-release/libsearch.so
+make BUILD_TLS=yes  # or ./build.sh, cmake, etc.
+ls -lh .build-release/libsearch.so
 ```
 
-#### 2. Start Valkey Server with Search Module
+**Run benchmarks:**
 
 ```bash
-# Example: Pin server to cores 0-7, use 8 IO threads
-taskset -c 0-7 /path/to/valkey/src/valkey-server \
-  --bind 0.0.0.0 \
-  --port 6379 \
-  --io-threads 8 \
-  --loadmodule /path/to/valkey-search/.build-release/libsearch.so \
-  --appendonly no \
-  --save "" \
-  --protected-mode no
+python benchmark.py \
+  --module search \
+  --module-path ../valkey-search/.build-release/libsearch.so \
+  --valkey-path ../valkey \
+  --config configs/fts-benchmarks.json \
+  --groups 1
 ```
+
+Framework manages server lifecycle automatically.
 
 ### Running FTS Tests
 
