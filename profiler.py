@@ -46,9 +46,10 @@ class PerformanceProfiler:
         # Extract profiling configuration from config dict
         profiling_config = config.get("profiling", {}) if config else {}
         self.sampling_freq = profiling_config.get("sampling_freq", 999)
-        self.profile_delay = profiling_config.get("profile_delay", 85)
-        self.profile_duration = profiling_config.get("profile_duration", 10)
         self.profile_mode = profiling_config.get("mode", "cpu")
+
+        # Store delays structure (new format)
+        self.delays = profiling_config.get("delays", {})
 
         # Validate profile mode
         valid_modes = ["cpu", "wall-time"]
@@ -110,13 +111,13 @@ class PerformanceProfiler:
         if not self.enabled:
             return
 
-        # Get phase-specific overrides
+        # Determine phase (ingestion or search) from test_id
         phase_key = "ingestion" if "ingestion" in test_id.lower() else "search"
-        phase_config = (
-            self.config.get("profiling", {}).get(phase_key, {}) if self.config else {}
-        )
-        delay = phase_config.get("profile_delay", self.profile_delay)
-        duration = phase_config.get("profile_duration", self.profile_duration)
+
+        # Get delay and duration from delays structure
+        phase_delays = self.delays.get(phase_key, {})
+        delay = phase_delays.get("delay", 0)
+        duration = phase_delays.get("duration", 10)
 
         import threading
 

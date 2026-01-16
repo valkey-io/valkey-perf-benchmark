@@ -567,22 +567,41 @@ Results saved to `results/search_tests/` with optional flamegraphs if profiling 
 
 #### CPU Pinning Configuration
 
-FTS tests follow the same pattern as core tests - CPU pinning is configured in the config file:
+CPU pinning is configured in the config file:
 
 ```json
 {
-  "client_cpu_range": "8-15"  // Pin benchmark client to cores 8-15
+  "server_cpu_range": "0-7",   // Pin server to cores 0-7 (when using --mode both)
+  "client_cpu_range": "8-15"   // Pin benchmark client to cores 8-15
 }
 ```
 
-**Note:** FTS tests run against an externally managed server. Pin the server separately when starting it:
+**With `--mode both` (recommended):**
+Framework manages server automatically with CPU pinning from config.
 
 ```bash
-# Start server on cores 0-7
+python benchmark.py \
+  --module search \
+  --module-path ../valkey-search/.build-release/libsearch.so \
+  --valkey-path ../valkey \
+  --config configs/fts-benchmarks.json \
+  --groups 1
+```
+
+**With `--use-running-server` (manual server management):**
+Start server yourself with desired CPU pinning.
+
+```bash
+# Start server manually
 taskset -c 0-7 /path/to/valkey-server --loadmodule libsearch.so ...
 
-# Run FTS tests (client uses cores from config: 8-15)
-python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1
+# Run benchmarks
+python benchmark.py \
+  --module search \
+  --valkey-path /path/to/valkey \
+  --use-running-server \
+  --config configs/fts-benchmarks.json \
+  --groups 1
 ```
 
 ### Dataset Generation System
@@ -729,6 +748,56 @@ profiler.stop_profiling("search_1a")
 - **Kernel + user space profiling**: Complete stack traces with DWARF
 - **Generic implementation**: Works with any process (valkey-server, redis-server, etc.)
 - **Configurable sampling**: 999Hz default
+
+### profiling_sets Configuration
+
+Run tests with multiple profiling configurations:
+
+```json
+{
+  "profiling_sets": [
+    {"enabled": false},
+    {"enabled": true, "mode": "wall-time", "sampling_freq": 999}
+  ],
+  "config_sets": [
+    {"search.reader-threads": 1},
+    {"search.reader-threads": 8}
+  ]
+}
+```
+
+**Behavior:**
+- Iterates profiling_sets × config_sets
+- Profiling OFF → Collects metrics in `metrics.json`
+- Profiling ON → Generates flamegraphs, skips metrics
+- Flamegraphs: `group{X}_{scenario}_{config_values}_{timestamp}.svg`
+
+**Per-scenario override:**
+```json
+{"id": "a", "profiling": {"delays": {"search": {"delay": 0, "duration": 10}}}}
+```
+
+Scenario overrides any profiling_set values.
+
+**Delay strategy pattern:**
+```json
+{
+  "profiling_sets": [{
+    "enabled": true,
+    "delays": {
+      "ingestion": {"delay": 0, "duration": 10},
+      "search": {"delay": 30, "duration": 10}
+    }
+  }],
+  "scenarios": [{
+    "id": "a",
+    "type": "ingestion",
+    "profiling": {"delays": {"ingestion": {"delay": 10, "duration": 10}}}
+  }]
+}
+```
+
+Group 1 ingestion uses 10s delay (dataset loading), others use 0s (immediate).
 
 ## License
 

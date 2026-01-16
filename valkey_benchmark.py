@@ -13,6 +13,7 @@ import valkey
 
 from process_metrics import MetricsProcessor
 from valkey_server import ServerLauncher
+from profiler import PerformanceProfiler
 
 # Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
@@ -43,6 +44,17 @@ READ_POPULATE_MAP = {
     "SPOP": "SADD",
     "ZPOPMIN": "ZADD",
 }
+
+
+def deep_merge(base: dict, override: dict) -> dict:
+    """Deep merge override into base, returning new dict."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
 
 
 class ClientRunner:
@@ -458,21 +470,86 @@ class ClientRunner:
 
         return scenarios
 
+    def _create_failure_marker(
+        self,
+        group_id: int,
+        scenario_id: str,
+        scenario_type: str,
+        error: str,
+        command: str,
+        timestamp: str,
+        config_set: dict,
+    ) -> dict:
+        """Create failure marker dict for failed scenarios."""
+        return {
+            "test_id": f"{group_id}_{scenario_id}",
+            "test_phase": scenario_type,
+            "status": "failed",
+            "error": error,
+            "command": command,
+            "timestamp": timestamp,
+            "config_set": config_set,
+        }
+
+    def _setup_profiling_and_metrics(self, profiling_set: dict, commit_time: str):
+        """Setup profiler and metrics processor based on profiling_set."""
+        profiling_enabled = profiling_set.get("enabled", False)
+
+        profiler = None
+        if profiling_enabled:
+            profiler = PerformanceProfiler(
+                results_dir=self.results_dir,
+                enabled=True,
+                config={"profiling": profiling_set},
+                commit_id="",
+            )
+
+        metrics_processor = None
+        if not profiling_enabled:
+            metrics_processor = MetricsProcessor(
+                self.commit_id,
+                self.cluster_mode,
+                self.tls_mode,
+                commit_time,
+                self.io_threads,
+                self.benchmark_threads,
+                self.architecture,
+            )
+
+        return profiler, metrics_processor, profiling_enabled
+
+    def _finalize_metrics(self, metrics_processor, metric_json, profiling_enabled):
+        """Write metrics and log completion status."""
+        if metrics_processor and metric_json:
+            metrics_processor.write_metrics(self.results_dir, metric_json)
+            logging.info(
+                f"=== Module Benchmark Testing Complete: {len(metric_json)} metrics collected ==="
+            )
+        elif profiling_enabled:
+            logging.info(
+                "=== Module Benchmark Testing Complete: Profiling mode, no metrics collected ==="
+            )
+        else:
+            logging.warning("No metrics collected from module tests")
+
     def _run_module_tests(self) -> None:
         """Run module test scenarios from config."""
         commit_time = self.get_commit_time(self.commit_id)
-        metrics_processor = MetricsProcessor(
-            self.commit_id,
-            self.cluster_mode,
-            self.tls_mode,
-            commit_time,
-            self.io_threads,
-            self.benchmark_threads,
-            self.architecture,
-        )
+
+        profiling_set = getattr(self, "current_profiling_set", {"enabled": False})
+        config_set = getattr(self, "current_config_set", {})
+        config_suffix = getattr(self, "config_suffix", "default")
+
+        (
+            profiler,
+            metrics_processor,
+            profiling_enabled,
+        ) = self._setup_profiling_and_metrics(profiling_set, commit_time)
         metric_json = []
 
-        logging.info("=== Starting Module Benchmark Testing ===")
+        logging.info(
+            f"=== Starting Module Benchmark Testing (profiling: {profiling_enabled}) ==="
+        )
 
         # Get test groups from module config
         for test_group in self.module_config.get("test_groups", []):
@@ -521,64 +598,130 @@ class ClientRunner:
                     for setup_cmd in expanded_scenario.get("setup_commands", []):
                         self._execute_setup_command(setup_cmd)
 
-                    # Run warmup if specified
-                    warmup_duration = expanded_scenario.get("warmup", 0)
-                    if warmup_duration > 0:
-                        logging.info(f"Running warmup: {warmup_duration}s")
-                        warmup_cmd = self._build_module_benchmark_command(
-                            expanded_scenario, warmup_mode=True
+                    # Merge scenario profiling override with profiling_set
+                    if expanded_scenario.get("profiling"):
+                        effective_profiling = deep_merge(
+                            profiling_set, expanded_scenario["profiling"]
                         )
-                        self._run(
-                            warmup_cmd,
+                    else:
+                        effective_profiling = profiling_set
+
+                    scenario_profiling_enabled = effective_profiling.get(
+                        "enabled", False
+                    )
+
+                    profile_id = (
+                        f"group{group_id}_{scenario_type}_{scenario_id}_{config_suffix}"
+                    )
+
+                    # Run warmup and benchmark with error handling
+                    warmup_duration = expanded_scenario.get("warmup", 0)
+                    try:
+                        # Run warmup if specified
+                        if warmup_duration > 0:
+                            logging.info(f"Running warmup: {warmup_duration}s")
+                            warmup_cmd = self._build_module_benchmark_command(
+                                expanded_scenario, warmup_mode=True
+                            )
+                            self._run(
+                                warmup_cmd,
+                                cwd=self.valkey_path,
+                                capture_output=True,
+                                timeout=None,
+                            )
+                            logging.info("Warmup complete")
+
+                        # Start profiling if enabled for this scenario
+                        if profiler and scenario_profiling_enabled:
+                            profiler.start_profiling(
+                                profile_id, target_process="valkey-server"
+                            )
+
+                        # Run actual benchmark
+                        bench_cmd = self._build_module_benchmark_command(
+                            expanded_scenario
+                        )
+                        proc = self._run(
+                            bench_cmd,
                             cwd=self.valkey_path,
                             capture_output=True,
                             timeout=None,
                         )
-                        logging.info("Warmup complete")
 
-                    # Run actual benchmark
-                    bench_cmd = self._build_module_benchmark_command(expanded_scenario)
-                    proc = self._run(
-                        bench_cmd,
-                        cwd=self.valkey_path,
-                        capture_output=True,
-                        timeout=None,
-                    )
+                        # Stop profiling if it was started
+                        if profiler and scenario_profiling_enabled:
+                            profiler.stop_profiling(profile_id)
 
-                    if proc is None:
-                        logging.error(f"Benchmark failed for scenario {scenario_id}")
+                        if proc is None:
+                            logging.error(
+                                f"Benchmark failed for scenario {scenario_id}"
+                            )
+                            if metrics_processor:
+                                metric_json.append(
+                                    self._create_failure_marker(
+                                        group_id,
+                                        scenario_id,
+                                        scenario_type,
+                                        "Benchmark command returned no results",
+                                        expanded_scenario["command"],
+                                        commit_time,
+                                        config_set,
+                                    )
+                                )
+                            continue
+
+                        logging.info(f"Benchmark output:\n{proc.stdout}")
+                        if proc.stderr:
+                            logging.warning(f"Benchmark stderr:\n{proc.stderr}")
+
+                        # Only collect metrics when profiling is OFF
+                        if metrics_processor:
+                            # Parse metrics - use maxdocs as requests for ingestion scenarios
+                            requests_value = expanded_scenario.get(
+                                "requests"
+                            ) or expanded_scenario.get("maxdocs")
+
+                            metrics = metrics_processor.create_metrics(
+                                proc.stdout,
+                                expanded_scenario["command"],
+                                expanded_scenario.get("data_size", 100),
+                                expanded_scenario.get("pipeline", 1),
+                                expanded_scenario.get("clients", 1),
+                                requests_value,
+                                warmup_duration,
+                                expanded_scenario.get("duration"),
+                            )
+                            if metrics:
+                                metrics["status"] = "success"
+                                metrics["test_id"] = f"{group_id}_{scenario_id}"
+                                metrics["test_phase"] = scenario_type
+                                metrics["config_set"] = config_set
+                                if expanded_scenario.get("dataset"):
+                                    metrics["dataset"] = expanded_scenario["dataset"]
+                                metric_json.append(metrics)
+                        else:
+                            logging.info(
+                                f"Profiling enabled, skipping metrics collection for {group_id}_{scenario_id}"
+                            )
+
+                    except Exception as e:
+                        # Log error but continue to next scenario
+                        logging.error(f"Scenario {group_id}_{scenario_id} failed: {e}")
+                        if metrics_processor:
+                            metric_json.append(
+                                self._create_failure_marker(
+                                    group_id,
+                                    scenario_id,
+                                    scenario_type,
+                                    str(e),
+                                    expanded_scenario["command"],
+                                    commit_time,
+                                    config_set,
+                                )
+                            )
                         continue
 
-                    logging.info(f"Benchmark output:\n{proc.stdout}")
-                    if proc.stderr:
-                        logging.warning(f"Benchmark stderr:\n{proc.stderr}")
-
-                    # Parse metrics
-                    metrics = metrics_processor.create_metrics(
-                        proc.stdout,
-                        expanded_scenario["command"],
-                        expanded_scenario.get("data_size", 100),
-                        expanded_scenario.get("pipeline", 1),
-                        expanded_scenario.get("clients", 1),
-                        expanded_scenario.get("requests"),
-                        warmup_duration,
-                        expanded_scenario.get("duration"),
-                    )
-                    if metrics:
-                        metrics["test_id"] = f"{group_id}_{scenario_id}"
-                        metrics["test_phase"] = scenario_type
-                        if expanded_scenario.get("dataset"):
-                            metrics["dataset"] = expanded_scenario["dataset"]
-                        metric_json.append(metrics)
-
-        if not metric_json:
-            logging.warning("No metrics collected from module tests")
-            return
-
-        metrics_processor.write_metrics(self.results_dir, metric_json)
-        logging.info(
-            f"=== Module Benchmark Testing Complete: {len(metric_json)} metrics collected ==="
-        )
+        self._finalize_metrics(metrics_processor, metric_json, profiling_enabled)
 
     def _execute_setup_command(self, cmd_str: str) -> None:
         """Execute a setup command via valkey client."""
