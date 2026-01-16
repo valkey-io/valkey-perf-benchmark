@@ -1,0 +1,234 @@
+# Valkey PR Benchmark Template
+# Copy to your repo as: .github/workflows/benchmark-on-label.yml
+# Customize marked sections for your repository
+
+name: Benchmark PR on Label
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  benchmark:
+    if: github.event.label.name == 'run-benchmark'
+    
+    # CUSTOMIZE: Set your runner label
+    runs-on: ["self-hosted", "benchmark-runner"]
+    
+    timeout-minutes: 180
+    
+    steps:
+      - name: Checkout valkey (Module repos only)
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey
+          ref: unstable
+          path: valkey
+          fetch-depth: 1
+      
+      # Checkout PR branch
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          path: pr
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 1
+      
+      # Checkout baseline branch
+      - name: Checkout baseline branch
+        uses: actions/checkout@v4
+        with:
+          path: baseline
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 1
+      
+      # Checkout benchmark framework
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey-perf-benchmark
+          path: valkey-perf-benchmark
+          fetch-depth: 1
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+      
+      - name: Install Python dependencies
+        working-directory: valkey-perf-benchmark
+        run: pip install -r requirements.txt
+      
+      # Core: Build PR and baseline valkey
+      - name: Build PR version (Core)
+        if: github.repository == 'valkey-io/valkey'
+        working-directory: pr
+        run: |
+          make distclean || true
+          make -j$(nproc)
+          ls -lh src/valkey-server src/valkey-benchmark
+      
+      - name: Build baseline version (Core)
+        if: github.repository == 'valkey-io/valkey'
+        working-directory: baseline
+        run: |
+          make distclean || true
+          make -j$(nproc)
+          ls -lh src/valkey-server src/valkey-benchmark
+      
+      - name: Build valkey (Module repos)
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        working-directory: valkey
+        run: |
+          make distclean || true
+          make -j$(nproc)
+          ls -lh src/valkey-server src/valkey-benchmark
+      
+      - name: Build module PR version
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        working-directory: pr
+        run: |
+          # CUSTOMIZE: make, ./build.sh, cmake, etc.
+          make distclean || true
+          make -j$(nproc)
+          
+          # CUSTOMIZE: .build-release/libmodule.so, build/libmodule.so, etc.
+          [[ -f ".build-release/libmodule.so" ]] || exit 1
+          ls -lh .build-release/libmodule.so
+      
+      - name: Build module baseline version
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        working-directory: baseline
+        run: |
+          make distclean || true
+          make -j$(nproc)
+          [[ -f ".build-release/libmodule.so" ]] || exit 1
+      
+      # Uncomment if module needs datasets
+      # - name: Setup datasets
+      #   if: startsWith(github.repository, 'valkey-io/valkey-')
+      #   working-directory: valkey-perf-benchmark
+      #   run: python scripts/setup_datasets.py --config configs/MODULE-benchmarks.json
+      
+      - name: Run PR benchmarks (Core)
+        if: github.repository == 'valkey-io/valkey'
+        working-directory: valkey-perf-benchmark
+        run: |
+          python benchmark.py \
+            --valkey-path ../pr \
+            --config configs/benchmark-configs.json \
+            --mode both \
+            --results-dir results/pr
+      
+      - name: Run baseline benchmarks (Core)
+        if: github.repository == 'valkey-io/valkey'
+        working-directory: valkey-perf-benchmark
+        run: |
+          python benchmark.py \
+            --valkey-path ../baseline \
+            --config configs/benchmark-configs.json \
+            --mode both \
+            --results-dir results/baseline
+      
+      - name: Run PR benchmarks (Module)
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        working-directory: valkey-perf-benchmark
+        run: |
+          # CUSTOMIZE: MODULE_NAME, libmodule.so, MODULE-benchmarks.json
+          python benchmark.py \
+            --module MODULE_NAME \
+            --module-path ../pr/.build-release/libmodule.so \
+            --valkey-path ../valkey \
+            --config configs/MODULE-benchmarks.json \
+            --mode both \
+            --results-dir results/pr
+      
+      - name: Run baseline benchmarks (Module)
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        working-directory: valkey-perf-benchmark
+        run: |
+          python benchmark.py \
+            --module MODULE_NAME \
+            --module-path ../baseline/.build-release/libmodule.so \
+            --valkey-path ../valkey \
+            --config configs/MODULE-benchmarks.json \
+            --mode both \
+            --results-dir results/baseline
+      
+      - name: Compare results (Core)
+        if: github.repository == 'valkey-io/valkey'
+        working-directory: valkey-perf-benchmark
+        run: |
+          python ./utils/compare_benchmark_results.py \
+            --baseline ./results/baseline/metrics.json \
+            --new ./results/pr/metrics.json \
+            --output ../comparison.md \
+            --metrics rps
+      
+      - name: Compare results (Module)
+        if: startsWith(github.repository, 'valkey-io/valkey-')
+        working-directory: valkey-perf-benchmark
+        run: |
+          # CUSTOMIZE: MODULE_tests
+          python ./utils/compare_benchmark_results.py \
+            --baseline ./results/baseline/MODULE_tests/metrics.json \
+            --new ./results/pr/MODULE_tests/metrics.json \
+            --output ../comparison.md \
+            --metrics rps
+      
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            valkey-perf-benchmark/results/
+            comparison.md
+      
+      - name: Comment PR with results
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('comparison.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const sha = '${{ github.event.pull_request.head.sha }}';
+            const short = sha.slice(0,7);
+            const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner,
+              repo,
+              body: `**Benchmark Results for commit:** ${link}\n\n${body}`
+            });
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill -f valkey-server || true
+          rm -rf valkey* pr baseline comparison.md
+      
+      - name: Remove run-benchmark label
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'run-benchmark'
+            }).catch(err => console.log('Label not present:', err.message));

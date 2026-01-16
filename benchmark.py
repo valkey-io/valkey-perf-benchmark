@@ -114,6 +114,33 @@ def parse_args() -> argparse.Namespace:
         help="Number of times to run each benchmark configuration (default: 1)",
     )
 
+    parser.add_argument(
+        "--module",
+        choices=["core", "search"],
+        default="core",
+        help="Module to test: 'core' for standard Valkey commands, 'search' for valkey-search module (FTS, vector, etc.) (default: core)",
+    )
+
+    parser.add_argument(
+        "--groups",
+        help="Test groups to run (search module only, e.g., '1,2,3')",
+    )
+
+    parser.add_argument(
+        "--scenarios",
+        help="Specific scenarios to run (search module only, e.g., 'ingest,a,b')",
+    )
+
+    parser.add_argument(
+        "--module-path",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path to pre-built module .so file (e.g., ../valkey-search/.build-release/libsearch.so). "
+        "REQUIRED for module testing unless --use-running-server is set. "
+        "Build your module with its native build system (build.sh, make, cmake) before running benchmarks.",
+    )
+
     args, unknown = parser.parse_known_args()
     if unknown:
         parser.error(f"Unrecognized arguments: {' '.join(unknown)}")
@@ -444,6 +471,29 @@ def main() -> None:
         print("ERROR: --runs must be a positive integer")
         sys.exit(1)
 
+    # Check if module testing mode (for modules like valkey-search)
+    if args.module != "core":
+        # Module testing requires valkey-path
+        if not args.valkey_path:
+            print(f"ERROR: {args.module} module testing requires --valkey-path")
+            sys.exit(1)
+
+        # Module testing uses first config only
+        with open(args.config, "r") as f:
+            configs_list = json.load(f)
+
+        if not configs_list:
+            print("ERROR: No configurations found in config file")
+            sys.exit(1)
+
+        # For modules, we expect test_groups in config instead of standard fields
+        module_config = configs_list[0]
+
+        # Run module testing (unified flow)
+        run_module_tests(args, module_config)
+        return
+
+    # Core testing path (original behavior)
     commits = args.commits.copy()
     if args.baseline and args.baseline not in commits:
         commits.append(args.baseline)
@@ -458,6 +508,189 @@ def main() -> None:
             run_benchmark_matrix(
                 commit_id=commit, cfg=cfg, args=args, config_data=config_data
             )
+
+
+def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
+    """Run module tests using unified ClientRunner."""
+    import subprocess
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+
+    # Parse requested groups/scenarios filters
+    groups_to_run = None
+    if args.groups:
+        groups_to_run = set(int(g.strip()) for g in args.groups.split(","))
+        module_config["groups_to_run"] = groups_to_run
+        logging.info(f"Groups filter enabled: {groups_to_run}")
+
+    if args.scenarios:
+        scenario_ids = set(s.strip() for s in args.scenarios.split(","))
+        module_config["scenario_filter"] = scenario_ids
+        logging.info(f"Scenario filter enabled: {scenario_ids}")
+
+    # Check for missing datasets and generate if needed
+    required_datasets = set()
+    for test_group in module_config.get(
+        "test_groups", module_config.get("fts_tests", [])
+    ):
+        if groups_to_run and test_group.get("group") not in groups_to_run:
+            continue
+        for scenario in test_group.get("scenarios", []):
+            if "dataset" in scenario:
+                required_datasets.add(scenario["dataset"])
+
+    missing_datasets = [Path(d) for d in required_datasets if not Path(d).exists()]
+
+    if missing_datasets:
+        logging.info(f"Missing datasets: {[str(f.name) for f in missing_datasets]}")
+        logging.info("Running setup script...")
+        cmd = [
+            "python3",
+            "scripts/setup_datasets.py",
+            "--config",
+            args.config,
+            "--files",
+        ] + [f.name for f in missing_datasets]
+        subprocess.run(cmd, check=True)
+
+    # Setup paths and directories
+    results_dir = args.results_dir / f"{args.module}_tests"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    valkey_dir = Path(args.valkey_path)
+
+    # Detect architecture
+    architecture = platform.machine()
+
+    # Validate and use pre-built module binary
+    module_path = None
+    if not args.use_running_server:
+        # Require --module-path for module testing
+        if not args.module_path:
+            raise ValueError(
+                f"Module testing requires either:\n"
+                f"  1. --module-path <path-to-.so> (use pre-built module binary), OR\n"
+                f"  2. --use-running-server (assumes server with module already running)\n\n"
+                f"If using --module-path: Build your {args.module} module first with its native build system "
+                f"(e.g., build.sh, make, cmake), then provide the path to the .so file."
+            )
+
+        # Validate that path points to an existing .so file
+        module_binary = Path(args.module_path)
+        if not module_binary.exists():
+            raise FileNotFoundError(
+                f"Module binary not found: {module_binary}\n"
+                f"Please build the module first before running benchmarks."
+            )
+
+        if not module_binary.suffix == ".so":
+            raise ValueError(
+                f"--module-path must point to a .so file (pre-built binary), got: {module_binary}\n"
+                f"If you provided a source directory, please build the module first and provide the path to the .so file."
+            )
+
+        module_path = str(module_binary.absolute())
+        logging.info(f"Using pre-built module binary: {module_path}")
+    else:
+        logging.info(
+            "Skipping module validation (using running server with pre-loaded module)"
+        )
+
+    # Get benchmark path
+    valkey_benchmark_path = str(
+        args.valkey_benchmark_path or valkey_dir / "src" / "valkey-benchmark"
+    )
+
+    # Normalize config structure (handle both test_groups and fts_tests)
+    if "fts_tests" in module_config and "test_groups" not in module_config:
+        module_config["test_groups"] = module_config["fts_tests"]
+
+    profiling_sets = module_config.get("profiling_sets", [{"enabled": False}])
+    config_sets = module_config.get("config_sets", [{}])
+
+    init_logging(results_dir / "logs.txt", args.log_level)
+
+    for profiling_set_idx, profiling_set in enumerate(profiling_sets):
+        profiling_enabled = profiling_set.get("enabled", False)
+        logging.info(f"=== Testing with profiling: {profiling_enabled} ===")
+
+        for config_set in config_sets:
+            if config_set:
+                label_parts = [f"{k.split('.')[-1]}{v}" for k, v in config_set.items()]
+                config_suffix = "_".join(label_parts)
+            else:
+                config_suffix = "default"
+
+            logging.info(f"=== Testing with config: {config_set or 'default'} ===")
+
+            launcher = None
+            if not args.use_running_server and args.mode == "both":
+                server_core_range = module_config.get("server_cpu_range")
+
+                launcher = ServerLauncher(
+                    results_dir=str(results_dir),
+                    valkey_path=str(valkey_dir),
+                    cores=server_core_range,
+                )
+                launcher.launch(
+                    cluster_mode=module_config.get("cluster_mode", False),
+                    tls_mode=module_config.get("tls_mode", False),
+                    io_threads=module_config.get("io-threads"),
+                    module_path=module_path,
+                )
+
+            if config_set:
+                import valkey
+
+                target_ip = args.target_ip
+                client = valkey.Valkey(
+                    host=target_ip, port=module_config.get("port", 6379)
+                )
+                for config_key, config_value in config_set.items():
+                    client.execute_command(
+                        "CONFIG", "SET", config_key, str(config_value)
+                    )
+                    logging.info(f"Set {config_key} = {config_value}")
+                client.close()
+
+            commit_id = module_config.get("commit_id", "HEAD")
+            target_ip = args.target_ip
+            cores = module_config.get("client_cpu_range")
+
+            runner = ClientRunner(
+                commit_id=commit_id,
+                config=module_config,
+                cluster_mode=module_config.get("cluster_mode", False),
+                tls_mode=module_config.get("tls_mode", False),
+                target_ip=target_ip,
+                results_dir=results_dir,
+                valkey_path=str(valkey_dir),
+                cores=cores,
+                valkey_benchmark_path=valkey_benchmark_path,
+                runs=1,
+                server_launcher=launcher,
+                architecture=architecture,
+                module_config=module_config,
+            )
+
+            runner.current_profiling_set = profiling_set
+            runner.current_config_set = config_set
+            runner.config_suffix = config_suffix
+
+            runner.wait_for_server_ready()
+            runner.run_benchmark_config()
+
+            if launcher and not args.use_running_server:
+                launcher.shutdown(module_config.get("tls_mode", False))
+
+            logging.info(
+                f"=== Completed testing with config: {config_set or 'default'} and profiling: {profiling_enabled} ==="
+            )
+
+    logging.info(f"=== Module testing complete for {args.module} ===")
 
 
 if __name__ == "__main__":
