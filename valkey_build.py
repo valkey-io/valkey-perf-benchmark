@@ -64,7 +64,7 @@ class ServerBuilder:
         """Terminate all valkey processes."""
         logging.info("Terminating any running Valkey server processes...")
         try:
-            self._run(["pkill", "-f", "valkey-server"])
+            subprocess.run(["pkill", "-f", "valkey-server"], check=True)
             logging.info("Valkey processes terminated.")
         except subprocess.CalledProcessError as e:
             if e.returncode == 1:
