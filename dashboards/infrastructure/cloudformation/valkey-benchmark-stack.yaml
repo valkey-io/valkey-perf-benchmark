@@ -4,17 +4,16 @@ Description: "Valkey Performance Benchmark Infrastructure with EKS Fargate, RDS 
 Parameters:
   ClusterName:
     Type: String
-    Default: valkey-perf-cluster
+    Default: valkey-perf-grafana-cluster
     Description: Name of the EKS cluster
 
   DBInstanceClass:
     Type: String
-    Default: db.t4g.micro
+    Default: db.t4g.medium
     AllowedValues:
       [
-        db.t4g.micro,
-        db.t4g.small,
         db.t4g.medium,
+        db.t4g.large,
       ]
     Description: RDS instance class
 
@@ -251,28 +250,15 @@ Resources:
     Properties:
       GroupDescription: Security group for EKS Fargate cluster
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref FargatePodSecurityGroup
-          Description: Allow Fargate pods to access EKS API
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-eks-cluster-sg"
 
-  # Fargate Pod Security Group
   FargatePodSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security group for Fargate pods
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 3000
-          ToPort: 3000
-          SourceSecurityGroupId: !Ref ALBSecurityGroup
-          Description: Allow ALB to access Grafana on port 3000
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -280,27 +266,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-fargate-pod-sg"
-
-  # ALB Security Group
-  ALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for Application Load Balancer - CloudFront access only
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-          Description: Allow HTTP from anywhere (will be updated to CloudFront-only by deploy script)
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: Allow HTTPS from anywhere (will be updated to CloudFront-only by deploy script)
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-alb-sg"
 
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -316,6 +281,27 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-sg"
+
+  EKSClusterSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EKSClusterSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref FargatePodSecurityGroup
+      Description: Allow Fargate pods to access EKS API
+
+  RDSSecurityGroupIngressFromEKS:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: EKSCluster
+    Properties:
+      GroupId: !Ref RDSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt EKSCluster.ClusterSecurityGroupId
+      Description: Allow EKS cluster pods to access PostgreSQL
 
   # IAM Roles
   EKSClusterRole:
@@ -505,6 +491,9 @@ Resources:
               - ec2:DescribeTags
               - ec2:GetCoipPoolUsage
               - ec2:DescribeCoipPools
+              - ec2:GetSecurityGroupsForVpc
+              - ec2:DescribeIpamPools
+              - ec2:DescribeRouteTables
               - elasticloadbalancing:DescribeLoadBalancers
               - elasticloadbalancing:DescribeLoadBalancerAttributes
               - elasticloadbalancing:DescribeListeners
@@ -515,6 +504,9 @@ Resources:
               - elasticloadbalancing:DescribeTargetGroupAttributes
               - elasticloadbalancing:DescribeTargetHealth
               - elasticloadbalancing:DescribeTags
+              - elasticloadbalancing:DescribeTrustStores
+              - elasticloadbalancing:DescribeListenerAttributes
+              - elasticloadbalancing:DescribeCapacityReservation
             Resource: "*"
           - Effect: Allow
             Action:
@@ -598,6 +590,44 @@ Resources:
               - "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
           - Effect: Allow
             Action:
+              - elasticloadbalancing:AddTags
+            Resource:
+              - "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
+            Condition:
+              StringEquals:
+                "elasticloadbalancing:CreateAction":
+                  - CreateTargetGroup
+                  - CreateLoadBalancer
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+            Resource:
+              - "arn:aws:elasticloadbalancing:*:*:listener/net/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener/app/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener-rule/net/*/*/*"
+              - "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
+            Condition:
+              StringEquals:
+                "elasticloadbalancing:CreateAction":
+                  - CreateListener
+                  - CreateRule
+              "Null":
+                "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:DeleteSecurityGroup
+            Resource: "*"
+            Condition:
+              "Null":
+                "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
+          - Effect: Allow
+            Action:
               - elasticloadbalancing:ModifyLoadBalancerAttributes
               - elasticloadbalancing:SetIpAddressType
               - elasticloadbalancing:SetSecurityGroups
@@ -636,7 +666,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rds-subnet-group"
-
 
   RDSInstance:
     Type: AWS::RDS::DBInstance

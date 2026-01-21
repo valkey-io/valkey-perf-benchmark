@@ -29,13 +29,14 @@ $$;
 -- Grant rds_iam role for IAM authentication to github_actions
 GRANT rds_iam TO github_actions;
 
--- Ensure postgres user (Admin) has rds_iam role as well
-GRANT rds_iam TO postgres;
+-- Grant CREATE permission on public schema to github_actions
+GRANT CREATE ON SCHEMA public TO github_actions;
 
--- Connect to postgres database and set up schema for valkey_benchmark_metrics
-\c postgres
+-- Set github_actions as the owner for new objects in public schema
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO github_actions;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO github_actions;
 
--- Create benchmark_metrics table in postgres database
+-- Create benchmark_metrics table in postgres database (owned by github_actions)
 CREATE TABLE IF NOT EXISTS benchmark_metrics (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ NOT NULL,
@@ -86,13 +87,19 @@ CREATE INDEX IF NOT EXISTS idx_commits_sha_status ON benchmark_commits(sha, stat
 CREATE INDEX IF NOT EXISTS idx_commits_status ON benchmark_commits(status);
 CREATE INDEX IF NOT EXISTS idx_commits_config ON benchmark_commits USING GIN(config);
 
+-- Change ownership of tables and sequences to github_actions
+ALTER TABLE IF EXISTS benchmark_metrics OWNER TO github_actions;
+ALTER TABLE IF EXISTS benchmark_commits OWNER TO github_actions;
+ALTER SEQUENCE IF EXISTS benchmark_metrics_id_seq OWNER TO github_actions;
+ALTER SEQUENCE IF EXISTS benchmark_commits_id_seq OWNER TO github_actions;
+
 -- Grant permissions to github_actions user for postgres database
 GRANT CONNECT ON DATABASE postgres TO github_actions;
-GRANT USAGE ON SCHEMA public TO github_actions;
-GRANT SELECT, INSERT, UPDATE ON benchmark_metrics TO github_actions;
-GRANT SELECT, INSERT, UPDATE, DELETE ON benchmark_commits TO github_actions;
-GRANT USAGE, SELECT ON SEQUENCE benchmark_metrics_id_seq TO github_actions;
-GRANT USAGE, SELECT ON SEQUENCE benchmark_commits_id_seq TO github_actions;
+GRANT USAGE, CREATE ON SCHEMA public TO github_actions;
+GRANT ALL PRIVILEGES ON benchmark_metrics TO github_actions;
+GRANT ALL PRIVILEGES ON benchmark_commits TO github_actions;
+GRANT ALL PRIVILEGES ON SEQUENCE benchmark_metrics_id_seq TO github_actions;
+GRANT ALL PRIVILEGES ON SEQUENCE benchmark_commits_id_seq TO github_actions;
 
 -- Grant permissions to postgres (admin) user for postgres database
 GRANT ALL PRIVILEGES ON DATABASE postgres TO postgres;
@@ -100,17 +107,7 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;
 GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO postgres;
 
--- Connect to grafana database and grant permissions
-\c grafana
-GRANT CONNECT ON DATABASE grafana TO postgres;
-GRANT ALL PRIVILEGES ON DATABASE grafana TO postgres;
-
--- Allow github_actions to read from grafana database (for datasource access)
-GRANT CONNECT ON DATABASE grafana TO github_actions;
-GRANT USAGE ON SCHEMA public TO github_actions;
-
 -- Summary - show what was created
-\c postgres
 \dt
 SELECT 'Database initialization complete!' as status;
 SELECT 'Created databases: grafana (for Grafana), postgres (for benchmark data)' as summary;

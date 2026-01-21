@@ -31,7 +31,7 @@ print_error() {
 # Configuration
 PROJECT_NAME="valkey-benchmark"
 REGION="${AWS_REGION:-us-east-1}"
-CLUSTER_NAME="valkey-perf-cluster"
+CLUSTER_NAME="valkey-perf-grafana-cluster"
 
 echo "=== Phase 1: Deploy AWS Infrastructure ==="
 echo "Region: $REGION"
