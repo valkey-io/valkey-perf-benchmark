@@ -141,6 +141,22 @@ def parse_args() -> argparse.Namespace:
         "Build your module with its native build system (build.sh, make, cmake) before running benchmarks.",
     )
 
+    parser.add_argument(
+        "--skip-config-set",
+        action="store_true",
+        help="Skip CONFIG SET commands during benchmark initialization. "
+        "Use this flag when testing against servers that don't support the CONFIG SET parameters in your config. "
+        "When enabled, all CONFIG SET operations are skipped and the server runs with its default configuration.",
+    )
+
+    parser.add_argument(
+        "--skip-profiling",
+        action="store_true",
+        help="Skip profiling and run single test pass only. "
+        "Overrides profiling_sets and config_sets from config file. "
+        "Use for quick benchmarks or when profiling overhead is unwanted.",
+    )
+
     args, unknown = parser.parse_known_args()
     if unknown:
         parser.error(f"Unrecognized arguments: {' '.join(unknown)}")
@@ -608,8 +624,16 @@ def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
     if "fts_tests" in module_config and "test_groups" not in module_config:
         module_config["test_groups"] = module_config["fts_tests"]
 
-    profiling_sets = module_config.get("profiling_sets", [{"enabled": False}])
-    config_sets = module_config.get("config_sets", [{}])
+    # Override profiling and config sets if skip-profiling is enabled
+    if args.skip_profiling:
+        profiling_sets = [{"enabled": False}]
+        config_sets = [{}]
+        logging.info(
+            "--skip-profiling enabled: Running single pass with no profiling or config variations"
+        )
+    else:
+        profiling_sets = module_config.get("profiling_sets", [{"enabled": False}])
+        config_sets = module_config.get("config_sets", [{}])
 
     init_logging(results_dir / "logs.txt", args.log_level)
 
@@ -649,11 +673,28 @@ def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
                 client = valkey.Valkey(
                     host=target_ip, port=module_config.get("port", 6379)
                 )
-                for config_key, config_value in config_set.items():
-                    client.execute_command(
-                        "CONFIG", "SET", config_key, str(config_value)
+
+                # Skip CONFIG SET if requested (for servers that don't support these parameters)
+                if args.skip_config_set:
+                    logging.warning(
+                        f"--skip-config-set enabled - skipping CONFIG SET commands: {list(config_set.keys())}"
                     )
-                    logging.info(f"Set {config_key} = {config_value}")
+                    logging.info(
+                        "Server will run with default configuration. "
+                        "For fair comparison, ensure server settings are appropriate for the benchmark."
+                    )
+                else:
+                    # Execute CONFIG SET commands
+                    for config_key, config_value in config_set.items():
+                        try:
+                            client.execute_command(
+                                "CONFIG", "SET", config_key, str(config_value)
+                            )
+                            logging.info(f"Set {config_key} = {config_value}")
+                        except Exception as e:
+                            logging.error(f"Failed to set {config_key}: {e}")
+                            raise
+
                 client.close()
 
             commit_id = module_config.get("commit_id", "HEAD")

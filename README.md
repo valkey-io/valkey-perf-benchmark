@@ -552,7 +552,7 @@ python benchmark.py \
   --module search \
   --valkey-path /path/to/valkey \
   --config configs/fts-benchmarks.json \
-  --scenarios ingest,a,b
+  --scenarios a,b
 
 # Against remote server
 python benchmark.py \

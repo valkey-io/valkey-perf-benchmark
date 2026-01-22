@@ -86,7 +86,7 @@
             }
           },
           {
-            "id": "a",
+            "id": "b",
             "type": "search",
             "description": "Single term all fields",
             "dataset": "datasets/search_terms.csv",
@@ -100,7 +100,7 @@
             }
           },
           {
-            "id": "b",
+            "id": "c",
             "type": "search",
             "description": "Single term specific field",
             "dataset": "datasets/search_terms.csv",
@@ -114,7 +114,7 @@
             }
           },
           {
-            "id": "c",
+            "id": "d",
             "type": "search",
             "description": "All-field Composed And",
             "dataset": "datasets/proximity_phrases.csv",
@@ -128,7 +128,7 @@
             }
           },
           {
-            "id": "d",
+            "id": "e",
             "type": "search",
             "description": "Field-specific Composed And",
             "dataset": "datasets/proximity_phrases.csv",
@@ -142,7 +142,7 @@
             }
           },
           {
-            "id": "e",
+            "id": "f",
             "type": "search",
             "description": "Field-specific single term 50 perc hits",
             "dataset": "datasets/mixed_match.csv",
@@ -156,7 +156,7 @@
             }
           },
           {
-            "id": "f",
+            "id": "g",
             "type": "search",
             "description": "All-field proximity phrase",
             "dataset": "datasets/proximity_phrases.csv",
@@ -170,7 +170,7 @@
             }
           },
           {
-            "id": "g",
+            "id": "h",
             "type": "search",
             "description": "Field-specific proximity phrase",
             "dataset": "datasets/proximity_phrases.csv",
@@ -201,7 +201,7 @@
             "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\""
           },
           {
-            "id": "a",
+            "id": "b",
             "type": "search",
             "description": "5-term proximity, default field, slop=0",
             "dataset": "datasets/proximity_5term_queries.csv",
@@ -215,7 +215,7 @@
             }
           },
           {
-            "id": "b",
+            "id": "c",
             "type": "search",
             "description": "5-term proximity, specific field, slop=0",
             "dataset": "datasets/proximity_5term_queries.csv",
@@ -246,7 +246,7 @@
             "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\""
           },
           {
-            "id": "a",
+            "id": "b",
             "type": "search",
             "description": "5-term proximity, specific field, slop=0, 100 combos",
             "dataset": "datasets/proximity_5term_queries.csv",
@@ -260,7 +260,7 @@
             }
           },
           {
-            "id": "b",
+            "id": "c",
             "type": "search",
             "description": "5-term proximity, specific field, slop=3, 100 combos",
             "dataset": "datasets/proximity_5term_queries.csv",
@@ -291,7 +291,7 @@
             "command": "HSET rd0-__rand_int__ field1 \"__field:field1__\""
           },
           {
-            "id": "a",
+            "id": "b",
             "type": "search",
             "description": "25-term proximity, specific field, slop=3, 100 combos",
             "dataset": "datasets/proximity_25term_queries.csv",
