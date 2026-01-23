@@ -624,16 +624,19 @@ def run_module_tests(args: argparse.Namespace, module_config: dict) -> None:
     if "fts_tests" in module_config and "test_groups" not in module_config:
         module_config["test_groups"] = module_config["fts_tests"]
 
+    config_sets = module_config.get("config_sets", [{}])
+
     # Override profiling and config sets if skip-profiling is enabled
     if args.skip_profiling:
         profiling_sets = [{"enabled": False}]
-        config_sets = [{}]
-        logging.info(
-            "--skip-profiling enabled: Running single pass with no profiling or config variations"
-        )
+        logging.info("--skip-profiling enabled: Skipping profiling (no flamegraphs)")
     else:
         profiling_sets = module_config.get("profiling_sets", [{"enabled": False}])
-        config_sets = module_config.get("config_sets", [{}])
+
+    # If skip-config-set, avoid looping through multiple configs
+    if args.skip_config_set:
+        config_sets = [{}]
+        logging.info("--skip-config-set enabled: Skipping config loop")
 
     init_logging(results_dir / "logs.txt", args.log_level)
 
