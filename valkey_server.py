@@ -151,20 +151,19 @@ class ServerLauncher:
         if io_threads is not None:
             cmd += ["--io-threads", str(io_threads)]
 
-        # Module loading with optional startup args
-        if module_path is not None:
-            if hasattr(self, "module_startup_args") and self.module_startup_args:
-                # Quote entire loadmodule parameter with args as single argument
-                module_param = f"--loadmodule {module_path} {self.module_startup_args}"
-                cmd += [module_param]
-            else:
-                cmd += ["--loadmodule", module_path]
+        # Modules
+        if hasattr(self, "modules") and self.modules:
+            for module in self.modules:
+                if module.get("startup_args"):
+                    loadmodule_param = f"--loadmodule {module['path']} {' '.join(module['startup_args'])}"
+                    cmd.append(loadmodule_param)
+                else:
+                    cmd += ["--loadmodule", module["path"]]
 
-        # Cluster configuration for multi-node clusters
+        # Cluster
         if cluster_mode and hasattr(self, "target_ip"):
-            # Always use unique cluster config file
-            cmd += ["--cluster-config-file", f"nodes-{port}.conf"]
-            # Announce public IP for cluster gossip (when bind_ip not specified)
+            cluster_config_dir = self.config.get("cluster_config_dir", ".") if self.config else "."
+            cmd += ["--cluster-config-file", f"{cluster_config_dir}/nodes-{port}.conf"]
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
 
@@ -348,7 +347,7 @@ class ServerLauncher:
 
         self._run(cmd, cwd=self.valkey_path)
         logging.info(
-            f"✓ Cluster node {node_id} started on {bind_ip}:{port}, cores {cpu_range}"
+            f"Cluster node {node_id} started on {bind_ip}:{port}, cores {cpu_range}"
         )
 
         # Wait for node to be ready (coordinator initialization takes longer)
@@ -361,9 +360,10 @@ class ServerLauncher:
             while time.time() - start < 30:
                 try:
                     client.ping()
-                    logging.info(f"✓ Node {node_id} ready")
+                    logging.info(f"Node {node_id} ready")
                     break
-                except:
+                except Exception as e:
+                    logging.debug(f"Node {node_id} not ready: {e}")
                     time.sleep(0.5)
         finally:
             client.close()
@@ -395,7 +395,7 @@ class ServerLauncher:
 
         try:
             result = self._run(cmd, timeout=120)
-            logging.info(f"✓ Cluster creation command completed")
+            logging.info(f"Cluster creation command completed")
             if result.stdout:
                 logging.info(f"Cluster creation output:\n{result.stdout}")
 
@@ -406,7 +406,7 @@ class ServerLauncher:
             client = self._create_client(tls_mode, host=verify_host, port=ports[0])
             try:
                 self._wait_for_cluster_ready(client)
-                logging.info(f"✓ {len(ports)}-node cluster ready for requests")
+                logging.info(f"{len(ports)}-node cluster ready for requests")
             finally:
                 client.close()
 
@@ -423,16 +423,22 @@ class ServerLauncher:
         config: Optional[dict] = None,
     ) -> None:
         """Launch Valkey server and setup cluster if needed."""
-        # Store module_path for restarts
+        self.config = config
         self.module_path = module_path
-
-        # Store module startup args from config (for multi-node clusters)
-        self.module_startup_args = config.get("module_startup_args") if config else None
+        
+        # Setup modules: CLI overrides config path
+        if module_path:
+            startup_args = []
+            if config and config.get("modules"):
+                startup_args = config["modules"][0].get("startup_args", [])
+            self.modules = [{"path": module_path, "startup_args": startup_args}]
+        elif config and "modules" in config:
+            self.modules = config["modules"]
+        else:
+            self.modules = []
 
         try:
-            # Check for multi-node cluster configuration
             if cluster_mode and config and "cluster_nodes" in config:
-                # Multi-node cluster (NEW)
                 logging.info(f"Launching {config['cluster_nodes']}-node cluster...")
 
                 ports = config["cluster_ports"]
@@ -494,11 +500,11 @@ class ServerLauncher:
 
             # Clean cluster config files
             try:
-                import subprocess
-
+                cluster_config_dir = self.config.get("cluster_config_dir", ".") if self.config else "."
+                cleanup_path = self.valkey_path if cluster_config_dir == "." else cluster_config_dir
                 subprocess.run(
                     ["bash", "-c", "rm -f nodes-*.conf"],
-                    cwd=self.valkey_path,
+                    cwd=cleanup_path,
                     timeout=5,
                     check=False,
                 )
@@ -517,8 +523,8 @@ class ServerLauncher:
         # Fallback: kill any remaining processes
         try:
             subprocess.run(["pkill", "-f", VALKEY_SERVER], timeout=10, check=False)
-        except:
-            pass
+        except Exception as e:
+            logging.debug(f"pkill fallback failed: {e}")
 
         # Wait for all processes to stop
         self._wait_for_process_shutdown()

@@ -476,7 +476,28 @@ Module tests use structured `test_groups` with `scenarios`:
     "servers": ["0-7", "8-15", "16-23", "24-31", "32-39"],
     "clients": ["40-47", "48-55", "56-63", "64-71", "72-79"]
   },
-  "module_startup_args": "--use-coordinator"
+  "modules": [
+    {
+      "path": "../valkey-search/.build-release/libsearch.so",
+      "startup_args": ["--use-coordinator"]
+    }
+  ]
+}
+```
+
+**Module Loading:** Supports loading multiple modules with per-module startup arguments:
+```json
+{
+  "modules": [
+    {
+      "path": "../valkey-search/.build-release/libsearch.so",
+      "startup_args": ["--use-coordinator", "--timeout", "30"]
+    },
+    {
+      "path": "../valkey-json/.build-release/libjson.so",
+      "startup_args": []
+    }
+  ]
 }
 ```
 

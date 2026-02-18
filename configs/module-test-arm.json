@@ -45,6 +45,11 @@
     "bind_ip": "127.0.0.1",
     "tls_mode": false,
     "io-threads": 2,
-    "module_startup_args": "--use-coordinator"
+    "modules": [
+      {
+        "path": "../valkey-search/.build-release/libsearch.so",
+        "startup_args": ["--use-coordinator"]
+      }
+    ]
   }
 ]

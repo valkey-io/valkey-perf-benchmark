@@ -7,6 +7,8 @@ import time
 from typing import Dict, List
 from pathlib import Path
 
+from utils.cpu_utils import parse_core_range
+
 
 class PerCPUMonitor:
     """Monitor per-physical-CPU utilization."""
@@ -16,7 +18,7 @@ class PerCPUMonitor:
         Initialize per-CPU monitor.
 
         Args:
-            cpu_cores: CPU cores to monitor (e.g., "0-7" for cores 0 through 7)
+            cpu_cores: CPU cores to monitor (e.g., "0-7", "0,2,4", "0-3,8-11")
             enabled: Whether monitoring is enabled
         """
         self.enabled = enabled
@@ -27,21 +29,11 @@ class PerCPUMonitor:
         self.monitoring = False
         self.monitor_process = None
         self.monitor_thread = None
-        self.cpu_samples = (
-            {}
-        )  # {cpu_id: {"usr": [samples], "sys": [samples], "idle": [samples]}}
+        self.cpu_samples = {}
         self.sample_count = 0
 
         # Parse core range to get individual CPU IDs
-        self.cpu_list = self._parse_core_range(cpu_cores)
-
-    def _parse_core_range(self, core_range: str) -> List[int]:
-        """Parse core range string like '0-7' into list [0,1,2,3,4,5,6,7]."""
-        if "-" in core_range:
-            start, end = core_range.split("-")
-            return list(range(int(start), int(end) + 1))
-        else:
-            return [int(core_range)]
+        self.cpu_list = parse_core_range(cpu_cores)
 
     def start_monitoring(self, test_id: str) -> None:
         """Start monitoring per-CPU utilization."""

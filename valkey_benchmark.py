@@ -96,6 +96,10 @@ class ClientRunner:
         self.server_launcher = server_launcher
         self.architecture = architecture
         self.uses_test_groups = uses_test_groups
+        self.current_profiling_set = {"enabled": False}
+        self.current_config_set = {}
+        self.config_suffix = "default"
+        self.client_cpu_ranges = []
 
     def _create_client(self, port: Optional[int] = None) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -224,30 +228,39 @@ class ClientRunner:
 
     def _flush_database(self) -> None:
         """Flush all data from the database before benchmark runs."""
-        logging.info("Flushing database before benchmark run")
+        logging.info("Flushing database before benchmark run (may take several minutes for large indexes)")
         try:
             ports = self._get_active_ports()
 
-            # Drop indexes first (coordinator metadata persists across FLUSHALL)
+            # Drop indexes first with extended timeout (large indexes take time)
             try:
+                # Extended timeout for index operations
                 first_client = self._create_client(port=ports[0])
-                indexes = first_client.execute_command("FT._LIST")
-                for idx in indexes:
-                    try:
-                        first_client.execute_command("FT.DROPINDEX", idx)
-                        logging.info(f"Dropped index {idx}")
-                    except Exception as e:
-                        logging.warning(f"Could not drop index {idx}: {e}")
-                first_client.close()
+                first_client.connection_pool.connection_kwargs["socket_timeout"] = 300
+                try:
+                    indexes = first_client.execute_command("FT._LIST")
+                    for idx in indexes:
+                        try:
+                            logging.info(f"Dropping index {idx}...")
+                            first_client.execute_command("FT.DROPINDEX", idx)
+                            logging.info(f"Dropped index {idx}")
+                        except Exception as e:
+                            logging.warning(f"Could not drop index {idx}: {e}")
+                finally:
+                    first_client.close()
             except Exception as e:
                 logging.warning(f"Could not list/drop indexes: {e}")
 
-            # Flush all nodes
+            # Flush all nodes with extended timeout
             for port in ports:
                 client = self._create_client(port=port)
-                client.flushall(asynchronous=False)
-                client.close()
-                logging.info(f"Flushed database on port {port}")
+                client.connection_pool.connection_kwargs["socket_timeout"] = 300
+                try:
+                    logging.info(f"Flushing database on port {port}...")
+                    client.flushall(asynchronous=False)
+                    logging.info(f"Flushed database on port {port}")
+                finally:
+                    client.close()
         except Exception as e:
             logging.error(f"Failed to flush database: {e}")
             raise RuntimeError(f"Database flush failed: {e}")
@@ -290,12 +303,11 @@ class ClientRunner:
         commit_time = self.get_commit_time(self.commit_id)
 
         # Setup profiling/metrics infrastructure
-        profiling_set = getattr(self, "current_profiling_set", {"enabled": False})
         (
             profiler,
             metrics_processor,
             profiling_enabled,
-        ) = self._setup_profiling_and_metrics(profiling_set, commit_time)
+        ) = self._setup_profiling_and_metrics(self.current_profiling_set, commit_time)
 
         # Execute all scenarios and collect results
         metric_json = []
@@ -365,8 +377,6 @@ class ClientRunner:
 
     def _iterate_test_groups_scenarios(self):
         """Generate scenarios from test_groups configuration."""
-        config_set = getattr(self, "current_config_set", {})
-        config_suffix = getattr(self, "config_suffix", "default")
         groups_to_run = self.config.get("groups_to_run")
         scenario_filter = self.config.get("scenario_filter")
 
@@ -401,8 +411,8 @@ class ClientRunner:
                         "format": "test_groups",
                         "scenario": expanded_scenario,
                         "group_id": group_id,
-                        "config_set": config_set,
-                        "config_suffix": config_suffix,
+                        "config_set": self.current_config_set,
+                        "config_suffix": self.config_suffix,
                     }
 
     def _execute_scenario(
@@ -634,16 +644,14 @@ class ClientRunner:
             if scenario.get("sequential", False):
                 cmd += ["--sequential"]
 
-            cmd += ["--csv"]
-
             if scenario.get("cluster_execution") == "single":
                 if self.cluster_mode and self.config.get("cluster_nodes"):
                     cmd += ["--cluster"]
 
+            cmd += ["--csv"]
             cmd += ["--"]
             cmd += shlex.split(scenario["command"])
         else:
-            cmd += ["--csv"]
             # Simple format: use positional args
             if duration is not None:
                 cmd += ["--duration", str(duration)]
@@ -807,10 +815,10 @@ class ClientRunner:
 
         if scenario.get("profiling"):
             effective_profiling = deep_merge(
-                getattr(self, "current_profiling_set", {}), scenario["profiling"]
+                self.current_profiling_set, scenario["profiling"]
             )
         else:
-            effective_profiling = getattr(self, "current_profiling_set", {})
+            effective_profiling = self.current_profiling_set
 
         scenario_profiling_enabled = effective_profiling.get("enabled", False)
         profile_id = f"group{group_id}_{scenario_type}_{scenario_id}_{config_suffix}"
@@ -818,13 +826,18 @@ class ClientRunner:
         warmup_duration = scenario.get("warmup", 0)
         try:
             if warmup_duration > 0:
-                logging.info(f"Running warmup: {warmup_duration}s")
-                self._run(
-                    self._build_benchmark_command(scenario=scenario, warmup_mode=True),
-                    cwd=self.valkey_path,
-                    capture_output=True,
-                    timeout=None,
-                )
+                if self._should_use_parallel(scenario):
+                    logging.info(f"Running parallel warmup on {len(self._get_active_ports())} nodes: {warmup_duration}s")
+                    # Warm up all nodes that will be queried
+                    self._run_parallel_search(scenario, self._get_active_ports(), self.client_cpu_ranges, warmup_mode=True)
+                else:
+                    logging.info(f"Running warmup: {warmup_duration}s")
+                    self._run(
+                        self._build_benchmark_command(scenario=scenario, warmup_mode=True),
+                        cwd=self.valkey_path,
+                        capture_output=True,
+                        timeout=None,
+                    )
 
             if profiler and scenario_profiling_enabled:
                 target_port = self._get_active_ports()[0] if self._is_cme() else None
@@ -934,10 +947,9 @@ class ClientRunner:
         scenario: dict,
         ports: List[int],
         client_cpu_ranges: List[str],
+        warmup_mode: bool = False,
     ) -> dict:
         """Run search benchmarks in parallel to all cluster nodes."""
-        import subprocess
-
         # Check for custom parallel client count
         parallel_clients = scenario.get("parallel_clients")
         if parallel_clients:
@@ -963,10 +975,14 @@ class ClientRunner:
                 scenario=scenario,
                 port=port,
                 cpu_range=cpu_range,
+                warmup_mode=warmup_mode,
             )
-            logging.info(
-                f"Launching client {i} on port {port} with CPU range {cpu_range}"
-            )
+            if warmup_mode:
+                logging.info(f"Launching warmup client {i} on port {port}")
+            else:
+                logging.info(
+                    f"Launching client {i} on port {port} with CPU range {cpu_range}"
+                )
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,

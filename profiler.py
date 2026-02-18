@@ -3,9 +3,15 @@
 import logging
 import platform
 import subprocess
+import threading
 import time
+import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
+
+# FlameGraph version
+FLAMEGRAPH_VERSION = "v1.0"
 
 
 class PerformanceProfiler:
@@ -27,8 +33,6 @@ class PerformanceProfiler:
             commit_id: Commit ID for directory organization
         """
         # Store timestamp for filenames
-        from datetime import datetime
-
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = results_dir / commit_id
         self.results_dir = run_dir / "flamegraphs"
@@ -76,9 +80,7 @@ class PerformanceProfiler:
 
         logging.info("Downloading flamegraph scripts from GitHub...")
 
-        import urllib.request
-
-        base_url = "https://raw.githubusercontent.com/brendangregg/FlameGraph/master"
+        base_url = f"https://raw.githubusercontent.com/brendangregg/FlameGraph/{FLAMEGRAPH_VERSION}"
 
         for script_name, path in [
             ("stackcollapse-perf.pl", stackcollapse),
@@ -124,8 +126,6 @@ class PerformanceProfiler:
         phase_delays = self.delays.get(phase_key, {}) if phase_key else {}
         delay = phase_delays.get("delay", 0)
         duration = phase_delays.get("duration", 10)
-
-        import threading
 
         self.profiling_thread = threading.Thread(
             target=self._profiling_worker,

@@ -15,6 +15,13 @@ from valkey_build import ServerBuilder
 from valkey_server import ServerLauncher
 from valkey_benchmark import ClientRunner
 from benchmark_build import BenchmarkBuilder
+from utils.cpu_utils import (
+    parse_core_range,
+    calculate_cpu_ranges,
+    calculate_server_cpu_ranges,
+    calculate_client_cpu_ranges,
+    validate_explicit_cpu_ranges,
+)
 
 # ---------- Constants --------------------------------------------------------
 DEFAULT_RESULTS_ROOT = Path("results")
@@ -129,12 +136,11 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--module",
-        # NOTE: When adding support for new modules (json, bloom, graph, etc.),
-        # add the module name to the choices list below
-        choices=["search"],
+        type=str,
         default=None,
-        help="Module to test (e.g., 'search' for valkey-search module). "
-        "If not specified, runs core Valkey command tests.",
+        help="Module name for results directory (e.g., 'search', 'json', 'bloom'). "
+        "Optional label - results saved to {module}_tests/. "
+        "If not specified, auto-detects from --module-path or uses commit_id.",
     )
 
     parser.add_argument(
@@ -344,50 +350,6 @@ def init_logging(log_path: Path, log_level: str = "INFO") -> None:
     )
 
 
-def parse_core_range(range_str: str) -> None:
-    """Validate CPU core range string format.
-
-    ``range_str`` can be:
-    - A simple range like ``"0-3"``
-    - A comma separated list such as ``"0,2,4"``
-    - Multiple ranges like ``"0-3,8-11"`` or ``"144-191,48-95"``
-    """
-    if not range_str or not isinstance(range_str, str):
-        raise ValueError("Core range must be a non-empty string")
-
-    # Check for leading/trailing commas or empty parts
-    if range_str.startswith(",") or range_str.endswith(","):
-        raise ValueError("Core range cannot start or end with comma")
-
-    if ",," in range_str:
-        raise ValueError("Core range cannot contain consecutive commas")
-
-    try:
-        # Split by comma to handle multiple ranges or individual cores
-        parts = [part.strip() for part in range_str.split(",")]
-        if not parts or any(not part for part in parts):
-            raise ValueError("Core range must contain at least one core or range")
-
-        for part in parts:
-            if "-" in part:
-                # Handle range format like "0-3" or "144-191"
-                range_parts = part.split("-")
-                if len(range_parts) != 2:
-                    raise ValueError(f"Range format should be 'start-end', got: {part}")
-                start, end = int(range_parts[0]), int(range_parts[1])
-                if start < 0 or end < 0 or start > end:
-                    raise ValueError(f"Invalid core range values in: {part}")
-            else:
-                # Handle individual core number
-                core = int(part)
-                if core < 0:
-                    raise ValueError(f"Core numbers must be non-negative, got: {core}")
-    except ValueError as e:
-        if "invalid literal" in str(e):
-            raise ValueError(f"Invalid core range format: {range_str}")
-        raise
-
-
 def parse_bool(value) -> bool:
     """Return ``value`` converted to ``bool``.
 
@@ -406,45 +368,6 @@ def _get_active_ports(cfg: dict) -> List[int]:
     if cfg.get("cluster_mode") and "cluster_ports" in cfg:
         return cfg["cluster_ports"]
     return [cfg.get("port", 6379)]
-
-
-def calculate_cpu_ranges(
-    cluster_nodes: int, cores_per_unit: int, offset: int = 0
-) -> List[str]:
-    """Calculate CPU ranges for servers or clients."""
-    ranges = []
-    for i in range(cluster_nodes):
-        start = offset + i * cores_per_unit
-        end = start + cores_per_unit - 1
-        ranges.append(f"{start}-{end}")
-    return ranges
-
-
-def calculate_server_cpu_ranges(cfg: dict) -> Optional[List[str]]:
-    """Calculate server CPU ranges from config."""
-    if "cpu_allocation" not in cfg:
-        return None
-
-    cpu_alloc = cfg["cpu_allocation"]
-    if "servers" in cpu_alloc:
-        return cpu_alloc["servers"]
-
-    cluster_nodes = cfg.get("cluster_nodes", 1)
-    return calculate_cpu_ranges(cluster_nodes, cpu_alloc["cores_per_server"])
-
-
-def calculate_client_cpu_ranges(cfg: dict) -> Optional[List[str]]:
-    """Calculate client CPU ranges from config."""
-    if "cpu_allocation" not in cfg:
-        return None
-
-    cpu_alloc = cfg["cpu_allocation"]
-    if "clients" in cpu_alloc:
-        return cpu_alloc["clients"]
-
-    cluster_nodes = cfg.get("cluster_nodes", 1)
-    offset = cluster_nodes * cpu_alloc["cores_per_server"]
-    return calculate_cpu_ranges(cluster_nodes, cpu_alloc["cores_per_client"], offset)
 
 
 def validate_cpu_allocation(cfg: dict) -> None:
@@ -470,8 +393,9 @@ def validate_cpu_allocation(cfg: dict) -> None:
         if cpu_alloc["cores_per_server"] <= 0 or cpu_alloc["cores_per_client"] <= 0:
             raise ValueError("cores_per_server and cores_per_client must be positive")
 
-    # Old fields validated in optional keys (format check)
-    # Both work for commands and test_groups formats
+    # Validate explicit ranges
+    if has_old_fields and "server_cpu_range" in cfg and "client_cpu_range" in cfg:
+        validate_explicit_cpu_ranges(cfg["server_cpu_range"], cfg["client_cpu_range"])
 
 
 def validate_test_groups(cfg: dict) -> None:
@@ -711,29 +635,29 @@ def _apply_config_to_servers(config_set: dict, cfg: dict, target_ip: str) -> Non
             client.close()
 
 
-def get_module_binary_path(args: argparse.Namespace) -> Optional[str]:
+def get_module_binary_path(args: argparse.Namespace, config: dict) -> Optional[str]:
     """Validate and return module binary path if module testing requested."""
-    if not args.module:
+    # Check if module testing (CLI or config)
+    if not args.module_path and not config.get("modules"):
         return None
+
+    # Require --module name for module testing
+    if (args.module_path or config.get("modules")) and not args.module:
+        raise ValueError("--module <name> required when using --module-path or config modules")
 
     if args.use_running_server:
         logging.info("Using running server with pre-loaded module")
         return None
 
-    if not args.module_path:
-        raise ValueError(
-            f"Module testing requires --module-path <path-to-.so>\n"
-            f"Build {args.module} module first, then provide .so file path."
-        )
-
-    module_binary = Path(args.module_path)
-    if not module_binary.exists():
-        raise FileNotFoundError(f"Module binary not found: {module_binary}")
-
-    if not module_binary.suffix == ".so":
-        raise ValueError(f"--module-path must point to .so file, got: {module_binary}")
-
-    return str(module_binary.absolute())
+    if args.module_path:
+        module_binary = Path(args.module_path)
+        if not module_binary.exists():
+            raise FileNotFoundError(f"Module binary not found: {module_binary}")
+        if not module_binary.suffix == ".so":
+            raise ValueError(f"--module-path must point to .so file, got: {module_binary}")
+        return str(module_binary.absolute())
+    
+    return None
 
 
 # ---------- Entry point ------------------------------------------------------
@@ -753,10 +677,6 @@ def main() -> None:
         print("ERROR: --runs must be a positive integer")
         sys.exit(1)
 
-    if args.module and not args.valkey_path:
-        print(f"ERROR: {args.module} module testing requires --valkey-path")
-        sys.exit(1)
-
     with open(args.config, "r") as f:
         configs_list = json.load(f)
 
@@ -770,7 +690,12 @@ def main() -> None:
 
     uses_test_groups = "test_groups" in config
 
-    module_path = get_module_binary_path(args)
+    module_path = get_module_binary_path(args, config)
+    
+    # Module testing requires valkey-path
+    if (args.module_path or config.get("modules")) and not args.valkey_path:
+        print("ERROR: Module testing requires --valkey-path")
+        sys.exit(1)
 
     if uses_test_groups and (
         config.get("dataset_generation") or config.get("query_generation")
