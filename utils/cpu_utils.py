@@ -27,7 +27,7 @@ def calculate_and_validate_cpu_ranges(
         return None
 
     cpu_alloc = cfg["cpu_allocation"]
-    
+
     if manual_key in cpu_alloc:
         ranges = cpu_alloc[manual_key]
     else:
@@ -36,10 +36,10 @@ def calculate_and_validate_cpu_ranges(
         if use_offset:
             offset = cluster_nodes * cpu_alloc["cores_per_server"]
         ranges = calculate_cpu_ranges(cluster_nodes, cpu_alloc[auto_cores_key], offset)
-    
+
     for range_str in ranges:
         parse_core_range(range_str)
-    
+
     return ranges
 
 
@@ -61,13 +61,13 @@ def validate_explicit_cpu_ranges(server_range: str, client_range: str) -> None:
     """Validate explicit server + client CPU ranges for overlap and total."""
     server_cores = set(parse_core_range(server_range))
     client_cores = set(parse_core_range(client_range))
-    
+
     overlap = server_cores & client_cores
     if overlap:
         raise ValueError(
             f"server_cpu_range and client_cpu_range overlap on cores: {sorted(overlap)}"
         )
-    
+
     total_cores = server_cores | client_cores
     max_cores = os.cpu_count()
     if max_cores and len(total_cores) > max_cores:
@@ -78,15 +78,15 @@ def validate_explicit_cpu_ranges(server_range: str, client_range: str) -> None:
 
 def parse_core_range(range_str: str) -> List[int]:
     """Parse CPU core range string to list of core IDs.
-    
+
     Supports:
     - Simple range: "0-3" → [0, 1, 2, 3]
     - Comma separated: "0,2,4" → [0, 2, 4]
     - Multiple ranges: "0-3,8-11" → [0, 1, 2, 3, 8, 9, 10, 11]
-    
+
     Returns:
         List of core IDs
-    
+
     Raises:
         ValueError: If format is invalid
     """
@@ -100,7 +100,7 @@ def parse_core_range(range_str: str) -> List[int]:
         raise ValueError("Core range cannot contain consecutive commas")
 
     cores = []
-    
+
     try:
         parts = [part.strip() for part in range_str.split(",")]
         if not parts or any(not part for part in parts):
@@ -126,7 +126,7 @@ def parse_core_range(range_str: str) -> List[int]:
         if "invalid literal" in str(e):
             raise ValueError(f"Invalid core range format: {range_str}")
         raise
-    
+
     # Validate against system CPU count
     max_cores = os.cpu_count()
     if max_cores and any(c >= max_cores for c in cores):
@@ -134,5 +134,5 @@ def parse_core_range(range_str: str) -> List[int]:
         raise ValueError(
             f"Core(s) {invalid_cores} exceed system max {max_cores-1} (system has {max_cores} cores)"
         )
-    
+
     return cores

@@ -162,7 +162,9 @@ class ServerLauncher:
 
         # Cluster
         if cluster_mode and hasattr(self, "target_ip"):
-            cluster_config_dir = self.config.get("cluster_config_dir", ".") if self.config else "."
+            cluster_config_dir = (
+                self.config.get("cluster_config_dir", ".") if self.config else "."
+            )
             cmd += ["--cluster-config-file", f"{cluster_config_dir}/nodes-{port}.conf"]
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
@@ -425,7 +427,7 @@ class ServerLauncher:
         """Launch Valkey server and setup cluster if needed."""
         self.config = config
         self.module_path = module_path
-        
+
         # Setup modules: CLI overrides config path
         if module_path:
             startup_args = []
@@ -500,8 +502,14 @@ class ServerLauncher:
 
             # Clean cluster config files
             try:
-                cluster_config_dir = self.config.get("cluster_config_dir", ".") if self.config else "."
-                cleanup_path = self.valkey_path if cluster_config_dir == "." else cluster_config_dir
+                cluster_config_dir = (
+                    self.config.get("cluster_config_dir", ".") if self.config else "."
+                )
+                cleanup_path = (
+                    self.valkey_path
+                    if cluster_config_dir == "."
+                    else cluster_config_dir
+                )
                 subprocess.run(
                     ["bash", "-c", "rm -f nodes-*.conf"],
                     cwd=cleanup_path,

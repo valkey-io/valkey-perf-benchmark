@@ -643,7 +643,9 @@ def get_module_binary_path(args: argparse.Namespace, config: dict) -> Optional[s
 
     # Require --module name for module testing
     if (args.module_path or config.get("modules")) and not args.module:
-        raise ValueError("--module <name> required when using --module-path or config modules")
+        raise ValueError(
+            "--module <name> required when using --module-path or config modules"
+        )
 
     if args.use_running_server:
         logging.info("Using running server with pre-loaded module")
@@ -654,9 +656,11 @@ def get_module_binary_path(args: argparse.Namespace, config: dict) -> Optional[s
         if not module_binary.exists():
             raise FileNotFoundError(f"Module binary not found: {module_binary}")
         if not module_binary.suffix == ".so":
-            raise ValueError(f"--module-path must point to .so file, got: {module_binary}")
+            raise ValueError(
+                f"--module-path must point to .so file, got: {module_binary}"
+            )
         return str(module_binary.absolute())
-    
+
     return None
 
 
@@ -691,7 +695,7 @@ def main() -> None:
     uses_test_groups = "test_groups" in config
 
     module_path = get_module_binary_path(args, config)
-    
+
     # Module testing requires valkey-path
     if (args.module_path or config.get("modules")) and not args.valkey_path:
         print("ERROR: Module testing requires --valkey-path")

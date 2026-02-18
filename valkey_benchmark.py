@@ -228,7 +228,9 @@ class ClientRunner:
 
     def _flush_database(self) -> None:
         """Flush all data from the database before benchmark runs."""
-        logging.info("Flushing database before benchmark run (may take several minutes for large indexes)")
+        logging.info(
+            "Flushing database before benchmark run (may take several minutes for large indexes)"
+        )
         try:
             ports = self._get_active_ports()
 
@@ -827,13 +829,22 @@ class ClientRunner:
         try:
             if warmup_duration > 0:
                 if self._should_use_parallel(scenario):
-                    logging.info(f"Running parallel warmup on {len(self._get_active_ports())} nodes: {warmup_duration}s")
+                    logging.info(
+                        f"Running parallel warmup on {len(self._get_active_ports())} nodes: {warmup_duration}s"
+                    )
                     # Warm up all nodes that will be queried
-                    self._run_parallel_search(scenario, self._get_active_ports(), self.client_cpu_ranges, warmup_mode=True)
+                    self._run_parallel_search(
+                        scenario,
+                        self._get_active_ports(),
+                        self.client_cpu_ranges,
+                        warmup_mode=True,
+                    )
                 else:
                     logging.info(f"Running warmup: {warmup_duration}s")
                     self._run(
-                        self._build_benchmark_command(scenario=scenario, warmup_mode=True),
+                        self._build_benchmark_command(
+                            scenario=scenario, warmup_mode=True
+                        ),
                         cwd=self.valkey_path,
                         capture_output=True,
                         timeout=None,
