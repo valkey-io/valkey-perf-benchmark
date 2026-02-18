@@ -11,6 +11,21 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+# Constants for query generation
+STOP_WORDS = {
+    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by",
+    "for", "if", "in", "into", "it", "no", "not", "of", "on", "or", "such",
+    "that", "their", "then", "there", "these", "they", "this", "to", "was",
+    "will", "with"
+}
+
+DIVERSE_PREFIXES = [
+    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+    "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
+    "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
+    "xray", "yankee", "zulu"
+]
+
 
 def download_wikipedia(output_dir: Path) -> Path:
     """Download and extract Wikipedia dataset."""
@@ -38,6 +53,30 @@ def download_wikipedia(output_dir: Path) -> Path:
         logging.error(f"Download failed: {e}")
         logging.error("Manual: https://dumps.wikimedia.org/enwiki/latest/")
         sys.exit(1)
+
+
+def _read_source_terms(source_path: Path) -> list:
+    """Read and filter source terms from CSV file.
+    
+    Returns list of non-stop-word terms from source file.
+    """
+    source_terms = []
+    with open(source_path, "r", encoding="utf-8") as src:
+        reader = csv.reader(src)
+        # Skip header if present
+        first_line = src.readline()
+        src.seek(0)
+        if not first_line.lower().startswith("term"):
+            next(reader)
+
+        for row in reader:
+            if row and row[0].strip():
+                term = row[0].strip().lower()
+                # Skip stop words
+                if term not in STOP_WORDS:
+                    source_terms.append(row[0].strip())
+    
+    return source_terms
 
 
 def build_field_configs(config: dict) -> list:
@@ -122,11 +161,43 @@ def apply_transforms(
                 parts.extend(terms)
                 content = " ".join(parts)
 
+        elif ttype == "diverse_terms":
+            # Generate alphabetically diverse terms for true prefix/suffix worst case
+            # Each unique term appears in exactly N documents
+            repeats = t.get("repeats", 1000)
+            query_id = (doc_num - 1) // repeats
+
+            # For 100 queries, repeat prefix list as needed
+            prefix_idx = query_id % len(DIVERSE_PREFIXES)
+            prefix = DIVERSE_PREFIXES[prefix_idx]
+            suffix_idx = query_id // len(DIVERSE_PREFIXES)
+
+            # Create term with diverse prefix AND suffix for true worst case
+            content = f"{prefix}{query_id}_term{suffix_idx}"
+
+        elif ttype == "numeric_range":
+            # Generate random numeric values in range
+            import random
+
+            min_val = t.get("min", 0)
+            max_val = t.get("max", 100)
+            content = str(random.uniform(min_val, max_val))
+
+        elif ttype == "tag_list":
+            # Generate tag combinations
+            import random
+
+            tags = t.get("tags", ["tag1", "tag2", "tag3"])
+            # Select 1-2 random tags and join with pipe
+            num_tags = random.randint(1, min(2, len(tags)))
+            selected = random.sample(tags, num_tags)
+            content = "|".join(selected)
+
     return content[:field_size]
 
 
-def generate_csv_dataset(output_dir: Path, config: dict, filename: str) -> Path:
-    """Generate CSV dataset without Wikipedia."""
+def generate_csv_dataset(output_dir: Path, config: dict, filename: str, wiki_file: Path = None) -> Path:
+    """Generate CSV dataset with optional Wikipedia support."""
     output = output_dir / filename
 
     if output.exists():
@@ -136,9 +207,53 @@ def generate_csv_dataset(output_dir: Path, config: dict, filename: str) -> Path:
     doc_count = config["doc_count"]
     field_configs = build_field_configs(config)
 
+    # Check if any field needs Wikipedia
+    needs_wiki = any(
+        any(t.get("type", "wikipedia") == "wikipedia" for t in field.get("transforms", []))
+        for field in field_configs
+    )
+
+    if needs_wiki and not wiki_file:
+        logging.error(f"Wikipedia source needed for {filename} but not provided")
+        return output
+
     logging.info(
         f"Generating {filename} ({len(field_configs)} fields, {doc_count} docs)"
     )
+
+    # If Wikipedia needed, prepare iterator
+    wiki_texts = []
+    if needs_wiki and wiki_file:
+        logging.info(f"Loading Wikipedia content for {filename}...")
+        context = ET.iterparse(wiki_file, events=("end",))
+        for event, elem in context:
+            if (elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag) != "page":
+                continue
+
+            if len(wiki_texts) >= doc_count:
+                elem.clear()
+                break
+
+            text_elem = None
+            for child in elem.iter():
+                tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if tag == "text" and child.text:
+                    text_elem = child
+                    break
+
+            if (
+                text_elem is None
+                or not text_elem.text
+                or text_elem.text.startswith("#REDIRECT")
+            ):
+                elem.clear()
+                continue
+
+            wiki_texts.append(text_elem.text)
+            elem.clear()
+
+            if len(wiki_texts) % 10000 == 0:
+                logging.info(f"Loaded {len(wiki_texts)} Wikipedia articles")
 
     with open(output, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -148,9 +263,11 @@ def generate_csv_dataset(output_dir: Path, config: dict, filename: str) -> Path:
         # Data rows
         for doc_num in range(1, doc_count + 1):
             row = []
+            wiki_text = wiki_texts[doc_num - 1] if needs_wiki and doc_num <= len(wiki_texts) else ""
+            
             for field in field_configs:
                 content = apply_transforms(
-                    "",  # No wiki text for proximity transforms
+                    wiki_text,
                     field.get("transforms", []),
                     field["size"],
                     doc_num,
@@ -247,26 +364,61 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
 
     query_type = config.get("type", "proximity_phrase")
     num_queries = config["doc_count"]
-    term_count = config["term_count"]
 
-    logging.info(
-        f"Generating {filename} ({num_queries} queries, {term_count} terms, type: {query_type})"
-    )
+    logging.info(f"Generating {filename} ({num_queries} queries, type: {query_type})")
 
     with open(output, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
 
         if query_type == "proximity_phrase":
-            # Header
+            # Multi-column format for proximity queries
+            term_count = config["term_count"]
             writer.writerow([f"term{i}" for i in range(1, term_count + 1)])
 
-            # Query rows
             for query_id in range(num_queries):
                 terms = [f"phrase{query_id}_term{i}" for i in range(1, term_count + 1)]
                 writer.writerow(terms)
 
-        # NOTE: When adding new query types (e.g., "single_term"),
-        # implement appropriate generation logic in this conditional block
+        elif query_type in ("prefix", "suffix"):
+            # Generate prefix/suffix queries from source dataset
+            source = config.get("source", "search_terms.csv")
+            source_path = output_dir / source
+
+            if not source_path.exists():
+                logging.error(f"Source file {source} not found for {query_type} generation")
+                return output
+
+            # Read source terms (filter stop words)
+            source_terms = _read_source_terms(source_path)
+
+            # Generate queries
+            writer.writerow(["term"])
+            generated = 0
+            for term in source_terms:
+                if generated >= num_queries:
+                    break
+                
+                if query_type == "prefix":
+                    # Use 3 char prefix for variety
+                    prefix_len = 3 if len(term) > 3 else len(term)
+                    writer.writerow([term[:prefix_len]])
+                else:  # suffix
+                    # Use 3 char suffix for variety
+                    suffix_len = 3 if len(term) > 3 else len(term)
+                    writer.writerow([term[-suffix_len:]])
+                
+                generated += 1
+
+        elif query_type == "diverse_terms":
+            # Generate diverse term queries matching diverse_terms dataset
+            writer.writerow(["term"])
+
+            for query_id in range(num_queries):
+                prefix_idx = query_id % len(DIVERSE_PREFIXES)
+                prefix = DIVERSE_PREFIXES[prefix_idx]
+                suffix_idx = query_id // len(DIVERSE_PREFIXES)
+                term = f"{prefix}{query_id}_term{suffix_idx}"
+                writer.writerow([term])
 
     logging.info(f"Complete: {filename} ({num_queries} queries)")
     return output
@@ -294,15 +446,29 @@ def main():
 
     files_to_gen = args.files or list(dataset_configs.keys())
 
+    # Check if Wikipedia is needed for any file
     needs_wiki = any("field_explosion" in f or "negation" in f for f in files_to_gen)
+    
+    # Also check if any CSV file needs Wikipedia (hybrid data with wikipedia transforms)
+    if not needs_wiki:
+        for filename in files_to_gen:
+            if filename in dataset_configs and filename.endswith(".csv"):
+                field_configs = build_field_configs(dataset_configs[filename])
+                needs_wiki = any(
+                    any(t.get("type", "wikipedia") == "wikipedia" for t in field.get("transforms", []))
+                    for field in field_configs
+                )
+                if needs_wiki:
+                    break
+    
     wiki_file = download_wikipedia(args.output_dir) if needs_wiki else None
 
     for filename in files_to_gen:
         if filename in dataset_configs:
             if filename.endswith(".csv"):
-                # CSV format - no Wikipedia needed
+                # CSV format - pass wiki_file if needed
                 generate_csv_dataset(
-                    args.output_dir, dataset_configs[filename], filename
+                    args.output_dir, dataset_configs[filename], filename, wiki_file
                 )
             elif wiki_file:
                 # XML format - needs Wikipedia
