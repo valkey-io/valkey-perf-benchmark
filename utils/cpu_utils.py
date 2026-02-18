@@ -31,7 +31,10 @@ def calculate_and_validate_cpu_ranges(
     if manual_key in cpu_alloc:
         ranges = cpu_alloc[manual_key]
     else:
-        cluster_nodes = cfg.get("cluster_nodes", 1)
+        # Use actual cluster_mode, not config value (respects --cluster-mode-filter)
+        cluster_nodes = (
+            1 if not cfg.get("cluster_mode") else cfg.get("cluster_nodes", 1)
+        )
         offset = 0
         if use_offset:
             offset = cluster_nodes * cpu_alloc["cores_per_server"]
@@ -126,13 +129,5 @@ def parse_core_range(range_str: str) -> List[int]:
         if "invalid literal" in str(e):
             raise ValueError(f"Invalid core range format: {range_str}")
         raise
-
-    # Validate against system CPU count
-    max_cores = os.cpu_count()
-    if max_cores and any(c >= max_cores for c in cores):
-        invalid_cores = [c for c in cores if c >= max_cores]
-        raise ValueError(
-            f"Core(s) {invalid_cores} exceed system max {max_cores-1} (system has {max_cores} cores)"
-        )
 
     return cores
