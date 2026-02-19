@@ -13,17 +13,68 @@ from pathlib import Path
 
 # Constants for query generation
 STOP_WORDS = {
-    "a", "is", "the", "an", "and", "are", "as", "at", "be", "but", "by",
-    "for", "if", "in", "into", "it", "no", "not", "of", "on", "or", "such",
-    "that", "their", "then", "there", "these", "they", "this", "to", "was",
-    "will", "with"
+    "a",
+    "is",
+    "the",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "for",
+    "if",
+    "in",
+    "into",
+    "it",
+    "no",
+    "not",
+    "of",
+    "on",
+    "or",
+    "such",
+    "that",
+    "their",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "to",
+    "was",
+    "will",
+    "with",
 }
 
 DIVERSE_PREFIXES = [
-    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
-    "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
-    "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
-    "xray", "yankee", "zulu"
+    "alpha",
+    "bravo",
+    "charlie",
+    "delta",
+    "echo",
+    "foxtrot",
+    "golf",
+    "hotel",
+    "india",
+    "juliet",
+    "kilo",
+    "lima",
+    "mike",
+    "november",
+    "oscar",
+    "papa",
+    "quebec",
+    "romeo",
+    "sierra",
+    "tango",
+    "uniform",
+    "victor",
+    "whiskey",
+    "xray",
+    "yankee",
+    "zulu",
 ]
 
 
@@ -57,7 +108,7 @@ def download_wikipedia(output_dir: Path) -> Path:
 
 def _read_source_terms(source_path: Path) -> list:
     """Read and filter source terms from CSV file.
-    
+
     Returns list of non-stop-word terms from source file.
     """
     source_terms = []
@@ -75,7 +126,7 @@ def _read_source_terms(source_path: Path) -> list:
                 # Skip stop words
                 if term not in STOP_WORDS:
                     source_terms.append(row[0].strip())
-    
+
     return source_terms
 
 
@@ -196,7 +247,9 @@ def apply_transforms(
     return content[:field_size]
 
 
-def generate_csv_dataset(output_dir: Path, config: dict, filename: str, wiki_file: Path = None) -> Path:
+def generate_csv_dataset(
+    output_dir: Path, config: dict, filename: str, wiki_file: Path = None
+) -> Path:
     """Generate CSV dataset with optional Wikipedia support."""
     output = output_dir / filename
 
@@ -209,7 +262,10 @@ def generate_csv_dataset(output_dir: Path, config: dict, filename: str, wiki_fil
 
     # Check if any field needs Wikipedia
     needs_wiki = any(
-        any(t.get("type", "wikipedia") == "wikipedia" for t in field.get("transforms", []))
+        any(
+            t.get("type", "wikipedia") == "wikipedia"
+            for t in field.get("transforms", [])
+        )
         for field in field_configs
     )
 
@@ -263,8 +319,12 @@ def generate_csv_dataset(output_dir: Path, config: dict, filename: str, wiki_fil
         # Data rows
         for doc_num in range(1, doc_count + 1):
             row = []
-            wiki_text = wiki_texts[doc_num - 1] if needs_wiki and doc_num <= len(wiki_texts) else ""
-            
+            wiki_text = (
+                wiki_texts[doc_num - 1]
+                if needs_wiki and doc_num <= len(wiki_texts)
+                else ""
+            )
+
             for field in field_configs:
                 content = apply_transforms(
                     wiki_text,
@@ -385,7 +445,9 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
             source_path = output_dir / source
 
             if not source_path.exists():
-                logging.error(f"Source file {source} not found for {query_type} generation")
+                logging.error(
+                    f"Source file {source} not found for {query_type} generation"
+                )
                 return output
 
             # Read source terms (filter stop words)
@@ -397,7 +459,7 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
             for term in source_terms:
                 if generated >= num_queries:
                     break
-                
+
                 if query_type == "prefix":
                     # Use 3 char prefix for variety
                     prefix_len = 3 if len(term) > 3 else len(term)
@@ -406,7 +468,7 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
                     # Use 3 char suffix for variety
                     suffix_len = 3 if len(term) > 3 else len(term)
                     writer.writerow([term[-suffix_len:]])
-                
+
                 generated += 1
 
         elif query_type == "diverse_terms":
@@ -448,19 +510,22 @@ def main():
 
     # Check if Wikipedia is needed for any file
     needs_wiki = any("field_explosion" in f or "negation" in f for f in files_to_gen)
-    
+
     # Also check if any CSV file needs Wikipedia (hybrid data with wikipedia transforms)
     if not needs_wiki:
         for filename in files_to_gen:
             if filename in dataset_configs and filename.endswith(".csv"):
                 field_configs = build_field_configs(dataset_configs[filename])
                 needs_wiki = any(
-                    any(t.get("type", "wikipedia") == "wikipedia" for t in field.get("transforms", []))
+                    any(
+                        t.get("type", "wikipedia") == "wikipedia"
+                        for t in field.get("transforms", [])
+                    )
                     for field in field_configs
                 )
                 if needs_wiki:
                     break
-    
+
     wiki_file = download_wikipedia(args.output_dir) if needs_wiki else None
 
     for filename in files_to_gen:

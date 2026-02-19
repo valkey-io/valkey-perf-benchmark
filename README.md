@@ -784,6 +784,10 @@ Sample metrics structure:
 
 The framework includes a generic profiler that works with both core and FTS tests.
 
+### Attribution
+
+This framework uses [The FlameGraph project](https://github.com/brendangregg/FlameGraph) by Brendan Gregg for performance visualization. FlameGraph is licensed under CDDL 1.0 (Common Development and Distribution License). The FlameGraph scripts are automatically downloaded from the source repository when profiling is enabled.
+
 ### Using Profiler in Core Tests
 
 The `PerformanceProfiler` class can be integrated into any benchmark script:
