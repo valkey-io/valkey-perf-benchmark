@@ -206,9 +206,41 @@ Create benchmark configurations in JSON format. Each object represents a single 
     "warmup": 10,
     "io-threads": [1, 4, 8],
     "server_cpu_range": "0-1",
-    "client_cpu_range": "2-3"
+    "client_cpu_range": "2-3",
+    "custom-server-configs": {
+      "maxmemory": "4gb",
+      "timeout": "300"
+    }
   }
 ]
+```
+
+#### Custom Server Configs Examples
+
+Add new configurations:
+```json
+"custom-server-configs": {
+  "maxmemory": "4gb",
+  "timeout": "300",
+  "maxclients": "10000"
+}
+```
+
+Override benchmark defaults (warnings will be logged):
+```json
+"custom-server-configs": {
+  "maxmemory-policy": "noeviction",  // Overrides default "allkeys-lru"
+  "io-threads": "8",                 // Overrides io-threads parameter
+  "protected-mode": "yes"            // Overrides default "no"
+}
+```
+
+Mix of new configs and overrides:
+```json
+"custom-server-configs": {
+  "maxmemory": "4gb",                // New config
+  "maxmemory-policy": "noeviction",  // Override
+}
 ````
 
 ### Configuration Parameters
@@ -227,6 +259,9 @@ Create benchmark configurations in JSON format. Each object represents a single 
 | `io-threads`       | Number of I/O threads for server                               | Integer             | Yes             |
 | `server_cpu_range` | CPU cores for server (e.g. "0-3", "0,2,4", or "144-191,48-95") | String              | No              |
 | `client_cpu_range` | CPU cores for client (e.g. "4-7", "1,3,5", or "0-3,8-11")      | String              | No              |
+| `custom-server-configs` | Additional server configuration options that can override benchmark defaults (e.g. `{"maxmemory": "4gb", "maxmemory-policy": "noeviction"}`) | Object (key-value pairs) | No |
+
+**Note on `custom-server-configs`**: This field allows you to pass additional configuration options to the Valkey server at startup. Custom configs can override benchmark defaults - when an override occurs, a warning is logged. This is useful for testing specific server configurations or tuning performance parameters.
 
 When `warmup` is provided for read commands, the benchmark performs three stages:
 

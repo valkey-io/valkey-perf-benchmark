@@ -124,42 +124,73 @@ class ServerLauncher:
                     logging.warning(f"Error closing client connection: {e}")
 
     def _launch_server(
-        self, tls_mode: bool, cluster_mode: bool, io_threads: Optional[int] = None
+        self,
+        tls_mode: bool,
+        cluster_mode: bool,
+        io_threads: Optional[int] = None,
+        custom_configs: Optional[dict] = None,
     ) -> None:
         """Start Valkey server."""
         log_file = f"{Path.cwd()}/{self.results_dir}/valkey_log_cluster_{'enabled' if cluster_mode else 'disabled'}_tls_{'enabled' if tls_mode else 'disabled'}.log"
 
+        # Track configs to allow custom overrides
+        configs = {}
+
+        def set_config(key: str, value: str) -> None:
+            """Set a config value (can be overridden later)."""
+            configs[key] = value
+
+        # Add TLS args or standard port args
+        if tls_mode:
+            set_config("tls-port", "6379")
+            set_config("port", "0")
+            set_config("tls-cert-file", "./tests/tls/valkey.crt")
+            set_config("tls-key-file", "./tests/tls/valkey.key")
+            set_config("tls-ca-cert-file", "./tests/tls/ca.crt")
+        else:
+            set_config("port", "6379")
+
+        # Add io-threads if specified
+        if io_threads is not None:
+            set_config("io-threads", str(io_threads))
+
+        # Add common base server args
+        set_config("cluster-enabled", "yes" if cluster_mode else "no")
+        set_config("daemonize", "yes")
+        set_config("maxmemory-policy", "allkeys-lru")
+        set_config("appendonly", "no")
+        set_config("protected-mode", "no")
+        set_config("logfile", log_file)
+        set_config("save", "''")
+
+        # Apply custom configs (these override defaults)
+        if custom_configs:
+            overridden = []
+            for key, value in custom_configs.items():
+                if key in configs:
+                    overridden.append(key)
+                configs[key] = str(value)
+
+            if overridden:
+                logging.warning(
+                    f"Custom configs overriding benchmark defaults: {', '.join(sorted(overridden))}"
+                )
+            logging.info(f"Applied custom server configs: {custom_configs}")
+
+        # Build the command
         cmd = []
         if self.cores:
             cmd += ["taskset", "-c", self.cores]
 
         cmd.append(VALKEY_SERVER)
-        # Add TLS args or standard port args
-        if tls_mode:
-            cmd += ["--tls-port", "6379"]
-            cmd += ["--port", "0"]
-            cmd += ["--tls-cert-file", "./tests/tls/valkey.crt"]
-            cmd += ["--tls-key-file", "./tests/tls/valkey.key"]
-            cmd += ["--tls-ca-cert-file", "./tests/tls/ca.crt"]
-        else:
-            cmd += ["--port", "6379"]
 
-        # Add io-threads if specified
-        if io_threads is not None:
-            cmd += ["--io-threads", str(io_threads)]
-
-        # Add common base server args
-        cmd += ["--cluster-enabled", "yes" if cluster_mode else "no"]
-        cmd += ["--daemonize", "yes"]
-        cmd += ["--maxmemory-policy", "allkeys-lru"]
-        cmd += ["--appendonly", "no"]
-        cmd += ["--protected-mode", "no"]
-        cmd += ["--logfile", log_file]
-        cmd += ["--save", "''"]
+        # Add all configs to command
+        for key, value in configs.items():
+            cmd.extend([f"--{key}", value])
 
         self._run(cmd, cwd=self.valkey_path)
         logging.info(
-            f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode} | IO Threads: {io_threads} '"
+            f"Started Valkey Server | TLS: {tls_mode} | Cluster: {cluster_mode} | IO Threads: {io_threads} | Custom Configs: {custom_configs or 'None'}"
         )
         self._wait_for_server_ready(tls_mode=tls_mode)
 
@@ -234,12 +265,19 @@ class ServerLauncher:
         )
 
     def launch(
-        self, cluster_mode: bool, tls_mode: bool, io_threads: Optional[int] = None
+        self,
+        cluster_mode: bool,
+        tls_mode: bool,
+        io_threads: Optional[int] = None,
+        custom_configs: Optional[dict] = None,
     ) -> None:
         """Launch Valkey server and setup cluster if needed."""
         try:
             self._launch_server(
-                tls_mode=tls_mode, cluster_mode=cluster_mode, io_threads=io_threads
+                tls_mode=tls_mode,
+                cluster_mode=cluster_mode,
+                io_threads=io_threads,
+                custom_configs=custom_configs,
             )
             if cluster_mode:
                 self._setup_cluster(tls_mode=tls_mode)

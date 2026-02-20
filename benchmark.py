@@ -35,6 +35,7 @@ OPTIONAL_CONF_KEYS = [
     "benchmark-threads",
     "requests",
     "duration",
+    "custom-server-configs",
 ]
 
 
@@ -186,6 +187,20 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(
                         "'io-threads' must be a positive integer or list of positive integers"
                     )
+            # Validate optional custom-server-configs
+            elif k == "custom-server-configs":
+                if not isinstance(cfg[k]], dict):
+                    raise ValueError("'custom-server-configs' must be a dictionary")
+                # Validate that all keys and values are strings or can be converted to strings
+                for key, value in cfg["custom-server-configs"].items():
+                    if not isinstance(key, str):
+                        raise ValueError(
+                            f"'custom-server-configs' keys must be strings, got: {type(key)}"
+                        )
+                    if not isinstance(value, (str, int, float, bool)):
+                        raise ValueError(
+                            f"'custom-server-configs' values must be strings, numbers, or booleans, got: {type(value)}"
+                        )
             # Validate optional benchmark-threads
             elif k == "benchmark-threads":
                 if (
@@ -381,6 +396,7 @@ def run_benchmark_matrix(
                 cluster_mode=cfg["cluster_mode"],
                 tls_mode=cfg["tls_mode"],
                 io_threads=io_threads,
+                custom_configs=cfg.get("custom-server-configs"),
             )
 
         # ---- benchmarking client section -----------------
