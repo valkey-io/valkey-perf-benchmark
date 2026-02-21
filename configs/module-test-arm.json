@@ -1,6 +1,7 @@
 [
   {
     "test_name": "Module Framework Test (ARM)",
+    "seed": false,
     "test_groups": [
       {
         "group": 1,
