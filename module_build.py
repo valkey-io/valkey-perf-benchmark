@@ -67,7 +67,7 @@ class ModuleBuilder:
 
             # Find the .so file
             so_file = self._find_so_file()
-            logging.info(f"✓ Module built successfully: {so_file}")
+            logging.info(f"Module built successfully: {so_file}")
 
             return str(so_file)
 
