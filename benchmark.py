@@ -340,6 +340,13 @@ def init_logging(log_path: Path, log_level: str = "INFO") -> None:
     # Convert string log level to logging constant
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
+    # Clear any existing handlers to force reconfiguration
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        for handler in root_logger.handlers[:]:
+            handler.close()
+            root_logger.removeHandler(handler)
+
     logging.basicConfig(
         level=numeric_level,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -681,15 +688,15 @@ def main() -> None:
         print("ERROR: --runs must be a positive integer")
         sys.exit(1)
 
-    with open(args.config, "r") as f:
-        configs_list = json.load(f)
+    # Load and validate configs
+    configs_list = load_configs(args.config)
 
     if not configs_list:
         print("ERROR: No configurations found in config file")
         sys.exit(1)
 
+    # Use first config for initial setup
     config = configs_list[0]
-    validate_config(config)
     validate_cpu_allocation(config)
 
     uses_test_groups = "test_groups" in config
@@ -733,7 +740,7 @@ def main() -> None:
     if args.baseline and args.baseline not in commits:
         commits.append(args.baseline)
 
-    # Setup logging once for entire run
+    # Setup logging ONCE before processing configs
     if args.module:
         log_dir = args.results_dir / f"{args.module}_tests"
     else:
@@ -741,15 +748,26 @@ def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     init_logging(log_dir / "logs.txt", args.log_level)
 
-    for commit in commits:
-        print(f"=== Processing commit: {commit} ===")
-        run_benchmark_matrix(
-            commit_id=commit,
-            cfg=config,
-            args=args,
-            module_path=module_path,
-            uses_test_groups=uses_test_groups,
-        )
+    # Process all configs
+    for cfg in configs_list:
+        validate_cpu_allocation(cfg)
+        uses_test_groups = "test_groups" in cfg
+
+        # Apply CLI filters to this config
+        if args.groups:
+            cfg["groups_to_run"] = set(int(g.strip()) for g in args.groups.split(","))
+        if args.scenarios:
+            cfg["scenario_filter"] = set(s.strip() for s in args.scenarios.split(","))
+
+        for commit in commits:
+            print(f"=== Processing commit: {commit} ===")
+            run_benchmark_matrix(
+                commit_id=commit,
+                cfg=cfg,
+                args=args,
+                module_path=module_path,
+                uses_test_groups=uses_test_groups,
+            )
 
 
 if __name__ == "__main__":

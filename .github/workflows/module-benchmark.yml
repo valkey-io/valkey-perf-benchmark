@@ -72,10 +72,10 @@ jobs:
           make -j$(nproc)
           
           if [ -f "src/valkey-benchmark" ]; then
-            echo "✓ valkey-benchmark with dataset support built"
+            echo "valkey-benchmark with dataset support built"
             ls -lh src/valkey-benchmark
           else
-            echo "✗ valkey-benchmark build failed"
+            echo "valkey-benchmark build failed"
             exit 1
           fi
 
@@ -87,10 +87,10 @@ jobs:
           make -j$(nproc)
           
           if [ -f "src/valkey-server" ]; then
-            echo "✓ valkey-server build successful"
+            echo "valkey-server build successful"
             ./src/valkey-server --version
           else
-            echo "✗ valkey-server build failed"
+            echo "valkey-server build failed"
             exit 1
           fi
 
@@ -101,10 +101,10 @@ jobs:
           ./build.sh
           
           if [ -f ".build-release/libsearch.so" ]; then
-            echo "✓ valkey-search module build successful"
+            echo "valkey-search module build successful"
             ls -lh .build-release/libsearch.so
           else
-            echo "✗ valkey-search module build failed"
+            echo "valkey-search module build failed"
             exit 1
           fi
 
@@ -124,7 +124,7 @@ jobs:
             --mode both \
             --results-dir results
           
-          echo "✓ Module test completed successfully"
+          echo "Module test completed successfully"
 
       - name: Upload test results
         if: always()

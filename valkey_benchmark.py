@@ -650,6 +650,12 @@ class ClientRunner:
                 if self.cluster_mode and self.config.get("cluster_nodes"):
                     cmd += ["--cluster"]
 
+            # Add seed if provided (for reproducibility or non-dataset scenarios)
+            if seed_val is not None:
+                cmd += ["--seed", str(seed_val)]
+            elif scenario.get("seed") is not None:
+                cmd += ["--seed", str(scenario["seed"])]
+
             cmd += ["--csv"]
             cmd += ["--"]
             cmd += shlex.split(scenario["command"])
