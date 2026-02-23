@@ -40,8 +40,8 @@
     "cluster_nodes": 2,
     "cluster_ports": [6379, 6380],
     "cpu_allocation": {
-      "cores_per_server": 2,
-      "cores_per_client": 2
+      "cores_per_server": 1,
+      "cores_per_client": 1
     },
     "bind_ip": "127.0.0.1",
     "tls_mode": false,

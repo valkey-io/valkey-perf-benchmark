@@ -683,7 +683,10 @@ class ClientRunner:
             if sequential:
                 cmd += ["--sequential"]
 
-            cmd += ["--seed", str(seed_val)]
+            # Unified seed logic: Default ON unless config disables
+            if self.config.get("seed") is not False:
+                cmd += ["--seed", str(seed_val)]
+
             cmd += ["--csv"]
 
         return cmd

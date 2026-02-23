@@ -48,35 +48,6 @@ STOP_WORDS = {
     "with",
 }
 
-DIVERSE_PREFIXES = [
-    "alpha",
-    "bravo",
-    "charlie",
-    "delta",
-    "echo",
-    "foxtrot",
-    "golf",
-    "hotel",
-    "india",
-    "juliet",
-    "kilo",
-    "lima",
-    "mike",
-    "november",
-    "oscar",
-    "papa",
-    "quebec",
-    "romeo",
-    "sierra",
-    "tango",
-    "uniform",
-    "victor",
-    "whiskey",
-    "xray",
-    "yankee",
-    "zulu",
-]
-
 
 def download_wikipedia(output_dir: Path) -> Path:
     """Download and extract Wikipedia dataset."""
@@ -212,19 +183,30 @@ def apply_transforms(
                 parts.extend(terms)
                 content = " ".join(parts)
 
-        elif ttype == "diverse_terms":
-            # Generate alphabetically diverse terms for true prefix/suffix worst case
-            # Each unique term appears in exactly N documents
-            repeats = t.get("repeats", 1000)
-            query_id = (doc_num - 1) // repeats
+        elif ttype == "expansion":
+            # Generate expansion variants: prefix_a suffix_a, prefix_aa suffix_aa, etc.
+            # Tests wildcard expansion with multiple documents per variant
+            expansion_count = t.get(
+                "expansion_count", 5
+            )  # Word variants (a, aa, aaa...)
+            docs_per_expansion = t.get("docs_per_expansion", 20)  # Copies per variant
+            term_count = t.get("term_count", 100)  # Base terms (term1, term2...)
 
-            # For 100 queries, repeat prefix list as needed
-            prefix_idx = query_id % len(DIVERSE_PREFIXES)
-            prefix = DIVERSE_PREFIXES[prefix_idx]
-            suffix_idx = query_id // len(DIVERSE_PREFIXES)
+            # Total docs = expansion_count × docs_per_expansion × term_count
+            # Calculate which term, expansion, and copy we're on
+            docs_per_term = expansion_count * docs_per_expansion
+            term_id = ((doc_num - 1) // docs_per_term) + 1
+            within_term = (doc_num - 1) % docs_per_term
+            expansion_id = within_term // docs_per_expansion
 
-            # Create term with diverse prefix AND suffix for true worst case
-            content = f"{prefix}{query_id}_term{suffix_idx}"
+            # Generate expansion pattern (a, aa, aaa, ...)
+            expansion = "a" * (expansion_id + 1)
+
+            # Zero-pad term ID to prevent wildcard collision (term001, not term1)
+            padded_term_id = f"term{term_id:03d}"
+
+            # Both patterns: term001_a a_term001 (space-separated in same field)
+            content = f"{padded_term_id}_{expansion} {expansion}_{padded_term_id}"
 
         elif ttype == "numeric_range":
             # Generate random numeric values in range
@@ -450,37 +432,30 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
                 )
                 return output
 
-            # Read source terms (filter stop words)
             source_terms = _read_source_terms(source_path)
 
-            # Generate queries
+            # Extract substring based on type
+            DEFAULT_SUBSTRING_LEN = 3
             writer.writerow(["term"])
-            generated = 0
-            for term in source_terms:
-                if generated >= num_queries:
-                    break
+            for i, term in enumerate(source_terms[:num_queries]):
+                substring_len = (
+                    DEFAULT_SUBSTRING_LEN
+                    if len(term) > DEFAULT_SUBSTRING_LEN
+                    else len(term)
+                )
+                extracted = (
+                    term[:substring_len]
+                    if query_type == "prefix"
+                    else term[-substring_len:]
+                )
+                writer.writerow([extracted])
 
-                if query_type == "prefix":
-                    # Use 3 char prefix for variety
-                    prefix_len = 3 if len(term) > 3 else len(term)
-                    writer.writerow([term[:prefix_len]])
-                else:  # suffix
-                    # Use 3 char suffix for variety
-                    suffix_len = 3 if len(term) > 3 else len(term)
-                    writer.writerow([term[-suffix_len:]])
-
-                generated += 1
-
-        elif query_type == "diverse_terms":
-            # Generate diverse term queries matching diverse_terms dataset
+        elif query_type == "expansion":
+            # Generate queries for expansion datasets
+            # Queries: term001, term002, ..., termNNN (zero-padded, wildcards added in command)
             writer.writerow(["term"])
-
-            for query_id in range(num_queries):
-                prefix_idx = query_id % len(DIVERSE_PREFIXES)
-                prefix = DIVERSE_PREFIXES[prefix_idx]
-                suffix_idx = query_id // len(DIVERSE_PREFIXES)
-                term = f"{prefix}{query_id}_term{suffix_idx}"
-                writer.writerow([term])
+            for term_id in range(1, num_queries + 1):
+                writer.writerow([f"term{term_id:03d}"])
 
     logging.info(f"Complete: {filename} ({num_queries} queries)")
     return output
