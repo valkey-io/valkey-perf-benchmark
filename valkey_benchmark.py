@@ -852,9 +852,10 @@ class ClientRunner:
                     )
                 else:
                     logging.info(f"Running warmup: {warmup_duration}s")
+                    cpu = self.client_cpu_ranges[0] if self.client_cpu_ranges else None
                     self._run(
                         self._build_benchmark_command(
-                            scenario=scenario, warmup_mode=True
+                            scenario=scenario, warmup_mode=True, cpu_range=cpu
                         ),
                         cwd=self.valkey_path,
                         capture_output=True,
@@ -881,8 +882,9 @@ class ClientRunner:
                 )
                 proc = None
             else:
+                cpu = self.client_cpu_ranges[0] if self.client_cpu_ranges else None
                 proc = self._run(
-                    self._build_benchmark_command(scenario=scenario),
+                    self._build_benchmark_command(scenario=scenario, cpu_range=cpu),
                     cwd=self.valkey_path,
                     capture_output=True,
                     timeout=None,

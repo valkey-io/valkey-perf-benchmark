@@ -566,7 +566,9 @@ def _execute_benchmark_run(
         launcher = ServerLauncher(
             results_dir=str(results_dir),
             valkey_path=str(valkey_dir),
-            cores=cfg.get("server_cpu_range"),
+            cores=cfg.get("server_cpu_ranges", [cfg.get("server_cpu_range")])[0]
+            if cfg.get("server_cpu_ranges") or cfg.get("server_cpu_range")
+            else None,
             target_ip=args.target_ip,
         )
         launcher.launch(
