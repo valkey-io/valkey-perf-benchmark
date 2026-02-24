@@ -10,6 +10,10 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import random
+import uuid
+import string
+import re
 
 # Constants for query generation
 STOP_WORDS = {
@@ -210,23 +214,172 @@ def apply_transforms(
 
         elif ttype == "numeric_range":
             # Generate random numeric values in range
-            import random
-
             min_val = t.get("min", 0)
             max_val = t.get("max", 100)
             content = str(random.uniform(min_val, max_val))
 
         elif ttype == "tag_list":
             # Generate tag combinations
-            import random
-
             tags = t.get("tags", ["tag1", "tag2", "tag3"])
             # Select 1-2 random tags and join with pipe
             num_tags = random.randint(1, min(2, len(tags)))
             selected = random.sample(tags, num_tags)
             content = "|".join(selected)
 
-    return content[:field_size]
+        elif ttype == "repeated_token":
+            # Single token repeated N times - tests position map expansion
+            token = t.get("token", "b")
+            token_count = t.get("token_count", 10000)
+            content = " ".join([token] * token_count)
+
+        elif ttype == "cyclic_pattern":
+            # Pattern a,b,...,z,aa,ab,...,zz,aaa,... - tests position byte size
+            cycle_length = t.get("cycle_length", 26)
+            token_count = t.get("token_count", 10000)
+            # Generate base-26 alphabet up to cycle_length
+            alphabet = []
+            for i in range(cycle_length):
+                result = []
+                n = i
+                while True:
+                    result.append(chr(ord('a') + (n % 26)))
+                    n = n // 26 - 1
+                    if n < 0:
+                        break
+                alphabet.append(''.join(reversed(result)))
+            tokens = [alphabet[i % cycle_length] for i in range(token_count)]
+            content = " ".join(tokens)
+
+        elif ttype == "unique_tokens":
+            # All unique tokens globally (continuous letter sequences across docs)
+            # doc1: a,b,...,z,aa,ab... doc2: continues from where doc1 ended
+            token_count = t.get("token_count", 1000)
+            start_idx = (doc_num - 1) * token_count
+            tokens = []
+            for i in range(token_count):
+                n = start_idx + i
+                # Convert to base-26 letters: 0=a, 25=z, 26=aa, 27=ab, ...
+                result = []
+                while True:
+                    result.append(chr(ord('a') + (n % 26)))
+                    n = n // 26 - 1
+                    if n < 0:
+                        break
+                tokens.append(''.join(reversed(result)))
+            content = " ".join(tokens)
+
+        elif ttype == "uuid_tokens":
+            # 128-char random alphanumeric tokens - low prefix locality test
+            token_count = t.get("token_count", 100)
+            char_length = t.get("char_length", 128)
+            chars = string.ascii_lowercase + string.digits
+            random.seed(doc_num)  # Reproducible per doc
+            tokens = [''.join(random.choices(chars, k=char_length)) for _ in range(token_count)]
+            content = " ".join(tokens)
+
+        elif ttype == "progressive_prefix":
+            # Progressively longer prefixes - different base per doc using base-26
+            # doc1: a, aa, aaa, ..., aaa...ab
+            # doc2: b, bb, bbb, ..., bbb...bc
+            # doc27: aa, aaaa, aaaaaa, ... (base='aa')
+            max_depth = t.get("max_depth", 100)
+            leaf_count = t.get("leaf_count", 10)
+            
+            # Convert doc_num to base-26 for base prefix
+            n = doc_num - 1
+            base_prefix_chars = []
+            while True:
+                base_prefix_chars.append(chr(ord('a') + (n % 26)))
+                n = n // 26 - 1
+                if n < 0:
+                    break
+            base_unit = ''.join(reversed(base_prefix_chars))
+            
+            tokens = []
+            for depth in range(1, max_depth + 1):
+                tokens.append(base_unit * depth)
+            full_prefix = base_unit * max_depth
+            for i in range(leaf_count):
+                suffix = chr(ord('a') + (i % 26))
+                tokens.append(full_prefix + suffix)
+            content = " ".join(tokens)
+
+        elif ttype == "random_from_set":
+            # Random tokens from a fixed set - tests small position maps
+            token_set = t.get("token_set", list(string.ascii_lowercase[:10]))
+            token_count = t.get("token_count", 10)
+            random.seed(doc_num)  # Reproducible per doc
+            tokens = [random.choice(token_set) for _ in range(token_count)]
+            content = " ".join(tokens)
+
+        elif ttype == "stemmable_words":
+            # Placeholder - handled by generate_stemmable_dataset
+            content = ""
+
+    return content[:field_size] if field_size > 0 else content
+
+
+def extract_stemmable_words_from_wiki(wiki_file: Path, target_count: int = 50000) -> list:
+    """Extract words from Wikipedia where Snowball stemmer changes the word."""
+    from nltk.stem import SnowballStemmer
+    
+    stemmer = SnowballStemmer("english")
+    stemmable = set()
+    word_re = re.compile(r'\b[a-z]{4,15}\b')
+    
+    logging.info(f"Extracting stemmable words from Wikipedia (target: {target_count})...")
+    docs = 0
+    
+    for event, elem in ET.iterparse(wiki_file, events=("end",)):
+        if elem.tag.split("}")[-1] != "page":
+            continue
+        for child in elem.iter():
+            if child.tag.split("}")[-1] == "text" and child.text:
+                for word in word_re.findall(child.text.lower()):
+                    if stemmer.stem(word) != word:
+                        stemmable.add(word)
+                        if len(stemmable) >= target_count:
+                            break
+                if len(stemmable) >= target_count:
+                    break
+        elem.clear()
+        if len(stemmable) >= target_count:
+            break
+        docs += 1
+        if docs % 10000 == 0:
+            logging.info(f"Processed {docs} pages, found {len(stemmable)} stemmable words")
+    
+    logging.info(f"Extracted {len(stemmable)} unique stemmable words")
+    return list(stemmable)
+
+
+def generate_stemmable_dataset(output_dir: Path, wiki_file: Path, config: dict, filename: str) -> Path:
+    """Generate dataset containing only stemmable words."""
+    output = output_dir / filename
+    if output.exists():
+        logging.info(f"Exists: {filename}")
+        return output
+    
+    doc_count = config["doc_count"]
+    token_count = config["fields"][0]["transforms"][0].get("token_count", 10000)
+    
+    words = extract_stemmable_words_from_wiki(wiki_file)
+    if not words:
+        logging.error("No stemmable words found")
+        return output
+    
+    logging.info(f"Generating {filename} ({doc_count} docs × {token_count} tokens)")
+    with open(output, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["field1"])
+        for doc in range(1, doc_count + 1):
+            random.seed(doc)
+            writer.writerow([" ".join(random.choices(words, k=token_count))])
+            if doc % 1000 == 0:
+                logging.info(f"Generated {doc}/{doc_count}")
+    
+    logging.info(f"Complete: {filename}")
+    return output
 
 
 def generate_csv_dataset(
@@ -484,7 +637,10 @@ def main():
     files_to_gen = args.files or list(dataset_configs.keys())
 
     # Check if Wikipedia is needed for any file
-    needs_wiki = any("field_explosion" in f or "negation" in f for f in files_to_gen)
+    needs_wiki = any(
+        "field_explosion" in f or "negation" in f or "stemmable" in f
+        for f in files_to_gen
+    )
 
     # Also check if any CSV file needs Wikipedia (hybrid data with wikipedia transforms)
     if not needs_wiki:
@@ -505,7 +661,12 @@ def main():
 
     for filename in files_to_gen:
         if filename in dataset_configs:
-            if filename.endswith(".csv"):
+            if "stemmable" in filename and wiki_file:
+                # Stemmable dataset - needs Wikipedia for word extraction
+                generate_stemmable_dataset(
+                    args.output_dir, wiki_file, dataset_configs[filename], filename
+                )
+            elif filename.endswith(".csv"):
                 # CSV format - pass wiki_file if needed
                 generate_csv_dataset(
                     args.output_dir, dataset_configs[filename], filename, wiki_file

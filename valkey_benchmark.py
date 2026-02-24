@@ -110,7 +110,7 @@ class ClientRunner:
             "host": self.target_ip,
             "port": port,
             "decode_responses": True,
-            "socket_timeout": 10,
+            "socket_timeout": 300,  # Increased for large dataset FLUSHALL operations
             "socket_connect_timeout": 10,
         }
         if self.tls_mode:
@@ -908,6 +908,14 @@ class ClientRunner:
                     )
                 return None
 
+            # Collect memory metrics after ingestion
+            memory_metrics = {}
+            if scenario_type == "ingestion":
+                memory_metrics = self._get_memory_metrics()
+                if memory_metrics:
+                    mem_str = ", ".join(f"{k}={v}" for k, v in memory_metrics.items())
+                    logging.info(f"Memory metrics: {mem_str}")
+
             if proc:
                 logging.info(f"Benchmark output:\n{proc.stdout}")
 
@@ -937,6 +945,23 @@ class ClientRunner:
                     metrics["config_set"] = config_set
                     if scenario.get("dataset"):
                         metrics["dataset"] = scenario["dataset"]
+                    # Add memory metrics for ingestion scenarios
+                    if memory_metrics:
+                        metrics.update(memory_metrics)
+                    # Add ingestion throughput metrics (calculate time from requests/rps)
+                    if scenario_type == "ingestion":
+                        rps = float(row.get("rps", 0))
+                        requests_count = requests_value or 0
+                        if rps > 0 and requests_count > 0:
+                            ingestion_time = requests_count / rps
+                            dataset_path = Path(scenario["dataset"]) if scenario.get("dataset") else None
+                            dataset_size_bytes = dataset_path.stat().st_size if dataset_path and dataset_path.exists() else 0
+                            if dataset_size_bytes > 0:
+                                throughput_mb_s = (dataset_size_bytes / (1024 * 1024)) / ingestion_time
+                                metrics["dataset_size_bytes"] = dataset_size_bytes
+                                metrics["ingestion_time_sec"] = round(ingestion_time, 2)
+                                metrics["throughput_mb_s"] = round(throughput_mb_s, 2)
+                                logging.info(f"Ingestion: {requests_count} docs @ {rps:.0f} rps = {ingestion_time:.2f}s, {throughput_mb_s:.2f} MB/s")
                     return metrics
 
         except Exception as e:
@@ -965,6 +990,29 @@ class ClientRunner:
         except Exception as e:
             logging.error(f"Failed to execute setup command '{cmd_str}': {e}")
             raise
+
+    def _get_memory_metrics(self) -> dict:
+        """Get memory metrics from INFO commands."""
+        metrics = {}
+        try:
+            with self._client_context() as client:
+                # Get search memory
+                try:
+                    search_info = client.info("search")
+                    if "search_used_memory_bytes" in search_info:
+                        metrics["search_memory_bytes"] = search_info["search_used_memory_bytes"]
+                    elif "search_used_memory_indexes" in search_info:
+                        metrics["search_memory_bytes"] = search_info["search_used_memory_indexes"]
+                except Exception:
+                    pass  # May not be available
+
+                # Get RSS memory
+                memory_info = client.info("memory")
+                if "used_memory_rss" in memory_info:
+                    metrics["used_memory_rss"] = memory_info["used_memory_rss"]
+        except Exception as e:
+            logging.warning(f"Failed to get memory metrics: {e}")
+        return metrics
 
     def _run_parallel_search(
         self,
