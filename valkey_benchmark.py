@@ -725,25 +725,29 @@ class ClientRunner:
             self._is_cme() and scenario.get("cluster_execution", "single") == "parallel"
         )
 
+    def _apply_option_to_scenario(self, variant, flag):
+        """Apply option flag to commands (mixed applies to reads, regular to command)."""
+        if variant.get("type") == "mixed":
+            for read in variant.get("reads", []):
+                read["command"] += f" {flag}" if flag else ""
+        else:
+            variant["command"] = variant["command"] + (f" {flag}" if flag else "")
+
     def _expand_scenario_options(self, scenario: dict) -> List[dict]:
         """Expand scenario with options to create variants."""
         options = scenario.get("options")
-
-        # No options: return scenario as-is
         if not options:
             return [scenario]
 
-        # Options provided: create variant for each option
-        scenarios = []
+        variants = []
         for flag, suffix in options.items():
             variant = copy.deepcopy(scenario)
             variant["id"] = scenario["id"] + suffix
-            variant["command"] = scenario["command"] + (f" {flag}" if flag else "")
-            if "description" in variant and flag:
+            self._apply_option_to_scenario(variant, flag)
+            if flag and "description" in variant:
                 variant["description"] += f" + {flag}"
-            scenarios.append(variant)
-
-        return scenarios
+            variants.append(variant)
+        return variants
 
     def _create_failure_marker(
         self,
