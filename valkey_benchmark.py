@@ -322,7 +322,11 @@ class ClientRunner:
                 commit_time,
             )
             if result:
-                metric_json.append(result)
+                # Handle mixed returning list of metrics
+                if isinstance(result, list):
+                    metric_json.extend(result)
+                else:
+                    metric_json.append(result)
 
         # Finalize and write results
         self._finalize_metrics(metrics_processor, metric_json, profiling_enabled)
@@ -839,11 +843,21 @@ class ClientRunner:
         warmup_duration = scenario.get("warmup", 0)
         try:
             if warmup_duration > 0:
-                if self._should_use_parallel(scenario):
-                    logging.info(
-                        f"Running parallel warmup on {len(self._get_active_ports())} nodes: {warmup_duration}s"
+                if scenario_type == "mixed":
+                    logging.info(f"Running mixed warmup: {warmup_duration}s")
+                    warmup_scenario = copy.deepcopy(scenario)
+                    warmup_scenario["duration"] = warmup_duration
+                    # Run but discard results
+                    self._run_mixed_workload(
+                        warmup_scenario,
+                        group_id,
+                        config_set,
+                        metrics_processor,
+                        0,
+                        commit_time,
                     )
-                    # Warm up all nodes that will be queried
+                elif self._should_use_parallel(scenario):
+                    logging.info(f"Running parallel warmup: {warmup_duration}s")
                     self._run_parallel_search(
                         scenario,
                         self._get_active_ports(),
@@ -875,7 +889,19 @@ class ClientRunner:
                     profile_id, target_process="valkey-server", target_port=target_port
                 )
 
-            if self._should_use_parallel(scenario):
+            # Handle mixed workload
+            if scenario_type == "mixed":
+                logging.info(f"Running mixed workload for scenario {scenario_id}")
+                metrics_list = self._run_mixed_workload(
+                    scenario,
+                    group_id,
+                    config_set,
+                    metrics_processor,
+                    warmup_duration,
+                    commit_time,
+                )
+                return metrics_list if metrics_list else None
+            elif self._should_use_parallel(scenario):
                 logging.info(f"Using parallel execution for scenario {scenario_id}")
                 aggregated_row = self._run_parallel_search(
                     scenario, self._get_active_ports(), self.client_cpu_ranges
@@ -966,6 +992,331 @@ class ClientRunner:
             logging.error(f"Failed to execute setup command '{cmd_str}': {e}")
             raise
 
+    def _launch_workload_processes(self, workload_cfg, workload_type):
+        """Launch workload processes (CME-aware: 1 per node, non-CME: 1 total)."""
+        scenario = copy.deepcopy(workload_cfg)
+        ports = self._get_active_ports()
+
+        processes = []
+        for i, port in enumerate(ports):
+            cpu = (
+                self.client_cpu_ranges[i % len(self.client_cpu_ranges)]
+                if self.client_cpu_ranges
+                else None
+            )
+            cmd = self._build_benchmark_command(
+                scenario=scenario, port=port, cpu_range=cpu
+            )
+
+            # Log full command for visibility (first 200 chars)
+            cmd_str = shlex.join(cmd)
+            logging.info(f"{workload_type} [port {port}]: {cmd_str[:200]}...")
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=self.valkey_path,
+            )
+            processes.append((proc, port))
+
+        return processes, scenario
+
+    def _collect_workload_results(self, processes, workload_type):
+        """Generic collector for workload results."""
+        results = []
+        for proc, port in processes:
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                results.append((stdout, stderr, port))
+                logging.info(f"{workload_type} client on port {port} completed")
+            else:
+                logging.error(f"{workload_type} client failed on port {port}: {stderr}")
+        return results
+
+    def _create_mixed_metric(
+        self,
+        row,
+        command,
+        cfg,
+        scenario,
+        group_id,
+        test_id,
+        test_phase,
+        config_set,
+        warmup_duration,
+        metrics_processor,
+    ):
+        """Create metric for mixed workload ."""
+        m = metrics_processor.create_metrics(
+            row,
+            command,
+            scenario.get("data_size", 100),
+            cfg.get("pipeline", 1),
+            cfg["clients"],
+            None,
+            warmup_duration,
+            scenario.get("duration"),
+        )
+        if m:
+            m.update(
+                {
+                    "test_id": test_id,
+                    "test_phase": test_phase,
+                    "config_set": config_set,
+                    "status": "success",
+                }
+            )
+            logging.info(f"{test_phase} RPS: {row['rps']}")
+        return m
+
+    def _normalize_mixed_configs(self, scenario):
+        """Normalize shared parameters across mixed workload configs."""
+        write_scenarios = scenario.get("writes", [])
+        read_scenarios = scenario.get("reads", [])
+
+        # Propagate shared parameters (allow sub-scenario overrides)
+        for cfg in write_scenarios + read_scenarios:
+            cfg["duration"] = scenario.get("duration")
+            cfg["pipeline"] = scenario.get("pipeline", 1)
+            if "cluster_execution" not in cfg and scenario.get("cluster_execution"):
+                cfg["cluster_execution"] = scenario["cluster_execution"]
+
+        return write_scenarios, read_scenarios
+
+    def _get_cpu_for_process(self, process_idx):
+        """Allocate cores_per_client cores for each process."""
+        if not self.client_cpu_ranges:
+            return None
+
+        # Get cores_per_client from config
+        cpu_alloc = self.config.get("cpu_allocation", {})
+        cores_per_client = cpu_alloc.get("cores_per_client", 8)
+
+        # Parse starting core from first client range
+        first_range = self.client_cpu_ranges[0]
+        if "-" in first_range:
+            start_core, _ = map(int, first_range.split("-"))
+        else:
+            start_core = int(first_range)
+
+        # Allocate cores_per_client cores for this process
+        proc_start = start_core + (process_idx * cores_per_client)
+        proc_end = proc_start + cores_per_client - 1
+
+        return f"{proc_start}-{proc_end}"
+
+    def _launch_one_process(self, scenario, port, process_idx, label):
+        """Launch single process with CPU distribution and logging."""
+        cpu = self._get_cpu_for_process(process_idx)
+        cmd = self._build_benchmark_command(scenario=scenario, port=port, cpu_range=cpu)
+        logging.info(f"{label} [port {port}]: {shlex.join(cmd)[:200]}...")
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self.valkey_path,
+        )
+
+    def _launch_mixed_processes(self, write_scenarios, read_scenarios, ports):
+        """Launch write + read processes with distributed CPU."""
+        process_idx = 0
+
+        # Launch writes (now supports multiple)
+        all_write_procs = []
+        for write_cfg in write_scenarios:
+            write_scenario = copy.deepcopy(write_cfg)
+            for port in ports:
+                proc = self._launch_one_process(
+                    write_scenario,
+                    port,
+                    process_idx,
+                    f"write-{write_cfg.get('id', 'w')}",
+                )
+                all_write_procs.append((proc, port, write_cfg.get("id", "w")))
+                process_idx += 1
+
+        # Launch reads
+        all_read_procs = []
+        for read_cfg in read_scenarios:
+            read_scenario = copy.deepcopy(read_cfg)
+            for port in ports:
+                proc = self._launch_one_process(
+                    read_scenario, port, process_idx, f"read-{read_cfg['id']}"
+                )
+                all_read_procs.append((proc, port, read_cfg["id"]))
+                process_idx += 1
+
+        return all_write_procs, all_read_procs
+
+    def _collect_mixed_read_results(self, all_read_procs):
+        """Collect and group read results by scenario ID."""
+        read_results_by_id = {}
+        for proc, port, read_id in all_read_procs:
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                read_results_by_id.setdefault(read_id, []).append(
+                    (stdout, stderr, port)
+                )
+                logging.info(f"Read-{read_id} on port {port} completed")
+            else:
+                logging.error(f"Read-{read_id} failed: {stderr}")
+        return read_results_by_id
+
+    def _create_mixed_metrics(
+        self,
+        write_results,
+        write_scenario,
+        write_cfg,
+        read_results_by_id,
+        read_scenarios,
+        scenario,
+        group_id,
+        config_set,
+        warmup_duration,
+        metrics_processor,
+    ):
+        """Generate all metrics for mixed workload."""
+        metrics_list = []
+
+        # Write metric
+        if write_results:
+            write_row = self._aggregate_parallel_results(write_results, write_scenario)
+            m = self._create_mixed_metric(
+                write_row,
+                write_cfg["command"],
+                write_cfg,
+                scenario,
+                group_id,
+                f"{group_id}_{scenario['id']}_write",
+                "mixed_write",
+                config_set,
+                warmup_duration,
+                metrics_processor,
+            )
+            if m:
+                metrics_list.append(m)
+
+        # Read metrics
+        for read_cfg in read_scenarios:
+            if read_cfg["id"] in read_results_by_id:
+                read_row = self._aggregate_parallel_results(
+                    read_results_by_id[read_cfg["id"]], {"command": read_cfg["command"]}
+                )
+                m = self._create_mixed_metric(
+                    read_row,
+                    read_cfg["command"],
+                    read_cfg,
+                    scenario,
+                    group_id,
+                    f"{group_id}_{scenario['id']}_read_{read_cfg['id']}",
+                    f"mixed_read_{read_cfg['id']}",
+                    config_set,
+                    warmup_duration,
+                    metrics_processor,
+                )
+                if m:
+                    metrics_list.append(m)
+
+        return metrics_list
+
+    def _run_mixed_workload(
+        self,
+        scenario,
+        group_id,
+        config_set,
+        metrics_processor,
+        warmup_duration,
+        commit_time,
+    ):
+        """Run mixed workload: orchestrates concurrent writes + reads."""
+        # 1. Normalize
+        write_scenarios, read_scenarios = self._normalize_mixed_configs(scenario)
+        total_write_clients = sum(w["clients"] for w in write_scenarios)
+        total_read_clients = sum(r["clients"] for r in read_scenarios)
+
+        # Determine ports
+        if scenario.get("cluster_execution") == "single" or not self._is_cme():
+            ports = [self._get_active_ports()[0]]
+            logging.info(
+                f"Mixed (single node): {total_write_clients} writes + {total_read_clients} reads"
+            )
+        else:
+            ports = self._get_active_ports()
+            logging.info(
+                f"Mixed (all nodes): {total_write_clients} writes + {total_read_clients} reads across {len(ports)} nodes"
+            )
+
+        # 2. Launch
+        all_write_procs, all_read_procs = self._launch_mixed_processes(
+            write_scenarios, read_scenarios, ports
+        )
+
+        # 3. Collect (group by scenario ID)
+        write_results_by_id = {}
+        for proc, port, write_id in all_write_procs:
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                write_results_by_id.setdefault(write_id, []).append(
+                    (stdout, stderr, port)
+                )
+                logging.info(f"Write-{write_id} on port {port} completed")
+            else:
+                logging.error(f"Write-{write_id} failed: {stderr}")
+
+        read_results_by_id = self._collect_mixed_read_results(all_read_procs)
+
+        # 4. Create metrics
+        metrics_list = []
+
+        # Write metrics
+        for write_cfg in write_scenarios:
+            write_id = write_cfg.get("id", "w")
+            if write_id in write_results_by_id and write_results_by_id[write_id]:
+                write_row = self._aggregate_parallel_results(
+                    write_results_by_id[write_id], {"command": write_cfg["command"]}
+                )
+                m = self._create_mixed_metric(
+                    write_row,
+                    write_cfg["command"],
+                    write_cfg,
+                    scenario,
+                    group_id,
+                    f"{group_id}_{scenario['id']}_write_{write_id}",
+                    f"mixed_write_{write_id}",
+                    config_set,
+                    warmup_duration,
+                    metrics_processor,
+                )
+                if m:
+                    metrics_list.append(m)
+
+        # Read metrics
+        for read_cfg in read_scenarios:
+            if read_cfg["id"] in read_results_by_id:
+                read_row = self._aggregate_parallel_results(
+                    read_results_by_id[read_cfg["id"]], {"command": read_cfg["command"]}
+                )
+                m = self._create_mixed_metric(
+                    read_row,
+                    read_cfg["command"],
+                    read_cfg,
+                    scenario,
+                    group_id,
+                    f"{group_id}_{scenario['id']}_read_{read_cfg['id']}",
+                    f"mixed_read_{read_cfg['id']}",
+                    config_set,
+                    warmup_duration,
+                    metrics_processor,
+                )
+                if m:
+                    metrics_list.append(m)
+
+        logging.info(f"Mixed: {len(metrics_list)} metrics")
+        return metrics_list if metrics_list else None
+
     def _run_parallel_search(
         self,
         scenario: dict,
@@ -1001,12 +1352,11 @@ class ClientRunner:
                 cpu_range=cpu_range,
                 warmup_mode=warmup_mode,
             )
-            if warmup_mode:
-                logging.info(f"Launching warmup client {i} on port {port}")
-            else:
-                logging.info(
-                    f"Launching client {i} on port {port} with CPU range {cpu_range}"
-                )
+            # Log full command
+            cmd_str = shlex.join(cmd)
+            mode = "warmup" if warmup_mode else "parallel"
+            logging.info(f"{mode} client {i} [port {port}]: {cmd_str[:200]}...")
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,

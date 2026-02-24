@@ -31,6 +31,25 @@
             "duration": 30,
             "warmup": 5,
             "command": "FT.SEARCH idx \"__field:term__\""
+          },
+          {
+            "id": "c",
+            "type": "mixed",
+            "description": "Minimal mixed workload test (3 writes + 7 reads)",
+            "duration": 10,
+            "warmup": 2,
+            "writes": [
+              {
+                "id": "a",
+                "cluster_execution": "single",
+                "command": "HSET doc:{tag}:__rand_int__ title \"__field:term__\"",
+                "dataset": "datasets/search_terms.csv",
+                "clients": 3
+              }
+            ],
+            "reads": [
+              {"id": "b", "command": "FT.SEARCH idx \"__field:term__\"", "dataset": "datasets/search_terms.csv", "clients": 7}
+            ]
           }
         ]
       }
