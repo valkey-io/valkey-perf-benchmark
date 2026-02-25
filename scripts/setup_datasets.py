@@ -5,15 +5,21 @@ import argparse
 import csv
 import json
 import logging
+import random
+import re
+import string
 import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
-import random
-import uuid
-import string
-import re
+
+try:
+    from nltk.stem import SnowballStemmer
+
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
 
 # Constants for query generation
 STOP_WORDS = {
@@ -238,16 +244,7 @@ def apply_transforms(
             cycle_length = t.get("cycle_length", 8193)
             token_count = t.get("token_count", 100000)
             # Generate base-26 alphabet up to cycle_length unique tokens
-            alphabet = []
-            for i in range(cycle_length):
-                result = []
-                n = i
-                while True:
-                    result.append(chr(ord("a") + (n % 26)))
-                    n = n // 26 - 1
-                    if n < 0:
-                        break
-                alphabet.append("".join(reversed(result)))
+            alphabet = [_int_to_base26(i) for i in range(cycle_length)]
             # Cycle through the alphabet, repeating after cycle_length tokens
             tokens = [alphabet[i % cycle_length] for i in range(token_count)]
             content = " ".join(tokens)
@@ -257,17 +254,7 @@ def apply_transforms(
             # doc1: a,b,...,z,aa,ab... doc2: continues from where doc1 ended
             token_count = t.get("token_count", 1000)
             start_idx = (doc_num - 1) * token_count
-            tokens = []
-            for i in range(token_count):
-                n = start_idx + i
-                # Convert to base-26 letters: 0=a, 25=z, 26=aa, 27=ab, ...
-                result = []
-                while True:
-                    result.append(chr(ord("a") + (n % 26)))
-                    n = n // 26 - 1
-                    if n < 0:
-                        break
-                tokens.append("".join(reversed(result)))
+            tokens = [_int_to_base26(start_idx + i) for i in range(token_count)]
             content = " ".join(tokens)
 
         elif ttype == "uuid_tokens":
@@ -275,10 +262,9 @@ def apply_transforms(
             token_count = t.get("token_count", 100)
             char_length = t.get("char_length", 128)
             chars = string.ascii_lowercase + string.digits
-            random.seed(doc_num)  # Reproducible per doc
+            rng = random.Random(doc_num)  # Local RNG, reproducible per doc
             tokens = [
-                "".join(random.choices(chars, k=char_length))
-                for _ in range(token_count)
+                "".join(rng.choices(chars, k=char_length)) for _ in range(token_count)
             ]
             content = " ".join(tokens)
 
@@ -291,14 +277,7 @@ def apply_transforms(
             leaf_count = t.get("leaf_count", 10)
 
             # Convert doc_num to base-26 for base prefix
-            n = doc_num - 1
-            base_prefix_chars = []
-            while True:
-                base_prefix_chars.append(chr(ord("a") + (n % 26)))
-                n = n // 26 - 1
-                if n < 0:
-                    break
-            base_unit = "".join(reversed(base_prefix_chars))
+            base_unit = _int_to_base26(doc_num - 1)
 
             tokens = []
             for depth in range(1, max_depth + 1):
@@ -313,22 +292,39 @@ def apply_transforms(
             # Random tokens from a fixed set - tests small position maps
             token_set = t.get("token_set", list(string.ascii_lowercase[:10]))
             token_count = t.get("token_count", 10)
-            random.seed(doc_num)  # Reproducible per doc
-            tokens = [random.choice(token_set) for _ in range(token_count)]
+            rng = random.Random(doc_num)  # Local RNG, reproducible per doc
+            tokens = [rng.choice(token_set) for _ in range(token_count)]
             content = " ".join(tokens)
 
         elif ttype == "stemmable_words":
-            # Placeholder - handled by generate_stemmable_dataset
+            # Handled by generate_stemmable_dataset - warn if used directly
+            logging.warning(
+                "stemmable_words transform used directly; "
+                "use generate_stemmable_dataset for proper handling"
+            )
             content = ""
 
-    return content[:field_size] if field_size > 0 else content
+    return content[:field_size]
+
+
+def _int_to_base26(n: int) -> str:
+    """Convert integer to base-26 letter sequence (0=a, 25=z, 26=aa, 27=ab, ...)."""
+    result = []
+    while True:
+        result.append(chr(ord("a") + (n % 26)))
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return "".join(reversed(result))
 
 
 def extract_stemmable_words_from_wiki(
     wiki_file: Path, target_count: int = 50000
 ) -> list:
     """Extract words from Wikipedia where Snowball stemmer changes the word."""
-    from nltk.stem import SnowballStemmer
+    if not NLTK_AVAILABLE:
+        logging.error("nltk not installed. Run: pip install nltk")
+        return []
 
     stemmer = SnowballStemmer("english")
     stemmable = set()
@@ -386,8 +382,8 @@ def generate_stemmable_dataset(
         writer = csv.writer(f)
         writer.writerow(["field1"])
         for doc in range(1, doc_count + 1):
-            random.seed(doc)
-            writer.writerow([" ".join(random.choices(words, k=token_count))])
+            rng = random.Random(doc)
+            writer.writerow([" ".join(rng.choices(words, k=token_count))])
             if doc % 1000 == 0:
                 logging.info(f"Generated {doc}/{doc_count}")
 
