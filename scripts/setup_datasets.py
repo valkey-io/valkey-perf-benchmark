@@ -243,11 +243,11 @@ def apply_transforms(
                 result = []
                 n = i
                 while True:
-                    result.append(chr(ord('a') + (n % 26)))
+                    result.append(chr(ord("a") + (n % 26)))
                     n = n // 26 - 1
                     if n < 0:
                         break
-                alphabet.append(''.join(reversed(result)))
+                alphabet.append("".join(reversed(result)))
             # Cycle through the alphabet, repeating after cycle_length tokens
             tokens = [alphabet[i % cycle_length] for i in range(token_count)]
             content = " ".join(tokens)
@@ -263,11 +263,11 @@ def apply_transforms(
                 # Convert to base-26 letters: 0=a, 25=z, 26=aa, 27=ab, ...
                 result = []
                 while True:
-                    result.append(chr(ord('a') + (n % 26)))
+                    result.append(chr(ord("a") + (n % 26)))
                     n = n // 26 - 1
                     if n < 0:
                         break
-                tokens.append(''.join(reversed(result)))
+                tokens.append("".join(reversed(result)))
             content = " ".join(tokens)
 
         elif ttype == "uuid_tokens":
@@ -276,7 +276,10 @@ def apply_transforms(
             char_length = t.get("char_length", 128)
             chars = string.ascii_lowercase + string.digits
             random.seed(doc_num)  # Reproducible per doc
-            tokens = [''.join(random.choices(chars, k=char_length)) for _ in range(token_count)]
+            tokens = [
+                "".join(random.choices(chars, k=char_length))
+                for _ in range(token_count)
+            ]
             content = " ".join(tokens)
 
         elif ttype == "progressive_prefix":
@@ -286,23 +289,23 @@ def apply_transforms(
             # doc27: aa, aaaa, aaaaaa, ... (base='aa')
             max_depth = t.get("max_depth", 100)
             leaf_count = t.get("leaf_count", 10)
-            
+
             # Convert doc_num to base-26 for base prefix
             n = doc_num - 1
             base_prefix_chars = []
             while True:
-                base_prefix_chars.append(chr(ord('a') + (n % 26)))
+                base_prefix_chars.append(chr(ord("a") + (n % 26)))
                 n = n // 26 - 1
                 if n < 0:
                     break
-            base_unit = ''.join(reversed(base_prefix_chars))
-            
+            base_unit = "".join(reversed(base_prefix_chars))
+
             tokens = []
             for depth in range(1, max_depth + 1):
                 tokens.append(base_unit * depth)
             full_prefix = base_unit * max_depth
             for i in range(leaf_count):
-                suffix = chr(ord('a') + (i % 26))
+                suffix = chr(ord("a") + (i % 26))
                 tokens.append(full_prefix + suffix)
             content = " ".join(tokens)
 
@@ -321,17 +324,21 @@ def apply_transforms(
     return content[:field_size] if field_size > 0 else content
 
 
-def extract_stemmable_words_from_wiki(wiki_file: Path, target_count: int = 50000) -> list:
+def extract_stemmable_words_from_wiki(
+    wiki_file: Path, target_count: int = 50000
+) -> list:
     """Extract words from Wikipedia where Snowball stemmer changes the word."""
     from nltk.stem import SnowballStemmer
-    
+
     stemmer = SnowballStemmer("english")
     stemmable = set()
-    word_re = re.compile(r'\b[a-z]{4,15}\b')
-    
-    logging.info(f"Extracting stemmable words from Wikipedia (target: {target_count})...")
+    word_re = re.compile(r"\b[a-z]{4,15}\b")
+
+    logging.info(
+        f"Extracting stemmable words from Wikipedia (target: {target_count})..."
+    )
     docs = 0
-    
+
     for event, elem in ET.iterparse(wiki_file, events=("end",)):
         if elem.tag.split("}")[-1] != "page":
             continue
@@ -349,27 +356,31 @@ def extract_stemmable_words_from_wiki(wiki_file: Path, target_count: int = 50000
             break
         docs += 1
         if docs % 10000 == 0:
-            logging.info(f"Processed {docs} pages, found {len(stemmable)} stemmable words")
-    
+            logging.info(
+                f"Processed {docs} pages, found {len(stemmable)} stemmable words"
+            )
+
     logging.info(f"Extracted {len(stemmable)} unique stemmable words")
     return list(stemmable)
 
 
-def generate_stemmable_dataset(output_dir: Path, wiki_file: Path, config: dict, filename: str) -> Path:
+def generate_stemmable_dataset(
+    output_dir: Path, wiki_file: Path, config: dict, filename: str
+) -> Path:
     """Generate dataset containing only stemmable words."""
     output = output_dir / filename
     if output.exists():
         logging.info(f"Exists: {filename}")
         return output
-    
+
     doc_count = config["doc_count"]
     token_count = config["fields"][0]["transforms"][0].get("token_count", 10000)
-    
+
     words = extract_stemmable_words_from_wiki(wiki_file)
     if not words:
         logging.error("No stemmable words found")
         return output
-    
+
     logging.info(f"Generating {filename} ({doc_count} docs × {token_count} tokens)")
     with open(output, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -379,7 +390,7 @@ def generate_stemmable_dataset(output_dir: Path, wiki_file: Path, config: dict, 
             writer.writerow([" ".join(random.choices(words, k=token_count))])
             if doc % 1000 == 0:
                 logging.info(f"Generated {doc}/{doc_count}")
-    
+
     logging.info(f"Complete: {filename}")
     return output
 
