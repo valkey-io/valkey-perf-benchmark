@@ -22,6 +22,7 @@ from profiler import PerformanceProfiler
 VALKEY_BENCHMARK = "src/valkey-benchmark"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
+DEFAULT_SOCKET_TIMEOUT = 10
 
 # Supported Valkey benchmark commands
 READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN", "XRANGE"]
@@ -106,11 +107,13 @@ class ClientRunner:
         if port is None:
             port = self.config.get("port", DEFAULT_PORT)
         logging.info(f"Connecting to {self.target_ip}:{port}")
+        # Get socket_timeout from config, default to 10 seconds
+        socket_timeout = self.config.get("socket_timeout", DEFAULT_SOCKET_TIMEOUT)
         kwargs = {
             "host": self.target_ip,
             "port": port,
             "decode_responses": True,
-            "socket_timeout": 300,  # Increased for large dataset FLUSHALL operations
+            "socket_timeout": socket_timeout,
             "socket_connect_timeout": 10,
         }
         if self.tls_mode:
