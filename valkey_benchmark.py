@@ -908,9 +908,8 @@ class ClientRunner:
                     )
                 return None
 
-            # Collect memory metrics after ingestion
-            memory_metrics = {}
-            if scenario_type == "ingestion":
+            # Log memory metrics after write scenarios (for monitoring only)
+            if scenario_type == "write":
                 memory_metrics = self._get_memory_metrics()
                 if memory_metrics:
                     mem_str = ", ".join(f"{k}={v}" for k, v in memory_metrics.items())
@@ -945,23 +944,6 @@ class ClientRunner:
                     metrics["config_set"] = config_set
                     if scenario.get("dataset"):
                         metrics["dataset"] = scenario["dataset"]
-                    # Add memory metrics for ingestion scenarios
-                    if memory_metrics:
-                        metrics.update(memory_metrics)
-                    # Add ingestion throughput metrics (calculate time from requests/rps)
-                    if scenario_type == "ingestion":
-                        rps = float(row.get("rps", 0))
-                        requests_count = requests_value or 0
-                        if rps > 0 and requests_count > 0:
-                            ingestion_time = requests_count / rps
-                            dataset_path = Path(scenario["dataset"]) if scenario.get("dataset") else None
-                            dataset_size_bytes = dataset_path.stat().st_size if dataset_path and dataset_path.exists() else 0
-                            if dataset_size_bytes > 0:
-                                throughput_mb_s = (dataset_size_bytes / (1024 * 1024)) / ingestion_time
-                                metrics["dataset_size_bytes"] = dataset_size_bytes
-                                metrics["ingestion_time_sec"] = round(ingestion_time, 2)
-                                metrics["throughput_mb_s"] = round(throughput_mb_s, 2)
-                                logging.info(f"Ingestion: {requests_count} docs @ {rps:.0f} rps = {ingestion_time:.2f}s, {throughput_mb_s:.2f} MB/s")
                     return metrics
 
         except Exception as e:
@@ -996,20 +978,26 @@ class ClientRunner:
         metrics = {}
         try:
             with self._client_context() as client:
-                # Get search memory
+                # Get general memory info
+                memory_info = client.info("memory")
+                if "used_memory" in memory_info:
+                    metrics["used_memory"] = memory_info["used_memory"]
+                if "used_memory_rss" in memory_info:
+                    metrics["used_memory_rss"] = memory_info["used_memory_rss"]
+
+                # Get search module memory (if available)
                 try:
                     search_info = client.info("search")
                     if "search_used_memory_bytes" in search_info:
-                        metrics["search_memory_bytes"] = search_info["search_used_memory_bytes"]
+                        metrics["search_memory_bytes"] = search_info[
+                            "search_used_memory_bytes"
+                        ]
                     elif "search_used_memory_indexes" in search_info:
-                        metrics["search_memory_bytes"] = search_info["search_used_memory_indexes"]
+                        metrics["search_memory_bytes"] = search_info[
+                            "search_used_memory_indexes"
+                        ]
                 except Exception:
-                    pass  # May not be available
-
-                # Get RSS memory
-                memory_info = client.info("memory")
-                if "used_memory_rss" in memory_info:
-                    metrics["used_memory_rss"] = memory_info["used_memory_rss"]
+                    pass  # Search module may not be available
         except Exception as e:
             logging.warning(f"Failed to get memory metrics: {e}")
         return metrics

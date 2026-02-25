@@ -233,10 +233,11 @@ def apply_transforms(
             content = " ".join([token] * token_count)
 
         elif ttype == "cyclic_pattern":
-            # Pattern a,b,...,z,aa,ab,...,zz,aaa,... - tests position byte size
-            cycle_length = t.get("cycle_length", 26)
-            token_count = t.get("token_count", 10000)
-            # Generate base-26 alphabet up to cycle_length
+            # Pattern a,b,...,z,aa,ab,...,zz,aaa,... repeating after cycle_length
+            # Default 8193 tests position byte size boundary (varint encoding)
+            cycle_length = t.get("cycle_length", 8193)
+            token_count = t.get("token_count", 100000)
+            # Generate base-26 alphabet up to cycle_length unique tokens
             alphabet = []
             for i in range(cycle_length):
                 result = []
@@ -247,6 +248,7 @@ def apply_transforms(
                     if n < 0:
                         break
                 alphabet.append(''.join(reversed(result)))
+            # Cycle through the alphabet, repeating after cycle_length tokens
             tokens = [alphabet[i % cycle_length] for i in range(token_count)]
             content = " ".join(tokens)
 
