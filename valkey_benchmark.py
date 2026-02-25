@@ -984,20 +984,6 @@ class ClientRunner:
                     metrics["used_memory"] = memory_info["used_memory"]
                 if "used_memory_rss" in memory_info:
                     metrics["used_memory_rss"] = memory_info["used_memory_rss"]
-
-                # Get search module memory (if available)
-                try:
-                    search_info = client.info("search")
-                    if "search_used_memory_bytes" in search_info:
-                        metrics["search_memory_bytes"] = search_info[
-                            "search_used_memory_bytes"
-                        ]
-                    elif "search_used_memory_indexes" in search_info:
-                        metrics["search_memory_bytes"] = search_info[
-                            "search_used_memory_indexes"
-                        ]
-                except Exception:
-                    pass  # Search module may not be available
         except Exception as e:
             logging.warning(f"Failed to get memory metrics: {e}")
         return metrics
