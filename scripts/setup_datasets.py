@@ -52,27 +52,31 @@ STOP_WORDS = {
 }
 
 
-def _generate_random_word(seed: int, min_length: int, max_length: int) -> str:
-    """Generate deterministic random word from seed."""
-    random.seed(seed)
-    word_length = random.randint(min_length, max_length)
-    return "".join(random.choices(ALPHABET, k=word_length))
+def _generate_random_word(rng: random.Random, min_length: int, max_length: int) -> str:
+    """Generate deterministic random word using local RNG instance."""
+    word_length = rng.randint(min_length, max_length)
+    return "".join(rng.choices(ALPHABET, k=word_length))
 
 
-def _apply_fuzzy_edit(word: str, edit_type: str) -> str:
-    """Apply single Levenshtein edit operation to word."""
+def _apply_fuzzy_edit(word: str, edit_type: str, rng: random.Random) -> str:
+    """Apply single Levenshtein edit operation using local RNG instance."""
     if len(word) < 2:
         return word
 
     if edit_type == "insert":
-        pos = random.randint(0, len(word))
-        return word[:pos] + random.choice(ALPHABET) + word[pos:]
+        pos = rng.randint(0, len(word))
+        return word[:pos] + rng.choice(ALPHABET) + word[pos:]
     elif edit_type == "delete":
-        pos = random.randint(0, len(word) - 1)
+        pos = rng.randint(0, len(word) - 1)
         return word[:pos] + word[pos + 1 :]
     elif edit_type == "substitute":
-        pos = random.randint(0, len(word) - 1)
-        return word[:pos] + random.choice(ALPHABET) + word[pos + 1 :]
+        # Retry until we get a different character (avoid no-op)
+        pos = rng.randint(0, len(word) - 1)
+        original_char = word[pos]
+        new_char = rng.choice(ALPHABET)
+        while new_char == original_char and len(ALPHABET) > 1:
+            new_char = rng.choice(ALPHABET)
+        return word[:pos] + new_char + word[pos + 1 :]
 
     return word
 
@@ -252,20 +256,23 @@ def apply_transforms(
             within_term = (doc_num - 1) % docs_per_term
             variant_id = within_term // docs_per_variant
 
-            # Generate base word (consistent per term)
-            base_word = _generate_random_word(term_id, min_word_length, max_word_length)
+            # Generate base word using isolated RNG
+            term_rng = random.Random(term_id)
+            base_word = _generate_random_word(
+                term_rng, min_word_length, max_word_length
+            )
 
             # Generate variant (misspelling)
             if variant_id == 0:
                 variant = base_word  # First variant is correct spelling
             else:
-                # Generate consistent misspelling for this variant_id
-                random.seed(term_id * 1000 + variant_id)
+                # Use tuple hash for collision-free seed
+                variant_rng = random.Random(hash((term_id, variant_id)))
                 variant = base_word
                 # Apply target_distance edits
                 for _ in range(target_distance):
-                    edit_type = random.choice(["insert", "delete", "substitute"])
-                    variant = _apply_fuzzy_edit(variant, edit_type)
+                    edit_type = variant_rng.choice(["insert", "delete", "substitute"])
+                    variant = _apply_fuzzy_edit(variant, edit_type, variant_rng)
 
             # Store just the variant (no term prefix)
             content = variant
@@ -522,8 +529,9 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
 
             writer.writerow(["term"])
             for term_id in range(1, num_queries + 1):
-                base_word = _generate_random_word(term_id, min_length, max_length)
-                # Query just the base word (no term prefix)
+                # Use isolated RNG for reproducibility
+                term_rng = random.Random(term_id)
+                base_word = _generate_random_word(term_rng, min_length, max_length)
                 writer.writerow([base_word])
 
     logging.info(f"Complete: {filename} ({num_queries} queries)")
