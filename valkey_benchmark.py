@@ -643,7 +643,11 @@ class ClientRunner:
             cmd += ["-c", str(scenario.get("clients", 1))]
             cmd += ["-P", str(scenario.get("pipeline", 1))]
 
-            keyspacelen_val = self.config.get("keyspacelen", [1000000])[0]
+            # Keyspacelen: scenario override, then config level, then default
+            if scenario.get("keyspacelen") is not None:
+                keyspacelen_val = scenario["keyspacelen"]
+            else:
+                keyspacelen_val = self.config.get("keyspacelen", [1000000])[0]
             cmd += ["-r", str(keyspacelen_val)]
 
             if scenario.get("sequential", False):
@@ -911,13 +915,6 @@ class ClientRunner:
                     )
                 return None
 
-            # Log memory metrics after write scenarios (for monitoring only)
-            if scenario_type == "write":
-                memory_metrics = self._get_memory_metrics()
-                if memory_metrics:
-                    mem_str = ", ".join(f"{k}={v}" for k, v in memory_metrics.items())
-                    logging.info(f"Memory metrics: {mem_str}")
-
             if proc:
                 logging.info(f"Benchmark output:\n{proc.stdout}")
 
@@ -975,21 +972,6 @@ class ClientRunner:
         except Exception as e:
             logging.error(f"Failed to execute setup command '{cmd_str}': {e}")
             raise
-
-    def _get_memory_metrics(self) -> dict:
-        """Get memory metrics from INFO commands."""
-        metrics = {}
-        try:
-            with self._client_context() as client:
-                # Get general memory info
-                memory_info = client.info("memory")
-                if "used_memory" in memory_info:
-                    metrics["used_memory"] = memory_info["used_memory"]
-                if "used_memory_rss" in memory_info:
-                    metrics["used_memory_rss"] = memory_info["used_memory_rss"]
-        except Exception as e:
-            logging.warning(f"Failed to get memory metrics: {e}")
-        return metrics
 
     def _run_parallel_search(
         self,
