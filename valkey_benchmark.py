@@ -1052,7 +1052,10 @@ class ClientRunner:
         warmup_duration,
         metrics_processor,
     ):
-        """Create metric for mixed workload ."""
+        """Create metric for mixed workload."""
+        if not metrics_processor:
+            return None  # Skip metrics in profiling mode
+
         m = metrics_processor.create_metrics(
             row,
             command,
