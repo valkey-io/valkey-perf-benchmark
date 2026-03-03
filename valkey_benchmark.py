@@ -996,49 +996,6 @@ class ClientRunner:
             logging.error(f"Failed to execute setup command '{cmd_str}': {e}")
             raise
 
-    def _launch_workload_processes(self, workload_cfg, workload_type):
-        """Launch workload processes (CME-aware: 1 per node, non-CME: 1 total)."""
-        scenario = copy.deepcopy(workload_cfg)
-        ports = self._get_active_ports()
-
-        processes = []
-        for i, port in enumerate(ports):
-            cpu = (
-                self.client_cpu_ranges[i % len(self.client_cpu_ranges)]
-                if self.client_cpu_ranges
-                else None
-            )
-            cmd = self._build_benchmark_command(
-                scenario=scenario, port=port, cpu_range=cpu
-            )
-
-            # Log full command for visibility (first 200 chars)
-            cmd_str = shlex.join(cmd)
-            logging.info(f"{workload_type} [port {port}]: {cmd_str[:200]}...")
-
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=self.valkey_path,
-            )
-            processes.append((proc, port))
-
-        return processes, scenario
-
-    def _collect_workload_results(self, processes, workload_type):
-        """Generic collector for workload results."""
-        results = []
-        for proc, port in processes:
-            stdout, stderr = proc.communicate()
-            if proc.returncode == 0:
-                results.append((stdout, stderr, port))
-                logging.info(f"{workload_type} client on port {port} completed")
-            else:
-                logging.error(f"{workload_type} client failed on port {port}: {stderr}")
-        return results
-
     def _create_mixed_metric(
         self,
         row,
@@ -1172,62 +1129,19 @@ class ClientRunner:
                 logging.error(f"Read-{read_id} failed: {stderr}")
         return read_results_by_id
 
-    def _create_mixed_metrics(
-        self,
-        write_results,
-        write_scenario,
-        write_cfg,
-        read_results_by_id,
-        read_scenarios,
-        scenario,
-        group_id,
-        config_set,
-        warmup_duration,
-        metrics_processor,
-    ):
-        """Generate all metrics for mixed workload."""
-        metrics_list = []
-
-        # Write metric
-        if write_results:
-            write_row = self._aggregate_parallel_results(write_results, write_scenario)
-            m = self._create_mixed_metric(
-                write_row,
-                write_cfg["command"],
-                write_cfg,
-                scenario,
-                group_id,
-                f"{group_id}_{scenario['id']}_write",
-                "mixed_write",
-                config_set,
-                warmup_duration,
-                metrics_processor,
-            )
-            if m:
-                metrics_list.append(m)
-
-        # Read metrics
-        for read_cfg in read_scenarios:
-            if read_cfg["id"] in read_results_by_id:
-                read_row = self._aggregate_parallel_results(
-                    read_results_by_id[read_cfg["id"]], {"command": read_cfg["command"]}
+    def _collect_mixed_write_results(self, all_write_procs):
+        """Collect and group write results by scenario ID."""
+        write_results_by_id = {}
+        for proc, port, write_id in all_write_procs:
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                write_results_by_id.setdefault(write_id, []).append(
+                    (stdout, stderr, port)
                 )
-                m = self._create_mixed_metric(
-                    read_row,
-                    read_cfg["command"],
-                    read_cfg,
-                    scenario,
-                    group_id,
-                    f"{group_id}_{scenario['id']}_read_{read_cfg['id']}",
-                    f"mixed_read_{read_cfg['id']}",
-                    config_set,
-                    warmup_duration,
-                    metrics_processor,
-                )
-                if m:
-                    metrics_list.append(m)
-
-        return metrics_list
+                logging.info(f"Write-{write_id} on port {port} completed")
+            else:
+                logging.error(f"Write-{write_id} failed: {stderr}")
+        return write_results_by_id
 
     def _run_mixed_workload(
         self,
@@ -1262,17 +1176,7 @@ class ClientRunner:
         )
 
         # 3. Collect (group by scenario ID)
-        write_results_by_id = {}
-        for proc, port, write_id in all_write_procs:
-            stdout, stderr = proc.communicate()
-            if proc.returncode == 0:
-                write_results_by_id.setdefault(write_id, []).append(
-                    (stdout, stderr, port)
-                )
-                logging.info(f"Write-{write_id} on port {port} completed")
-            else:
-                logging.error(f"Write-{write_id} failed: {stderr}")
-
+        write_results_by_id = self._collect_mixed_write_results(all_write_procs)
         read_results_by_id = self._collect_mixed_read_results(all_read_procs)
 
         # 4. Create metrics
