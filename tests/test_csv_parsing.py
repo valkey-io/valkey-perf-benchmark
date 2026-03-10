@@ -1,7 +1,5 @@
 """Unit tests for ClientRunner._parse_csv_row and _find_csv_start."""
 
-import pytest
-
 
 class TestFindCsvStart:
     """Test _find_csv_start finds correct header line index."""

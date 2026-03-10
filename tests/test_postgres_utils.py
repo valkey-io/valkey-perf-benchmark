@@ -7,7 +7,6 @@ Tests cover:
 
 from datetime import datetime
 
-import pytest
 
 from utils.postgres_track_commits import (
     _is_list_subset,

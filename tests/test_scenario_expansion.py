@@ -1,7 +1,5 @@
 """Unit tests for ClientRunner._expand_scenario_options."""
 
-import pytest
-
 
 class TestExpandScenarioNoOptions:
     """Test scenarios with no options return single-element list."""

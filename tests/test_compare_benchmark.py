@@ -1,6 +1,5 @@
 """Unit tests for utils/compare_benchmark_results.py statistical functions."""
 
-import math
 import pytest
 
 from utils.compare_benchmark_results import (

@@ -2,7 +2,6 @@
 
 import copy
 
-import pytest
 
 from valkey_benchmark import deep_merge
 
