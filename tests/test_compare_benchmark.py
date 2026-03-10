@@ -53,7 +53,7 @@ class TestCalculateStdev:
 
     def test_normal_list(self):
         result = calculate_stdev([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
-        assert result == pytest.approx(2.0, abs=0.1)
+        assert result == pytest.approx(2.138, abs=0.001)
 
     def test_identical_values(self):
         assert calculate_stdev([3.0, 3.0, 3.0]) == 0.0
