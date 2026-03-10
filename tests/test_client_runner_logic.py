@@ -3,6 +3,8 @@
 import pytest
 from pathlib import Path
 
+from valkey_benchmark import ClientRunner
+
 
 def _make_csv(rows):
     """Build CSV stdout string from a list of metric dicts.
@@ -241,11 +243,6 @@ class TestGenerateCombinations:
         assert len(combos) == 2  # 1*1*1*1*1*2*1*1
 
     def test_cartesian_product_count(self, minimal_valid_config):
-        try:
-            from valkey_benchmark import ClientRunner
-        except ImportError:
-            pytest.skip("valkey package not installed")
-
         minimal_valid_config["data_sizes"] = [64, 128]
         minimal_valid_config["pipelines"] = [1, 10]
         runner = ClientRunner(
@@ -277,11 +274,6 @@ class TestGenerateCombinations:
         assert first[7] is None  # duration
 
     def test_no_requests_key(self, minimal_valid_config):
-        try:
-            from valkey_benchmark import ClientRunner
-        except ImportError:
-            pytest.skip("valkey package not installed")
-
         del minimal_valid_config["requests"]
         runner = ClientRunner(
             commit_id="abc",

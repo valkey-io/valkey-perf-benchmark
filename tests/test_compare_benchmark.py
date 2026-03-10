@@ -53,7 +53,7 @@ class TestCalculateStdev:
 
     def test_normal_list(self):
         result = calculate_stdev([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
-        assert result > 0.0
+        assert result == pytest.approx(2.0, abs=0.1)
 
     def test_identical_values(self):
         assert calculate_stdev([3.0, 3.0, 3.0]) == 0.0
@@ -61,6 +61,11 @@ class TestCalculateStdev:
     def test_filters_none(self):
         # With None filtered out, only one value remains -> 0.0
         assert calculate_stdev([5.0, None]) == 0.0
+
+    def test_filters_none_with_multiple_valid_values(self):
+        # [10.0, 20.0] after filtering None — stdev should be non-zero
+        result = calculate_stdev([10.0, None, 20.0])
+        assert result == pytest.approx(calculate_stdev([10.0, 20.0]))
 
 
 # --- calculate_confidence_interval ---

@@ -12,8 +12,6 @@ from valkey_benchmark import deep_merge
 
 
 class TestDeepMergeFlatDicts:
-    """Validates: Requirement 5.1"""
-
     def test_disjoint_keys_merged(self):
         base = {"a": 1, "b": 2}
         override = {"c": 3, "d": 4}
@@ -45,8 +43,6 @@ class TestDeepMergeFlatDicts:
 
 
 class TestDeepMergeNestedDicts:
-    """Validates: Requirement 5.2"""
-
     def test_nested_dicts_merged_recursively(self):
         base = {"a": {"x": 1, "y": 2}}
         override = {"a": {"y": 99, "z": 3}}
@@ -72,8 +68,6 @@ class TestDeepMergeNestedDicts:
 
 
 class TestDeepMergeNonDictOverride:
-    """Validates: Requirements 5.1, 5.2"""
-
     def test_string_replaces_dict(self):
         base = {"a": {"x": 1}}
         override = {"a": "replaced"}
@@ -105,8 +99,6 @@ class TestDeepMergeNonDictOverride:
 
 
 class TestDeepMergeImmutability:
-    """Validates: Requirement 5.3"""
-
     def test_base_not_modified(self):
         base = {"a": 1, "b": {"c": 2}}
         base_copy = copy.deepcopy(base)

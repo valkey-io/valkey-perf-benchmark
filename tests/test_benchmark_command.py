@@ -3,6 +3,14 @@
 import pytest
 
 
+@pytest.fixture
+def base_cmd_params():
+    """Common parameters shared across _build_benchmark_command tests."""
+    return dict(
+        requests=100, keyspacelen=100, data_size=32, pipeline=1, clients=10, seed_val=1
+    )
+
+
 class TestBuildBenchmarkCommandSimpleFormat:
     """Test simple format (no scenario) produces correct flags."""
 
@@ -40,16 +48,12 @@ class TestBuildBenchmarkCommandSimpleFormat:
         assert cmd[cmd.index("--seed") + 1] == "42"
         assert "--csv" in cmd
 
-    def test_simple_format_no_taskset_by_default(self, minimal_client_runner):
+    def test_simple_format_no_taskset_by_default(
+        self, minimal_client_runner, base_cmd_params
+    ):
         """Without CPU pinning, taskset should not appear."""
         cmd = minimal_client_runner._build_benchmark_command(
-            requests=100,
-            keyspacelen=100,
-            data_size=32,
-            pipeline=1,
-            clients=10,
-            command="SET",
-            seed_val=1,
+            command="SET", **base_cmd_params
         )
         assert "taskset" not in cmd
 
@@ -57,17 +61,10 @@ class TestBuildBenchmarkCommandSimpleFormat:
 class TestBuildBenchmarkCommandTLS:
     """Test TLS mode includes TLS flags."""
 
-    def test_tls_flags_present(self, minimal_client_runner):
+    def test_tls_flags_present(self, minimal_client_runner, base_cmd_params):
         """When tls=True, TLS cert/key/cacert flags are included."""
         cmd = minimal_client_runner._build_benchmark_command(
-            tls=True,
-            requests=100,
-            keyspacelen=100,
-            data_size=32,
-            pipeline=1,
-            clients=10,
-            command="GET",
-            seed_val=1,
+            tls=True, command="GET", **base_cmd_params
         )
 
         assert "--tls" in cmd
@@ -78,17 +75,10 @@ class TestBuildBenchmarkCommandTLS:
         assert "--cacert" in cmd
         assert cmd[cmd.index("--cacert") + 1] == "./tests/tls/ca.crt"
 
-    def test_no_tls_flags_when_disabled(self, minimal_client_runner):
+    def test_no_tls_flags_when_disabled(self, minimal_client_runner, base_cmd_params):
         """When tls=False, no TLS flags appear."""
         cmd = minimal_client_runner._build_benchmark_command(
-            tls=False,
-            requests=100,
-            keyspacelen=100,
-            data_size=32,
-            pipeline=1,
-            clients=10,
-            command="GET",
-            seed_val=1,
+            tls=False, command="GET", **base_cmd_params
         )
         assert "--tls" not in cmd
         assert "--cert" not in cmd
@@ -97,17 +87,12 @@ class TestBuildBenchmarkCommandTLS:
 class TestBuildBenchmarkCommandCPUPinning:
     """Test CPU pinning prepends taskset."""
 
-    def test_cpu_range_param_prepends_taskset(self, minimal_client_runner):
+    def test_cpu_range_param_prepends_taskset(
+        self, minimal_client_runner, base_cmd_params
+    ):
         """Passing cpu_range prepends taskset -c <range> to the command."""
         cmd = minimal_client_runner._build_benchmark_command(
-            requests=100,
-            keyspacelen=100,
-            data_size=32,
-            pipeline=1,
-            clients=10,
-            command="GET",
-            seed_val=1,
-            cpu_range="0-3",
+            command="GET", cpu_range="0-3", **base_cmd_params
         )
 
         assert cmd[0] == "taskset"
@@ -115,17 +100,13 @@ class TestBuildBenchmarkCommandCPUPinning:
         assert cmd[2] == "0-3"
         assert cmd[3] == "src/valkey-benchmark"
 
-    def test_self_cores_prepends_taskset(self, minimal_client_runner):
+    def test_self_cores_prepends_taskset(
+        self, minimal_client_runner, base_cmd_params
+    ):
         """When self.cores is set, taskset is prepended."""
         minimal_client_runner.cores = "4-7"
         cmd = minimal_client_runner._build_benchmark_command(
-            requests=100,
-            keyspacelen=100,
-            data_size=32,
-            pipeline=1,
-            clients=10,
-            command="SET",
-            seed_val=1,
+            command="SET", **base_cmd_params
         )
 
         assert cmd[0] == "taskset"
@@ -136,17 +117,13 @@ class TestBuildBenchmarkCommandCPUPinning:
 class TestBuildBenchmarkCommandDuration:
     """Test duration mode uses --duration instead of -n."""
 
-    def test_duration_flag_replaces_requests(self, minimal_client_runner):
+    def test_duration_flag_replaces_requests(
+        self, minimal_client_runner, base_cmd_params
+    ):
         """When duration is provided, --duration is used instead of -n."""
+        base_cmd_params["requests"] = None
         cmd = minimal_client_runner._build_benchmark_command(
-            requests=None,
-            keyspacelen=100,
-            data_size=32,
-            pipeline=1,
-            clients=10,
-            command="GET",
-            seed_val=1,
-            duration=30,
+            command="GET", duration=30, **base_cmd_params
         )
 
         assert "--duration" in cmd

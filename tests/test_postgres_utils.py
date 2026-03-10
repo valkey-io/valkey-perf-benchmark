@@ -5,6 +5,8 @@ Tests cover:
 - detect_field_type, analyze_metrics_schema, convert_metrics_to_rows from utils/push_to_postgres.py
 """
 
+from datetime import datetime
+
 import pytest
 
 from utils.postgres_track_commits import (
@@ -24,8 +26,6 @@ from utils.push_to_postgres import (
 
 
 class TestIsListSubset:
-    """Validates: Requirements 12.1, 12.2"""
-
     def test_empty_is_subset_of_any(self):
         assert _is_list_subset([], [1, 2, 3]) is True
 
@@ -63,8 +63,6 @@ class TestIsListSubset:
 
 
 class TestIsConfigSubset:
-    """Validates: Requirements 12.3, 12.4"""
-
     def test_identical_configs(self):
         cfg = {"key": "value", "num": 42}
         assert _is_config_subset(cfg, cfg) is True
@@ -115,8 +113,6 @@ class TestIsConfigSubset:
 
 
 class TestIsConfigArraySubset:
-    """Validates: Requirements 12.5"""
-
     def test_matching_single_element(self):
         subset = [{"key": "value"}]
         superset = [{"key": "value", "extra": "data"}]
@@ -153,8 +149,6 @@ class TestIsConfigArraySubset:
 
 
 class TestDetectFieldType:
-    """Validates: Requirement 12.6"""
-
     def test_none_returns_text(self):
         assert detect_field_type(None) == "TEXT"
 
@@ -186,8 +180,6 @@ class TestDetectFieldType:
 
 
 class TestAnalyzeMetricsSchema:
-    """Validates: Requirement 12.7"""
-
     def test_includes_core_fields(self):
         metrics = [
             {"rps": 150000.0, "timestamp": "2024-01-01T00:00:00", "commit": "abc123"}
@@ -239,8 +231,6 @@ class TestAnalyzeMetricsSchema:
 
 
 class TestConvertMetricsToRows:
-    """Validates: Requirement 12.8"""
-
     def test_basic_conversion(self):
         metrics = [
             {
@@ -254,9 +244,7 @@ class TestConvertMetricsToRows:
         rows, skipped = convert_metrics_to_rows(metrics, columns)
         assert len(rows) == 1
         assert skipped == 0
-        # id and created_at are skipped, so row has 4 values
         assert len(rows[0]) == 4
-        # rps should be the last value
         assert rows[0][-1] == 150000.0
 
     def test_skips_missing_timestamp(self):
@@ -295,8 +283,6 @@ class TestConvertMetricsToRows:
         assert rows[0][1] == 100.0
 
     def test_timestamp_parsed_to_datetime(self):
-        from datetime import datetime
-
         metrics = [{"timestamp": "2024-01-01T00:00:00", "commit": "abc"}]
         columns = ["timestamp", "commit"]
         rows, skipped = convert_metrics_to_rows(metrics, columns)

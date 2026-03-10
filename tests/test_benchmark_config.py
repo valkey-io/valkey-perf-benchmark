@@ -1,9 +1,5 @@
-"""Unit tests for benchmark.py: validate_config, parse_bool, and validation helpers.
+"""Unit tests for benchmark.py: validate_config, parse_bool, and validation helpers."""
 
-Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 7.1, 7.2, 7.3
-"""
-
-import copy
 import pytest
 
 from benchmark import (
@@ -19,7 +15,7 @@ from benchmark import (
 )
 
 # ---------------------------------------------------------------------------
-# validate_config — missing required keys (Requirement 6.1)
+# validate_config — missing required keys
 # ---------------------------------------------------------------------------
 
 
@@ -28,33 +24,29 @@ class TestValidateConfigMissingKeys:
     it SHALL raise a ValueError."""
 
     def test_missing_keyspacelen(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        del cfg["keyspacelen"]
+        del minimal_valid_config["keyspacelen"]
         with pytest.raises(ValueError, match="Missing required key"):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
     def test_missing_commands(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        del cfg["commands"]
+        del minimal_valid_config["commands"]
         # Without commands AND without test_groups → "must have either"
         with pytest.raises(ValueError):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
     def test_missing_warmup(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        del cfg["warmup"]
+        del minimal_valid_config["warmup"]
         with pytest.raises(ValueError, match="Missing required key"):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
     def test_missing_cluster_mode(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        del cfg["cluster_mode"]
+        del minimal_valid_config["cluster_mode"]
         with pytest.raises(ValueError, match="Missing required key"):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
 
 # ---------------------------------------------------------------------------
-# validate_config — both requests and duration (Requirement 6.2)
+# validate_config — both requests and duration
 # ---------------------------------------------------------------------------
 
 
@@ -63,14 +55,13 @@ class TestValidateConfigBothRequestsAndDuration:
     it SHALL raise a ValueError."""
 
     def test_both_requests_and_duration(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        cfg["duration"] = 10
+        minimal_valid_config["duration"] = 10
         with pytest.raises(ValueError, match="Cannot specify both"):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
 
 # ---------------------------------------------------------------------------
-# validate_config — neither requests nor duration (Requirement 6.3)
+# validate_config — neither requests nor duration
 # ---------------------------------------------------------------------------
 
 
@@ -79,20 +70,18 @@ class TestValidateConfigNeitherRequestsNorDuration:
     it SHALL raise a ValueError."""
 
     def test_neither_requests_nor_duration(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        del cfg["requests"]
+        del minimal_valid_config["requests"]
         with pytest.raises(ValueError, match="Either 'requests' or 'duration'"):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
     def test_requests_none_and_no_duration(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        cfg["requests"] = None
+        minimal_valid_config["requests"] = None
         with pytest.raises(ValueError, match="Either 'requests' or 'duration'"):
-            validate_config(cfg)
+            validate_config(minimal_valid_config)
 
 
 # ---------------------------------------------------------------------------
-# validate_config — valid commands-based config (Requirement 6.4)
+# validate_config — valid commands-based config
 # ---------------------------------------------------------------------------
 
 
@@ -101,18 +90,16 @@ class TestValidateConfigCommandsFormat:
     it SHALL complete without error."""
 
     def test_valid_commands_config(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        validate_config(cfg)  # should not raise
+        validate_config(minimal_valid_config)  # should not raise
 
     def test_valid_commands_config_with_duration(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        del cfg["requests"]
-        cfg["duration"] = 30
-        validate_config(cfg)  # should not raise
+        del minimal_valid_config["requests"]
+        minimal_valid_config["duration"] = 30
+        validate_config(minimal_valid_config)  # should not raise
 
 
 # ---------------------------------------------------------------------------
-# validate_config — valid test_groups-based config (Requirement 6.5)
+# validate_config — valid test_groups-based config
 # ---------------------------------------------------------------------------
 
 
@@ -121,8 +108,7 @@ class TestValidateConfigTestGroupsFormat:
     it SHALL complete without error."""
 
     def test_valid_test_groups_config(self, minimal_test_groups_config):
-        cfg = copy.deepcopy(minimal_test_groups_config)
-        validate_config(cfg)  # should not raise
+        validate_config(minimal_test_groups_config)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -134,42 +120,44 @@ class TestValidateConfigMutation:
     """validate_config SHALL convert cluster_mode and tls_mode to bool."""
 
     def test_cluster_mode_string_converted(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        cfg["cluster_mode"] = "yes"
-        validate_config(cfg)
-        assert cfg["cluster_mode"] is True
+        minimal_valid_config["cluster_mode"] = "yes"
+        validate_config(minimal_valid_config)
+        assert minimal_valid_config["cluster_mode"] is True
 
     def test_tls_mode_string_converted(self, minimal_valid_config):
-        cfg = copy.deepcopy(minimal_valid_config)
-        cfg["tls_mode"] = "false"
-        validate_config(cfg)
-        assert cfg["tls_mode"] is False
+        minimal_valid_config["tls_mode"] = "false"
+        validate_config(minimal_valid_config)
+        assert minimal_valid_config["tls_mode"] is False
 
 
 # ---------------------------------------------------------------------------
-# parse_bool (Requirements 7.1, 7.2, 7.3)
+# parse_bool
 # ---------------------------------------------------------------------------
 
 
 class TestParseBool:
     """Tests for parse_bool with booleans, truthy/falsy strings, and other types."""
 
-    # Requirement 7.1 — boolean values returned as-is
     def test_true(self):
         assert parse_bool(True) is True
 
     def test_false(self):
         assert parse_bool(False) is False
 
-    # Requirement 7.2 — truthy string values
     @pytest.mark.parametrize("val", ["yes", "true", "1", "YES", "True", "TRUE"])
     def test_truthy_strings(self, val):
         assert parse_bool(val) is True
 
-    # Requirement 7.3 — falsy string values
     @pytest.mark.parametrize("val", ["no", "false", "0", "NO", "False", "FALSE"])
     def test_falsy_strings(self, val):
         assert parse_bool(val) is False
+
+    def test_unrecognized_string_returns_false(self):
+        assert parse_bool("maybe") is False
+
+    def test_non_string_non_bool_uses_builtin(self):
+        assert parse_bool(42) is True
+        assert parse_bool(0) is False
 
 
 # ---------------------------------------------------------------------------
@@ -183,14 +171,9 @@ class TestValidatePositiveIntList:
     def test_valid_list(self):
         _validate_positive_int_list([1, 2, 3], "test")  # should not raise
 
-    def test_empty_list_raises(self):
-        # An empty list has no positive ints → all() returns True on empty,
-        # but the function checks isinstance(value, list) first.
-        # Actually []: all() is True, so it passes the check.
-        # Let's verify the actual behaviour.
-        # Looking at the code: `not all(isinstance(x, int) and x > 0 for x in value)`
-        # For empty list, all() is True, so `not True` is False → no raise.
-        _validate_positive_int_list([], "test")  # should not raise per implementation
+    def test_empty_list_accepted(self):
+        # all() on empty iterable is True, so no raise per implementation
+        _validate_positive_int_list([], "test")  # should not raise
 
     def test_not_a_list_raises(self):
         with pytest.raises(ValueError):
@@ -308,15 +291,12 @@ class TestValidateCpuAllocation:
         validate_cpu_allocation(cfg)  # should not raise
 
     def test_old_style_with_both_ranges_calls_validation(self):
-        # Use small ranges that fit within any machine's CPU count
         cfg = {"server_cpu_range": "0", "client_cpu_range": "1"}
         validate_cpu_allocation(cfg)  # should not raise
 
     def test_old_style_with_only_server_range(self):
         cfg = {"server_cpu_range": "0-3"}
-        validate_cpu_allocation(
-            cfg
-        )  # should not raise (no client range → skip explicit validation)
+        validate_cpu_allocation(cfg)  # should not raise
 
 
 # ---------------------------------------------------------------------------

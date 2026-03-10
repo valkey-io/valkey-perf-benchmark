@@ -10,6 +10,8 @@ if str(REPO_ROOT) not in sys.path:
 
 import pytest
 
+from valkey_benchmark import ClientRunner
+
 
 @pytest.fixture
 def minimal_valid_config():
@@ -60,16 +62,7 @@ def sample_benchmark_data():
 
 @pytest.fixture
 def minimal_client_runner(minimal_valid_config):
-    """Create a minimal ClientRunner instance with sensible defaults.
-
-    Handles the case where the ``valkey`` Python package is not installed
-    by skipping the test gracefully.
-    """
-    try:
-        from valkey_benchmark import ClientRunner
-    except ImportError:
-        pytest.skip("valkey package not installed — cannot import ClientRunner")
-
+    """Create a minimal ClientRunner instance with sensible defaults."""
     return ClientRunner(
         commit_id="abc123",
         config=minimal_valid_config,

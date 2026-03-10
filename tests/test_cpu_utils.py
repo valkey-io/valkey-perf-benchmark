@@ -14,8 +14,6 @@ from utils.cpu_utils import (
 
 
 class TestParseCoreRangeValid:
-    """Validates: Requirements 2.1, 2.2, 2.3"""
-
     def test_simple_range(self):
         assert parse_core_range("0-3") == [0, 1, 2, 3]
 
@@ -44,8 +42,6 @@ class TestParseCoreRangeValid:
 
 
 class TestParseCoreRangeInvalid:
-    """Validates: Requirement 2.4"""
-
     def test_empty_string(self):
         with pytest.raises(ValueError):
             parse_core_range("")
@@ -85,8 +81,6 @@ class TestParseCoreRangeInvalid:
 
 
 class TestCalculateCpuRanges:
-    """Validates: Requirement 3.1"""
-
     def test_single_node(self):
         result = calculate_cpu_ranges(cluster_nodes=1, cores_per_unit=4)
         assert result == ["0-3"]
@@ -114,10 +108,7 @@ class TestCalculateCpuRanges:
 
 
 class TestValidateExplicitCpuRanges:
-    """Validates: Requirements 3.2, 3.3"""
-
     def test_non_overlapping_passes(self):
-        # Use small ranges that fit within any machine's CPU count
         validate_explicit_cpu_ranges("0", "1")
 
     def test_overlapping_raises(self):

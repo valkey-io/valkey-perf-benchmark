@@ -1,5 +1,7 @@
 """Unit tests for process_metrics.py — MetricsProcessor.create_metrics."""
 
+import json
+
 import pytest
 
 from process_metrics import MetricsProcessor
@@ -31,13 +33,11 @@ def processor_with_optionals():
 
 
 # ---------------------------------------------------------------------------
-# create_metrics — valid benchmark data (Requirement 8.1)
+# create_metrics — valid benchmark data
 # ---------------------------------------------------------------------------
 
 
 class TestCreateMetricsValid:
-    """Validates: Requirement 8.1"""
-
     def test_returns_all_required_fields(self, processor, sample_benchmark_data):
         result = processor.create_metrics(
             benchmark_data=sample_benchmark_data,
@@ -49,15 +49,12 @@ class TestCreateMetricsValid:
         )
 
         assert result is not None
-        # Core identification fields
         assert result["timestamp"] == "2024-01-15T10:00:00Z"
         assert result["commit"] == "abc123"
         assert result["command"] == "GET"
         assert result["data_size"] == 64
         assert result["pipeline"] == 1
         assert result["clients"] == 50
-
-        # Latency / throughput fields
         assert result["rps"] == 150000.0
         assert result["avg_latency_ms"] == 0.5
         assert result["min_latency_ms"] == 0.1
@@ -65,8 +62,6 @@ class TestCreateMetricsValid:
         assert result["p95_latency_ms"] == 0.8
         assert result["p99_latency_ms"] == 1.2
         assert result["max_latency_ms"] == 5.0
-
-        # Mode fields
         assert result["cluster_mode"] is False
         assert result["tls"] is True
 
@@ -107,13 +102,11 @@ class TestCreateMetricsValid:
 
 
 # ---------------------------------------------------------------------------
-# create_metrics — empty / None data (Requirement 8.2)
+# create_metrics — empty / None data
 # ---------------------------------------------------------------------------
 
 
 class TestCreateMetricsEmpty:
-    """Validates: Requirement 8.2"""
-
     def test_empty_dict_returns_none(self, processor):
         result = processor.create_metrics(
             benchmark_data={},
@@ -138,13 +131,11 @@ class TestCreateMetricsEmpty:
 
 
 # ---------------------------------------------------------------------------
-# create_metrics — non-numeric values use defaults (Requirement 8.3)
+# create_metrics — non-numeric values use defaults
 # ---------------------------------------------------------------------------
 
 
 class TestCreateMetricsNonNumeric:
-    """Validates: Requirement 8.3"""
-
     def test_non_numeric_rps_defaults_to_zero(self, processor):
         data = {"rps": "not_a_number", "avg_latency_ms": "0.5"}
         result = processor.create_metrics(
@@ -208,8 +199,6 @@ class TestCreateMetricsNonNumeric:
 
 
 class TestCreateMetricsBenchmarkMode:
-    """Validates: Requirements 8.1 (benchmark_mode field)"""
-
     def test_requests_mode(self, processor, sample_benchmark_data):
         result = processor.create_metrics(
             benchmark_data=sample_benchmark_data,
@@ -269,14 +258,10 @@ class TestWriteMetrics:
         metrics_file = results_dir / "metrics.json"
         assert metrics_file.exists()
 
-        import json
-
         data = json.loads(metrics_file.read_text(encoding="utf-8"))
         assert data == new_metrics
 
     def test_appends_to_existing_file(self, processor, tmp_path):
-        import json
-
         metrics_file = tmp_path / "metrics.json"
         existing = [{"command": "SET", "rps": 50000}]
         metrics_file.write_text(json.dumps(existing), encoding="utf-8")
@@ -297,8 +282,6 @@ class TestWriteMetrics:
         assert not results_dir.exists()
 
     def test_corrupt_json_starts_fresh(self, processor, tmp_path):
-        import json
-
         metrics_file = tmp_path / "metrics.json"
         metrics_file.write_text("{not valid json!!!", encoding="utf-8")
 
@@ -309,8 +292,6 @@ class TestWriteMetrics:
         assert data == new_metrics
 
     def test_non_list_json_starts_fresh(self, processor, tmp_path):
-        import json
-
         metrics_file = tmp_path / "metrics.json"
         metrics_file.write_text(json.dumps({"key": "value"}), encoding="utf-8")
 
