@@ -1,0 +1,18 @@
+# Direct dependencies for valkey-perf-benchmark.
+# This is the human-editable source file.
+#
+# To regenerate requirements.txt with pinned versions and hashes:
+#   pip-compile --generate-hashes requirements.in -o requirements.txt
+#
+# To upgrade all packages:
+#   pip-compile --generate-hashes --upgrade requirements.in -o requirements.txt
+#
+# To upgrade a single package:
+#   pip-compile --generate-hashes --upgrade-package numpy requirements.in -o requirements.txt
+
+valkey
+matplotlib
+numpy
+scipy
+psycopg2-binary>=2.9.0
+psutil

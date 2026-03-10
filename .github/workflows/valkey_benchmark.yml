@@ -72,7 +72,7 @@ jobs:
         run: |
           sudo dnf groupinstall "Development Tools" -y
           sudo dnf install -y gcc gcc-c++ make python3-devel openssl-devel bzip2-devel libffi-devel
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

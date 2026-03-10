@@ -67,7 +67,7 @@ jobs:
       
       - name: Install Python dependencies
         working-directory: valkey-perf-benchmark
-        run: pip install -r requirements.txt
+        run: pip install --require-hashes -r requirements.txt
       
       # Core: Build PR and baseline valkey
       - name: Build PR version (Core)

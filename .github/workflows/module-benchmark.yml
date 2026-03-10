@@ -62,7 +62,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc g++ make cmake \
               python3-dev libssl-dev
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
 
       - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
         working-directory: valkey_ram
