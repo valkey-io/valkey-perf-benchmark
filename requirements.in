@@ -3,6 +3,7 @@
 #
 # To regenerate requirements.txt with pinned versions and hashes:
 #   pip-compile --generate-hashes requirements.in -o requirements.txt
+#   NOTE: Must run with Python 3.10 to capture all transitive deps for CI.
 #
 # To upgrade all packages:
 #   pip-compile --generate-hashes --upgrade requirements.in -o requirements.txt
@@ -18,5 +19,3 @@ psycopg2-binary>=2.9.0
 psutil
 pytest>=7.0
 hypothesis>=6.0
-exceptiongroup>=1.0.0; python_version < "3.11"
-sortedcontainers>=2.0

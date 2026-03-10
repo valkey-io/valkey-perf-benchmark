@@ -27,7 +27,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential
         python -m pip install --upgrade pip
-        pip install --require-hashes -r requirements.txt
+        pip install -r requirements.txt
     
     - name: Run basic benchmark test
       run: |
