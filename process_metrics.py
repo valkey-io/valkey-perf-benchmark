@@ -1,9 +1,8 @@
 """Helpers for parsing benchmark results."""
 
 import json
-import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 import logging
 
@@ -24,28 +23,40 @@ class MetricsProcessor:
     """
 
     def __init__(
-        self, commit_id: str, cluster_mode: bool, tls_mode: bool, commit_time: str
+        self,
+        commit_id: str,
+        cluster_mode: bool,
+        tls_mode: bool,
+        commit_time: str,
+        io_threads: Optional[int] = None,
+        benchmark_threads: Optional[int] = None,
+        architecture: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
         self.tls_mode = tls_mode
         self.commit_time = commit_time
+        self.io_threads = io_threads
+        self.benchmark_threads = benchmark_threads
+        self.architecture = architecture
 
-    def parse_csv_output(
+    def create_metrics(
         self,
-        output: str,
+        benchmark_data: Dict[str, Any],
         command: str,
         data_size: int,
         pipeline: int,
         clients: int,
-        requests: int,
+        requests: Optional[int] = None,
+        warmup: Optional[int] = None,
+        duration: Optional[int] = None,
     ) -> Optional[Dict[str, object]]:
-        """Return a metrics dictionary parsed from CSV output.
+        """Create a complete metrics dictionary from CSV output and benchmark parameters.
 
         Parameters
         ----------
-        output : str
-            Raw CSV output from ``valkey-benchmark``.
+        benchmark_data : Dict[str, Any]
+            CSV output from ``valkey-benchmark``.
         command : str
             Benchmark command that was executed.
         data_size : int
@@ -56,30 +67,14 @@ class MetricsProcessor:
             Concurrent client connections used.
         requests : int
             Total number of requests issued.
+        warmup : int, optional
+            Warmup time in seconds.
         """
-        if not output or not output.strip():
+        if not benchmark_data:
             logging.warning("Empty benchmark output received")
             return None
 
         try:
-            lines = output.strip().split("\n")
-            if len(lines) < 2:
-                logging.warning(f"Unexpected CSV format in benchmark output: {output}")
-                return None
-
-            labels = [label.strip().replace('"', "") for label in lines[0].split(",")]
-            values = [value.strip().replace('"', "") for value in lines[1].split(",")]
-
-            if len(values) != len(labels):
-                logging.warning(
-                    f"Mismatch between CSV labels ({len(labels)}) and values ({len(values)})"
-                )
-                logging.debug(f"Labels: {labels}")
-                logging.debug(f"Values: {values}")
-                return None
-
-            data = dict(zip(labels, values))
-
             # Helper function to safely convert to float
             def safe_float(value, default=0.0):
                 try:
@@ -90,27 +85,55 @@ class MetricsProcessor:
                     )
                     return default
 
-            return {
+            metrics_dict = {
                 "timestamp": self.commit_time,
                 "commit": self.commit_id,
                 "command": command,
                 "data_size": int(data_size),
                 "pipeline": int(pipeline),
                 "clients": int(clients),
-                "requests": int(requests),
-                "rps": safe_float(data.get("rps")),
-                "avg_latency_ms": safe_float(data.get("avg_latency_ms")),
-                "min_latency_ms": safe_float(data.get("min_latency_ms")),
-                "p50_latency_ms": safe_float(data.get("p50_latency_ms")),
-                "p95_latency_ms": safe_float(data.get("p95_latency_ms")),
-                "p99_latency_ms": safe_float(data.get("p99_latency_ms")),
-                "max_latency_ms": safe_float(data.get("max_latency_ms")),
+                "rps": safe_float(benchmark_data.get("rps")),
+                "avg_latency_ms": safe_float(benchmark_data.get("avg_latency_ms")),
+                "min_latency_ms": safe_float(benchmark_data.get("min_latency_ms")),
+                "p50_latency_ms": safe_float(benchmark_data.get("p50_latency_ms")),
+                "p95_latency_ms": safe_float(benchmark_data.get("p95_latency_ms")),
+                "p99_latency_ms": safe_float(benchmark_data.get("p99_latency_ms")),
+                "max_latency_ms": safe_float(benchmark_data.get("max_latency_ms")),
                 "cluster_mode": self.cluster_mode,
                 "tls": self.tls_mode,
             }
+
+            # Add requests or duration based on benchmark mode
+            if requests is not None:
+                metrics_dict["requests"] = int(requests)
+                metrics_dict["benchmark_mode"] = "requests"
+            elif duration is not None:
+                metrics_dict["duration"] = int(duration)
+                metrics_dict["benchmark_mode"] = "duration"
+            else:
+                logging.warning("Neither requests nor duration specified")
+                metrics_dict["benchmark_mode"] = "unknown"
+
+            # Add io_threads to metrics if it was specified
+            if self.io_threads is not None:
+                metrics_dict["io_threads"] = self.io_threads
+
+            # Add benchmark_threads to metrics if it was specified
+            if self.benchmark_threads is not None:
+                metrics_dict["valkey_benchmark_threads"] = self.benchmark_threads
+
+            # Add warmup to metrics if it was specified
+            if warmup is not None:
+                metrics_dict["warmup"] = warmup
+
+            # Add architecture to metrics if it was specified
+            if self.architecture is not None:
+                metrics_dict["architecture"] = self.architecture
+
+            return metrics_dict
         except Exception:
             logging.exception(f"Error parsing CSV output")
-            logging.debug(f"Raw output: {output}")
+            logging.debug(f"Raw output: {benchmark_csv_data}")
             return None
 
     def write_metrics(

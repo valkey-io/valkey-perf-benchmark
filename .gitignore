@@ -18,7 +18,27 @@ env/
 *.swp
 *.swo
 *~
+*.pem
 
 # Runtime files - automatically created during benchmarking
-results/
-completed_commits.json
+results*/
+
+# CloudFormation and AWS deployment artifacts
+dashboards/scripts/stack-outputs.json
+dashboards/scripts/deployment-config.env
+dashboards/scripts/alb-dns-name.txt
+dashboards/scripts/grafana-deployment-summary.json
+dashboards/scripts/grafana-values-updated.yaml
+dashboards/scripts/alb-ingress-configured.yaml
+dashboards/*.pem
+*.pem
+
+# Logs
+*.log
+
+# Datasets - generated/downloaded via scripts/setup_datasets.py
+datasets/*
+
+# Flamegraph scripts (downloaded on demand from GitHub) and we cache them
+scripts/stackcollapse-perf.pl
+scripts/flamegraph.pl

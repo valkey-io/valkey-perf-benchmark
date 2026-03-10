@@ -1,0 +1,139 @@
+name: Module Framework Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  module-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout valkey_ram (for dataset-enabled valkey-benchmark)
+        uses: actions/checkout@v4
+        with:
+          repository: VoletiRam/valkey_ram
+          ref: dataset-support
+          path: valkey_ram
+          fetch-depth: 1
+
+      - name: Checkout valkey
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey
+          ref: unstable
+          path: valkey
+          fetch-depth: 1
+
+      - name: Checkout valkey-search
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey-search
+          ref: main
+          path: valkey-search
+          fetch-depth: 1
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@v4
+        with:
+          path: valkey-perf-benchmark
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: valkey-perf-benchmark/requirements.txt
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make cmake \
+              python3-dev libssl-dev
+          pip install --require-hashes -r requirements.txt
+
+      - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
+        working-directory: valkey_ram
+        run: |
+          echo "Building valkey_ram valkey-benchmark..."
+          make distclean || true
+          make -j$(nproc)
+          
+          if [ -f "src/valkey-benchmark" ]; then
+            echo "valkey-benchmark with dataset support built"
+            ls -lh src/valkey-benchmark
+          else
+            echo "valkey-benchmark build failed"
+            exit 1
+          fi
+
+      - name: Build valkey-server
+        working-directory: valkey
+        run: |
+          echo "Building valkey-server..."
+          make distclean || true
+          make -j$(nproc)
+          
+          if [ -f "src/valkey-server" ]; then
+            echo "valkey-server build successful"
+            ./src/valkey-server --version
+          else
+            echo "valkey-server build failed"
+            exit 1
+          fi
+
+      - name: Build valkey-search module
+        working-directory: valkey-search
+        run: |
+          echo "Building valkey-search module..."
+          ./build.sh
+          
+          if [ -f ".build-release/libsearch.so" ]; then
+            echo "valkey-search module build successful"
+            ls -lh .build-release/libsearch.so
+          else
+            echo "valkey-search module build failed"
+            exit 1
+          fi
+
+      - name: Run module test
+        working-directory: valkey-perf-benchmark
+        run: |
+          echo "Running module framework test..."
+          echo "Config: configs/module-test-arm.json"
+          echo "GitHub runner cores: $(nproc)"
+          
+          python benchmark.py \
+            --module search \
+            --valkey-path ../valkey \
+            --valkey-benchmark-path ../valkey_ram/src/valkey-benchmark \
+            --module-path ../valkey-search/.build-release/libsearch.so \
+            --config configs/module-test-arm.json \
+            --mode both \
+            --results-dir results
+          
+          echo "Module test completed successfully"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-test-results
+          path: valkey-perf-benchmark/results/
+
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill -f valkey || echo "No valkey processes to kill"

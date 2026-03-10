@@ -1,0 +1,56 @@
+[
+  {
+    "test_name": "Module Framework Test (ARM)",
+    "seed": false,
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "Basic module functionality test",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "setup_commands": [
+              "FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA title TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/search_terms.csv",
+            "maxdocs": 1000,
+            "clients": 10,
+            "sequential": true,
+            "command": "HSET doc:{tag}:__rand_int__ title \"__field:term__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Basic search query",
+            "dataset": "datasets/search_terms.csv",
+            "clients": 10,
+            "duration": 30,
+            "warmup": 5,
+            "command": "FT.SEARCH idx \"__field:term__\""
+          }
+        ]
+      }
+    ],
+    "port": 6379,
+    "cluster_mode": [false, true],
+    "cluster_nodes": 2,
+    "cluster_ports": [6379, 6380],
+    "cpu_allocation": {
+      "cores_per_server": 1,
+      "cores_per_client": 1
+    },
+    "bind_ip": "127.0.0.1",
+    "tls_mode": false,
+    "io-threads": 2,
+    "modules": [
+      {
+        "path": "../valkey-search/.build-release/libsearch.so",
+        "startup_args": ["--use-coordinator"]
+      }
+    ]
+  }
+]
