@@ -100,9 +100,7 @@ class TestBuildBenchmarkCommandCPUPinning:
         assert cmd[2] == "0-3"
         assert cmd[3] == "src/valkey-benchmark"
 
-    def test_self_cores_prepends_taskset(
-        self, minimal_client_runner, base_cmd_params
-    ):
+    def test_self_cores_prepends_taskset(self, minimal_client_runner, base_cmd_params):
         """When self.cores is set, taskset is prepended."""
         minimal_client_runner.cores = "4-7"
         cmd = minimal_client_runner._build_benchmark_command(
