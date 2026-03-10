@@ -16,3 +16,5 @@ numpy
 scipy
 psycopg2-binary>=2.9.0
 psutil
+pytest>=7.0
+hypothesis>=6.0

@@ -72,8 +72,7 @@ valkey-perf-benchmark/
 │   ├── search_terms.csv
 │   └── proximity_phrases.csv
 ├── requirements.in          # Direct dependencies (human-editable)
-├── requirements.txt         # Locked dependencies with hashes (auto-generated)
-└── requirements-test.txt    # Test dependencies (pytest, hypothesis)
+└── requirements.txt         # Locked dependencies with hashes (auto-generated)
 ```
 
 Each benchmark run clones a fresh copy of the Valkey repository for the target commit. When `--valkey-path` is omitted, the repository is cloned into `valkey_<commit>` and removed after the run to maintain build isolation and repeatability.
@@ -386,8 +385,8 @@ python benchmark.py
 The project includes a test suite covering core logic functions (parsing, validation, statistics, metrics processing, etc.). Tests run without requiring a Valkey server or PostgreSQL.
 
 ```bash
-# Install test dependencies
-pip install -r requirements-test.txt
+# Install dependencies (includes test deps)
+pip install -r requirements.txt
 
 # Run all tests
 python -m pytest tests/ -v
