@@ -4,7 +4,7 @@ import logging
 import psutil
 import threading
 import time
-from typing import List, Dict, Optional
+from typing import Dict
 
 
 class CPUMonitor:

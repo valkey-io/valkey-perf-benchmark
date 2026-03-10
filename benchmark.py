@@ -4,10 +4,9 @@
 import argparse
 import json
 import logging
-import os
 import platform
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 import sys
 
 
@@ -17,7 +16,6 @@ from valkey_benchmark import ClientRunner
 from benchmark_build import BenchmarkBuilder
 from utils.cpu_utils import (
     parse_core_range,
-    calculate_cpu_ranges,
     calculate_server_cpu_ranges,
     calculate_client_cpu_ranges,
     validate_explicit_cpu_ranges,
