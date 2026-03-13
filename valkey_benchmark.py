@@ -83,6 +83,7 @@ class ClientRunner:
         server_launcher: Optional[ServerLauncher] = None,
         architecture: Optional[str] = None,
         uses_test_groups: bool = False,
+        repository: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -99,6 +100,7 @@ class ClientRunner:
         self.server_launcher = server_launcher
         self.architecture = architecture
         self.uses_test_groups = uses_test_groups
+        self.repository = repository
         self.current_profiling_set = {"enabled": False}
         self.current_config_set = {}
         self.config_suffix = "default"
@@ -795,6 +797,7 @@ class ClientRunner:
                 self.io_threads,
                 self.benchmark_threads,
                 self.architecture,
+                self.repository,
             )
 
         return profiler, metrics_processor, profiling_enabled

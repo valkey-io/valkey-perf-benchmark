@@ -184,6 +184,14 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--repository",
+        type=str,
+        default=None,
+        help="GitHub repository in 'owner/repo' format (e.g., 'valkey-io/valkey'). "
+        "Used to generate commit links in comparison reports.",
+    )
+
+    parser.add_argument(
         "--cluster-mode-filter",
         choices=["false", "true"],
         default=None,
@@ -618,6 +626,7 @@ def _execute_benchmark_run(
             server_launcher=launcher,
             architecture=architecture,
             uses_test_groups=uses_test_groups,
+            repository=args.repository,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]

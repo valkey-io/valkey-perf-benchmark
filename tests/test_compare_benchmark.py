@@ -17,6 +17,9 @@ from utils.compare_benchmark_results import (
     create_config_signature,
     create_config_sort_key,
     summarize_benchmark_results,
+    _format_with_sig_figs,
+    _format_stats_only,
+    _extract_common_and_unique_config,
 )
 
 # --- calculate_mean ---
@@ -479,3 +482,187 @@ class TestSummarizeBenchmarkResults:
         assert result["latency_p50_ms"] == 0.8
         assert result["latency_p95_ms"] == 1.5
         assert result["latency_p99_ms"] == 2.0
+
+
+# --- _format_with_sig_figs ---
+
+
+class TestFormatWithSigFigs:
+    """Tests for significant figures formatting based on uncertainty."""
+
+    def test_zero_value(self):
+        assert _format_with_sig_figs(0) == "0"
+        assert _format_with_sig_figs(0, 100) == "0"
+
+    def test_millions_no_uncertainty(self):
+        assert _format_with_sig_figs(1_500_000) == "1.50M"
+
+    def test_millions_large_uncertainty(self):
+        # σ >= 1M -> 0 decimals
+        assert _format_with_sig_figs(1_500_000, 1_000_000) == "2M"
+
+    def test_millions_medium_uncertainty(self):
+        # σ >= 0.1M -> 1 decimal
+        assert _format_with_sig_figs(1_500_000, 100_000) == "1.5M"
+
+    def test_millions_small_uncertainty(self):
+        # σ >= 0.01M -> 2 decimals
+        assert _format_with_sig_figs(1_548_000, 10_000) == "1.55M"
+
+    def test_millions_very_small_uncertainty(self):
+        # σ >= 0.001M -> 3 decimals
+        assert _format_with_sig_figs(1_234_567, 5_000) == "1.235M"
+
+    def test_millions_tiny_uncertainty(self):
+        # σ < 0.001M -> 4 decimals
+        assert _format_with_sig_figs(1_234_567, 50) == "1.2346M"
+
+    def test_billions_no_uncertainty(self):
+        assert _format_with_sig_figs(1_500_000_000) == "1.50B"
+
+    def test_billions_with_uncertainty(self):
+        assert _format_with_sig_figs(1_234_567_890, 10_000_000) == "1.23B"
+
+    def test_trillions_no_uncertainty(self):
+        assert _format_with_sig_figs(1_500_000_000_000) == "1.50T"
+
+    def test_trillions_with_uncertainty(self):
+        assert _format_with_sig_figs(1_234_567_890_000, 100_000_000_000) == "1.2T"
+
+    def test_thousands_no_uncertainty(self):
+        assert _format_with_sig_figs(234_567) == "235K"  # 3 sig figs
+
+    def test_thousands_large_uncertainty(self):
+        # σ >= 1K -> 0 decimals
+        assert _format_with_sig_figs(229_000, 1_400) == "229K"
+
+    def test_thousands_medium_uncertainty(self):
+        # σ >= 0.1K -> 1 decimal
+        assert _format_with_sig_figs(250_600, 850) == "250.6K"
+
+    def test_thousands_small_uncertainty(self):
+        # σ >= 0.01K -> 2 decimals
+        assert _format_with_sig_figs(234_567, 50) == "234.57K"
+
+    def test_thousands_tiny_uncertainty(self):
+        # σ < 0.01K -> 3 decimals
+        assert _format_with_sig_figs(234_567, 5) == "234.567K"
+
+    def test_small_values_hundreds(self):
+        assert _format_with_sig_figs(123.456) == "123"
+
+    def test_small_values_tens(self):
+        assert _format_with_sig_figs(12.345) == "12.3"
+
+    def test_small_values_ones(self):
+        assert _format_with_sig_figs(1.234) == "1.23"
+
+    def test_small_values_sub_one(self):
+        assert _format_with_sig_figs(0.123) == "0.123"
+
+    def test_no_precision_loss_with_uncertainty(self):
+        """Verify formatted value doesn't lose more than σ precision."""
+        test_cases = [
+            (1_234_567, 50),
+            (1_234_567, 500),
+            (1_234_567, 5_000),
+            (250_600, 850),
+            (229_000, 1_400),
+        ]
+        for value, stdev in test_cases:
+            formatted = _format_with_sig_figs(value, stdev)
+            # Parse back
+            if "M" in formatted:
+                parsed = float(formatted.replace("M", "")) * 1_000_000
+            elif "K" in formatted:
+                parsed = float(formatted.replace("K", "")) * 1_000
+            else:
+                parsed = float(formatted)
+            diff = abs(value - parsed)
+            assert diff <= stdev, f"{value} -> {formatted}: lost {diff}, σ={stdev}"
+
+
+# --- _format_stats_only ---
+
+
+class TestFormatStatsOnly:
+    """Tests for stats-only formatting."""
+
+    def test_single_run(self):
+        assert _format_stats_only(1, 0.0) == "n=1"
+
+    def test_zero_run_count(self):
+        assert _format_stats_only(0, 0.0) == "n=1"
+
+    def test_multiple_runs_basic(self):
+        result = _format_stats_only(5, 1400, 0.6, 1.3, 3.1)
+        assert "n=5" in result
+        assert "σ=1.40K" in result
+        assert "CV=0.6%" in result
+        assert "CI99%=±1.3%" in result
+        assert "PI99%=±3.1%" in result
+
+    def test_skips_tiny_ci_pi(self):
+        result = _format_stats_only(5, 1400, 0.6, 0.001, 0.001)
+        assert "CI99%" not in result
+        assert "PI99%" not in result
+
+
+# --- _extract_common_and_unique_config ---
+
+
+class TestExtractCommonAndUniqueConfig:
+    """Tests for common/unique configuration extraction."""
+
+    def test_empty_groups(self):
+        common, groups = _extract_common_and_unique_config([])
+        assert common == {}
+        assert groups == []
+
+    def test_single_group_all_common(self):
+        config_groups = [
+            {
+                "config_dict": {"arch": "x86", "clients": 100},
+                "config_keys": ["arch", "clients"],
+                "table_rows": [],
+            }
+        ]
+        common, groups = _extract_common_and_unique_config(config_groups)
+        assert common == {"arch": "x86", "clients": 100}
+        assert groups[0]["unique_config"] == {}
+
+    def test_two_groups_with_common_and_unique(self):
+        config_groups = [
+            {
+                "config_dict": {"arch": "x86", "data_size": 16},
+                "config_keys": ["arch", "data_size"],
+                "table_rows": [],
+            },
+            {
+                "config_dict": {"arch": "x86", "data_size": 64},
+                "config_keys": ["arch", "data_size"],
+                "table_rows": [],
+            },
+        ]
+        common, groups = _extract_common_and_unique_config(config_groups)
+        assert common == {"arch": "x86"}
+        assert groups[0]["unique_config"] == {"data_size": 16}
+        assert groups[1]["unique_config"] == {"data_size": 64}
+
+    def test_all_different_no_common(self):
+        config_groups = [
+            {
+                "config_dict": {"data_size": 16},
+                "config_keys": ["data_size"],
+                "table_rows": [],
+            },
+            {
+                "config_dict": {"data_size": 64},
+                "config_keys": ["data_size"],
+                "table_rows": [],
+            },
+        ]
+        common, groups = _extract_common_and_unique_config(config_groups)
+        assert common == {}
+        assert groups[0]["unique_config"] == {"data_size": 16}
+        assert groups[1]["unique_config"] == {"data_size": 64}

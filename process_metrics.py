@@ -20,6 +20,8 @@ class MetricsProcessor:
         Whether TLS was enabled for the benchmark.
     commit_time : str
         ISO8601 commit timestamp.
+    repository : str, optional
+        GitHub repository in "owner/repo" format (e.g., "valkey-io/valkey").
     """
 
     def __init__(
@@ -31,6 +33,7 @@ class MetricsProcessor:
         io_threads: Optional[int] = None,
         benchmark_threads: Optional[int] = None,
         architecture: Optional[str] = None,
+        repository: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
@@ -39,6 +42,7 @@ class MetricsProcessor:
         self.io_threads = io_threads
         self.benchmark_threads = benchmark_threads
         self.architecture = architecture
+        self.repository = repository
 
     def create_metrics(
         self,
@@ -88,6 +92,7 @@ class MetricsProcessor:
             metrics_dict = {
                 "timestamp": self.commit_time,
                 "commit": self.commit_id,
+                "repository": self.repository,
                 "command": command,
                 "data_size": int(data_size),
                 "pipeline": int(pipeline),
