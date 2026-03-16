@@ -473,6 +473,7 @@ def run_benchmark_matrix(
             args,
             results_dir,
             valkey_dir,
+            commit_id,
             module_path,
             uses_test_groups,
             architecture,
@@ -543,6 +544,7 @@ def _execute_benchmark_run(
     args,
     results_dir,
     valkey_dir,
+    commit_id,
     module_path,
     uses_test_groups,
     architecture,
@@ -598,7 +600,7 @@ def _execute_benchmark_run(
             logging.info(f"Built valkey-benchmark: {benchmark_path}")
 
         runner = ClientRunner(
-            commit_id=exec_config["cfg"].get("commit_id", "HEAD"),
+            commit_id=commit_id,
             config=cfg,
             cluster_mode=cfg["cluster_mode"],
             tls_mode=cfg["tls_mode"],
