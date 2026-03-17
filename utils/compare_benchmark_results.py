@@ -486,7 +486,9 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 ]  # Use first commit (should be same for all runs)
 
             # Preserve repository information from any run
-            repositories = [run.get("repository") for run in runs if run.get("repository")]
+            repositories = [
+                run.get("repository") for run in runs if run.get("repository")
+            ]
             if repositories:
                 averaged_item["repository"] = repositories[0]
 
@@ -558,23 +560,24 @@ def extract_version_with_repo(data: List[Dict[str, Any]]) -> Tuple[str, Optional
     """
     version = extract_version_identifier(data)
     repository = None
-    
+
     if data:
         repository = data[0].get("repository")
-    
+
     return version, repository
 
 
 def format_version_link(version: str, repository: Optional[str]) -> str:
     """
     Format version as a GitHub link if repository is available.
-    
+
     Returns markdown link like [ec4462b](https://github.com/owner/repo/commit/ec4462b)
     or just the version string if no repository.
     """
     if repository:
         return f"[{version}](https://github.com/{repository}/commit/{version})"
     return version
+
 
 def group_by_static_configuration(
     data: List[Dict[str, Any]],
@@ -890,13 +893,13 @@ def _extract_common_and_unique_config(
 ) -> Tuple[Dict[str, Any], List[Dict]]:
     """
     Extract common configuration shared by all groups and unique config per group.
-    
+
     Returns:
         Tuple of (common_config dict, list of groups with unique_config added)
     """
     if not config_groups:
         return {}, []
-    
+
     # Get all config keys (excluding statistical fields)
     def is_display_key(key: str) -> bool:
         return not (
@@ -905,30 +908,30 @@ def _extract_common_and_unique_config(
             or key.endswith("_ci_upper")
             or key.endswith("_ci_percent")
         )
-    
+
     # Collect all values for each key across all groups
     all_keys = set()
     for group in config_groups:
         all_keys.update(k for k in group["config_keys"] if is_display_key(k))
-    
+
     # Find common config (same value across all groups)
     common_config = {}
     varying_keys = set()
-    
+
     for key in all_keys:
         values = set()
         for group in config_groups:
             value = group["config_dict"].get(key)
             if value is not None:
                 values.add(value)
-        
+
         if len(values) == 1:
             # Same value in all groups - it's common
             common_config[key] = values.pop()
         elif len(values) > 1:
             # Different values - it varies
             varying_keys.add(key)
-    
+
     # Add unique_config to each group (only varying keys)
     updated_groups = []
     for group in config_groups:
@@ -937,11 +940,11 @@ def _extract_common_and_unique_config(
             value = group["config_dict"].get(key)
             if value is not None:
                 unique_config[key] = value
-        
+
         updated_group = group.copy()
         updated_group["unique_config"] = unique_config
         updated_groups.append(updated_group)
-    
+
     return common_config, updated_groups
 
 
@@ -950,7 +953,7 @@ def _generate_summary(
 ) -> Tuple[List[Dict], List[Dict], int, int]:
     """
     Generate summary of significant findings from all config groups.
-    
+
     Returns:
         Tuple of (improvements, regressions, no_change_count, insufficient_data_count)
         where improvements and regressions are lists of dicts with test info and change.
@@ -959,11 +962,15 @@ def _generate_summary(
     regressions = []
     no_change_count = 0
     insufficient_data_count = 0
-    
+
     for group in config_groups:
         unique_config = group.get("unique_config", {})
-        config_str = ", ".join(f"{k}={v}" for k, v in sorted(unique_config.items())) if unique_config else ""
-        
+        config_str = (
+            ", ".join(f"{k}={v}" for k, v in sorted(unique_config.items()))
+            if unique_config
+            else ""
+        )
+
         for row in group.get("table_rows", []):
             significance = _get_significance_indicator(
                 row.get("baseline_run_count", 0),
@@ -974,11 +981,11 @@ def _generate_summary(
                 row.get("new_ci_upper", 0.0),
                 row["change"],
             )
-            
+
             test_label = f"{row['command']} {row['metric']} pipe={row['pipeline']} threads={row['io_threads']}"
             if config_str:
                 test_label = f"{test_label} ({config_str})"
-            
+
             change_formatted = _format_percent_change(
                 row["baseline_value"],
                 row.get("baseline_stdev", 0.0),
@@ -987,16 +994,28 @@ def _generate_summary(
                 row.get("baseline_run_count", 0),
                 row.get("new_run_count", 0),
             )
-            
+
             if significance == "✅":
-                improvements.append({"test": test_label, "change": change_formatted, "change_magnitude": abs(row["change"])})
+                improvements.append(
+                    {
+                        "test": test_label,
+                        "change": change_formatted,
+                        "change_magnitude": abs(row["change"]),
+                    }
+                )
             elif significance == "❌":
-                regressions.append({"test": test_label, "change": change_formatted, "change_magnitude": abs(row["change"])})
+                regressions.append(
+                    {
+                        "test": test_label,
+                        "change": change_formatted,
+                        "change_magnitude": abs(row["change"]),
+                    }
+                )
             elif significance == "❔":
                 insufficient_data_count += 1
             else:
                 no_change_count += 1
-    
+
     return improvements, regressions, no_change_count, insufficient_data_count
 
 
@@ -1009,7 +1028,7 @@ def format_comparison_report(
 ) -> str:
     """
     Format the comparison data as a markdown report.
-    
+
     Structure:
     - Summary at top (significant findings)
     - Collapsible details section with full tables
@@ -1023,22 +1042,26 @@ def format_comparison_report(
 
     # Extract common vs unique configuration
     common_config, groups_with_unique = _extract_common_and_unique_config(config_groups)
-    
+
     # Generate summary
-    improvements, regressions, no_change_count, insufficient_data_count = _generate_summary(groups_with_unique)
-    
+    improvements, regressions, no_change_count, insufficient_data_count = (
+        _generate_summary(groups_with_unique)
+    )
+
     report_lines = []
-    
+
     # Summary section
     significant_changes = [
-        ("✅", item["change"], item["test"], item["change_magnitude"]) for item in improvements
+        ("✅", item["change"], item["test"], item["change_magnitude"])
+        for item in improvements
     ] + [
-        ("❌", item["change"], item["test"], item["change_magnitude"]) for item in regressions
+        ("❌", item["change"], item["test"], item["change_magnitude"])
+        for item in regressions
     ]
     significant_changes.sort(key=lambda x: x[3], reverse=True)
-    
+
     total_tests = len(significant_changes) + no_change_count + insufficient_data_count
-    
+
     if significant_changes:
         report_lines.append(f"## {len(significant_changes)} significant change(s)")
         report_lines.append("")
@@ -1048,9 +1071,11 @@ def format_comparison_report(
     else:
         report_lines.append("## No significant changes")
         report_lines.append("")
-        report_lines.append(f"No statistically significant changes detected across {total_tests} test(s).")
+        report_lines.append(
+            f"No statistically significant changes detected across {total_tests} test(s)."
+        )
         report_lines.append("")
-    
+
     # Summary counts
     summary_parts = []
     if no_change_count:
@@ -1060,12 +1085,12 @@ def format_comparison_report(
     if summary_parts:
         report_lines.append(f"*{', '.join(summary_parts)}*")
         report_lines.append("")
-    
+
     # Collapsible details section
     report_lines.append("<details>")
     report_lines.append("<summary>Click to expand full comparison tables</summary>")
     report_lines.append("")
-    
+
     # Check if we have multiple groups with varying config
     has_varying_config = any(g.get("unique_config") for g in groups_with_unique)
 
@@ -1078,7 +1103,9 @@ def format_comparison_report(
 
         # Only show heading if there are varying attributes across groups
         if has_varying_config and unique_config:
-            config_str = ", ".join(f"{k} = {v}" for k, v in sorted(unique_config.items()))
+            config_str = ", ".join(
+                f"{k} = {v}" for k, v in sorted(unique_config.items())
+            )
             report_lines.append(f"### {config_str}")
             report_lines.append("")
 
@@ -1092,9 +1119,17 @@ def format_comparison_report(
 
         for row in table_rows:
             # Format metric values with uncertainty-based precision
-            baseline_stdev = row.get("baseline_stdev", 0.0) if row.get("baseline_run_count", 0) > 1 else 0
-            new_stdev = row.get("new_stdev", 0.0) if row.get("new_run_count", 0) > 1 else 0
-            baseline_display = _format_with_sig_figs(row["baseline_value"], baseline_stdev)
+            baseline_stdev = (
+                row.get("baseline_stdev", 0.0)
+                if row.get("baseline_run_count", 0) > 1
+                else 0
+            )
+            new_stdev = (
+                row.get("new_stdev", 0.0) if row.get("new_run_count", 0) > 1 else 0
+            )
+            baseline_display = _format_with_sig_figs(
+                row["baseline_value"], baseline_stdev
+            )
             new_display = _format_with_sig_figs(row["new_value"], new_stdev)
 
             # Determine significance indicator
@@ -1120,7 +1155,7 @@ def format_comparison_report(
 
             # Create table row
             test_label = f"{row['command']} {row['metric']} P{row['pipeline']} T{row['io_threads']}"
-            
+
             # Format stats separately
             baseline_stats_display = _format_stats_only(
                 row.get("baseline_run_count", 0),
@@ -1136,7 +1171,7 @@ def format_comparison_report(
                 row.get("new_ci_percent", 0.0),
                 row.get("new_pi_percent", 0.0),
             )
-            
+
             report_lines.append(
                 f"| {significance} | {change_formatted} | {test_label} | "
                 f"{baseline_display} | {new_display} | {baseline_stats_display} | {new_stats_display} |"
@@ -1152,18 +1187,28 @@ def format_comparison_report(
         for key in sorted(common_config.keys()):
             report_lines.append(f"- {key}: {common_config[key]}")
         report_lines.append("")
-    
+
     # Add legend
     report_lines.append("**Legend:**")
-    report_lines.append("- **Test column**: Command, metric, P=pipeline depth, T=io-threads")
-    report_lines.append("- **Significance**: ✅ significant improvement, ❌ significant regression, ➖ not significant, ❔ insufficient data")
+    report_lines.append(
+        "- **Test column**: Command, metric, P=pipeline depth, T=io-threads"
+    )
+    report_lines.append(
+        "- **Significance**: ✅ significant improvement, ❌ significant regression, ➖ not significant, ❔ insufficient data"
+    )
     report_lines.append("")
     report_lines.append("**Statistical Notes:**")
-    report_lines.append("- **CV**: Coefficient of Variation - relative variability (σ/μ × 100%)")
-    report_lines.append("- **CI99%**: 99% Confidence Interval - range where the true population mean is likely to fall")
-    report_lines.append("- **PI99%**: 99% Prediction Interval - range where a single future observation is likely to fall")
+    report_lines.append(
+        "- **CV**: Coefficient of Variation - relative variability (σ/μ × 100%)"
+    )
+    report_lines.append(
+        "- **CI99%**: 99% Confidence Interval - range where the true population mean is likely to fall"
+    )
+    report_lines.append(
+        "- **PI99%**: 99% Prediction Interval - range where a single future observation is likely to fall"
+    )
     report_lines.append("")
-    
+
     # Close collapsible section
     report_lines.append("</details>")
 
@@ -1213,26 +1258,31 @@ def _format_percent_change(
 ) -> str:
     """
     Format percentage change with uncertainty propagation.
-    
+
     Uses the uncertainties library to properly propagate error and
     format with appropriate significant figures.
     """
     if baseline_value == 0:
         return "N/A"
-    
+
     change_percent = ((new_value - baseline_value) / baseline_value) * 100
-    
+
     # Propagate uncertainty if we have sufficient data
-    if baseline_run_count > 1 and new_run_count > 1 and baseline_stdev > 0 and new_stdev > 0:
+    if (
+        baseline_run_count > 1
+        and new_run_count > 1
+        and baseline_stdev > 0
+        and new_stdev > 0
+    ):
         baseline = ufloat(baseline_value, baseline_stdev)
         new = ufloat(new_value, new_stdev)
-        
+
         change_with_uncertainty = (new - baseline) / baseline * 100
-        
+
         # Format with uncertainty - the library handles sig figs
         # Use :P for pretty printing with ± symbol
         return f"{change_with_uncertainty:+.1uP}%"
-    
+
     return f"{change_percent:+.1f}%"
 
 
@@ -1249,15 +1299,15 @@ def _format_with_sig_figs(value: float, uncertainty: float = 0.0) -> str:
     """
     Format a number with appropriate significant figures based on uncertainty.
     Uses K/M/B/T suffixes for readability.
-    
+
     If uncertainty is provided, precision is determined by the uncertainty magnitude.
     Otherwise, uses default precision.
     """
     if value == 0:
         return "0"
-    
+
     abs_value = abs(value)
-    
+
     # Find appropriate unit suffix
     suffix = ""
     divisor = 1
@@ -1268,7 +1318,7 @@ def _format_with_sig_figs(value: float, uncertainty: float = 0.0) -> str:
             suffix = unit
             scaled = value / divisor
             break
-    
+
     # Determine decimal places
     if uncertainty > 0:
         scaled_uncertainty = uncertainty / divisor
@@ -1276,9 +1326,8 @@ def _format_with_sig_figs(value: float, uncertainty: float = 0.0) -> str:
     else:
         # 3 significant figures
         decimals = max(0, 2 - math.floor(math.log10(abs(scaled))))
-    
-    return f"{scaled:.{decimals}f}{suffix}"
 
+    return f"{scaled:.{decimals}f}{suffix}"
 
 
 def _format_stats_only(
@@ -1291,9 +1340,9 @@ def _format_stats_only(
     """Format statistical information only (no value)."""
     if run_count <= 1:
         return "n=1"
-    
+
     formatted_stdev = _format_with_sig_figs(stdev)
-    
+
     # Format percentages with 1 decimal place
     stats_parts = [f"n={run_count}", f"σ={formatted_stdev}", f"CV={cv:.1f}%"]
     if ci_percent > 0.01:
@@ -1860,8 +1909,8 @@ def main():
     new_data = average_multiple_runs(new_data)
 
     # Generate comparison data
-    config_groups, baseline_version, new_version, baseline_repo, new_repo = create_comparison_table_data(
-        baseline_data, new_data, metrics_filter
+    config_groups, baseline_version, new_version, baseline_repo, new_repo = (
+        create_comparison_table_data(baseline_data, new_data, metrics_filter)
     )
 
     # Generate graphs if requested
