@@ -219,9 +219,16 @@ class ClientRunner:
             if result is None:
                 raise RuntimeError("Failed to get commit time: no result returned")
             return result.stdout.strip()
-        except Exception as e:
-            logging.exception(f"Failed to get commit time for {commit_id}: {e}")
-            raise
+        except Exception:
+            logging.warning(f"Could not resolve '{commit_id}', falling back to HEAD")
+            result = self._run(
+                ["git", "show", "-s", "--format=%cI", "HEAD"],
+                cwd=self.valkey_path,
+                capture_output=True,
+            )
+            if result is None:
+                raise RuntimeError("Failed to get commit time for HEAD")
+            return result.stdout.strip()
 
     def _get_active_ports(self) -> List[int]:
         """Return ports based on actual cluster mode."""
