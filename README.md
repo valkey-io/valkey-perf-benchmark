@@ -23,8 +23,31 @@ A benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-mem
 - Python 3.6+
 - Linux environment (for taskset CPU pinning)
 - Build tools required by Valkey (gcc, make, etc.)
-- Install python modules required for this project: `pip install --require-hashes -r requirements.txt`
-- To update dependencies, edit `requirements.in` and run: `pip-compile --generate-hashes requirements.in -o requirements.txt`
+
+### Development Setup
+
+Use a virtual environment for development:
+
+```bash
+# Create and activate venv
+python3 -m venv venv
+. venv/bin/activate
+
+# Install dependencies
+pip install --require-hashes -r requirements.txt
+
+# Install pip-tools for dependency management
+pip install pip-tools
+```
+
+### Updating Dependencies
+
+To update dependencies, edit `requirements.in` and regenerate the lock file:
+
+```bash
+. venv/bin/activate
+pip-compile --generate-hashes requirements.in -o requirements.txt
+```
 
 ### Additional Prerequisites for FTS Tests
 
