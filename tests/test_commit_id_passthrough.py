@@ -38,6 +38,7 @@ def mock_args(tmp_path):
         skip_config_set=True,
         runs=1,
         target_ip="127.0.0.1",
+        repository=None,
     )
 
 
