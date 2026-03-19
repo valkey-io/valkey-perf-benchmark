@@ -57,6 +57,20 @@ OPTIONAL_CONF_KEYS = [
 
 
 # ---------- CLI --------------------------------------------------------------
+def _validate_repository_format(value: str) -> str:
+    """Validate repository is in 'owner/repo' format."""
+    if value.count("/") != 1:
+        raise argparse.ArgumentTypeError(
+            f"Invalid repository format: '{value}'. Expected 'owner/repo' format."
+        )
+    owner, repo = value.split("/")
+    if not owner or not repo:
+        raise argparse.ArgumentTypeError(
+            f"Invalid repository format: '{value}'. Owner and repo cannot be empty."
+        )
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -185,7 +199,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--repository",
-        type=str,
+        type=_validate_repository_format,
         default=None,
         help="GitHub repository in 'owner/repo' format (e.g., 'valkey-io/valkey'). "
         "Used to generate commit links in comparison reports.",
