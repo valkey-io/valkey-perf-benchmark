@@ -12,11 +12,15 @@ import sys
 from typing import Dict, List, Tuple, Any, Optional
 from pathlib import Path
 
+import math
+
+from scipy import stats
+from uncertainties import ufloat
+
 # Optional dependencies for graphing functionality
 try:
     import matplotlib.pyplot as plt
     import numpy as np
-    from scipy import stats
     from matplotlib.ticker import FuncFormatter
 
     GRAPHING_AVAILABLE = True
@@ -24,12 +28,12 @@ except ImportError:
     GRAPHING_AVAILABLE = False
     plt = None
     np = None
-    stats = None
     FuncFormatter = None
 
-import math
-
-from uncertainties import ufloat
+# Central confidence level used for all CI/PI calculations and labels.
+# Change this single value to adjust the confidence level project-wide.
+CONFIDENCE_LEVEL = 0.95
+CONFIDENCE_PERCENT = int(CONFIDENCE_LEVEL * 100)
 
 
 def load_benchmark_data(path: str) -> List[Dict[str, Any]]:
@@ -60,14 +64,14 @@ def calculate_stdev(values: List[float]) -> float:
 
 
 def calculate_confidence_interval(
-    values: List[float], confidence_level: float = 0.99
+    values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> Tuple[float, float]:
     """
     Calculate confidence interval for a list of values using t-distribution.
 
     Args:
         values: List of numeric values
-        confidence_level: Confidence level (default 0.99 for 99% CI)
+        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
 
     Returns:
         Tuple of (lower_bound, upper_bound) or (0.0, 0.0) if insufficient data
@@ -84,23 +88,15 @@ def calculate_confidence_interval(
     # Calculate standard error
     standard_error = stdev_val / (n**0.5)
 
-    if GRAPHING_AVAILABLE and stats:
-        # Use stats.t.interval for direct confidence interval calculation
-        degrees_of_freedom = n - 1
-        lower_bound, upper_bound = stats.t.interval(
-            confidence_level, degrees_of_freedom, loc=mean_val, scale=standard_error
-        )
-        return (lower_bound, upper_bound)
-    else:
-        # Fallback: use normal approximation for large samples or simple approximation
-        # For 99% confidence level, use z ≈ 2.576 (normal approximation)
-        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
-        margin_of_error = z_score * standard_error
-        return (mean_val - margin_of_error, mean_val + margin_of_error)
+    degrees_of_freedom = n - 1
+    lower_bound, upper_bound = stats.t.interval(
+        confidence_level, degrees_of_freedom, loc=mean_val, scale=standard_error
+    )
+    return (lower_bound, upper_bound)
 
 
 def calculate_prediction_interval(
-    values: List[float], confidence_level: float = 0.99
+    values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> Tuple[float, float]:
     """
     Calculate prediction interval for a single future observation using t-distribution.
@@ -110,7 +106,7 @@ def calculate_prediction_interval(
 
     Args:
         values: List of numeric values
-        confidence_level: Confidence level (default 0.99 for 99% PI)
+        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
 
     Returns:
         Tuple of (lower_bound, upper_bound) or (0.0, 0.0) if insufficient data
@@ -124,35 +120,25 @@ def calculate_prediction_interval(
     mean_val = statistics.mean(filtered_values)
     stdev_val = statistics.stdev(filtered_values)
 
-    if GRAPHING_AVAILABLE and stats:
-        # Uses SciPy's t-distribution with prediction interval scaling factor
-        # Prediction interval accounts for both sampling uncertainty and future observation variability
-        degrees_of_freedom = n - 1
-        prediction_scale = (
-            stdev_val * (1 + 1 / n) ** 0.5
-        )  # Standard prediction interval scaling
+    degrees_of_freedom = n - 1
+    # Prediction interval accounts for both sampling uncertainty and future observation variability
+    prediction_scale = stdev_val * (1 + 1 / n) ** 0.5
 
-        lower_bound, upper_bound = stats.t.interval(
-            confidence_level, degrees_of_freedom, loc=mean_val, scale=prediction_scale
-        )
-        return (lower_bound, upper_bound)
-    else:
-        # Fallback: use normal approximation with prediction interval scaling
-        prediction_error = stdev_val * (1 + 1 / n) ** 0.5
-        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
-        margin_of_error = z_score * prediction_error
-        return (mean_val - margin_of_error, mean_val + margin_of_error)
+    lower_bound, upper_bound = stats.t.interval(
+        confidence_level, degrees_of_freedom, loc=mean_val, scale=prediction_scale
+    )
+    return (lower_bound, upper_bound)
 
 
 def calculate_prediction_interval_percentage(
-    values: List[float], confidence_level: float = 0.99
+    values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> float:
     """
     Calculate prediction interval as a percentage of the mean value.
 
     Args:
         values: List of numeric values
-        confidence_level: Confidence level (default 0.99 for 99% PI)
+        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
 
     Returns:
         Prediction interval as percentage of mean (±X%), or 0.0 if insufficient data
@@ -172,15 +158,10 @@ def calculate_prediction_interval_percentage(
     # Prediction interval uses sqrt(1 + 1/n) factor
     prediction_error = stdev_val * (1 + 1 / n) ** 0.5
 
-    if GRAPHING_AVAILABLE and stats:
-        degrees_of_freedom = n - 1
-        alpha = 1 - confidence_level
-        t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
-        margin_of_error = t_critical * prediction_error
-    else:
-        # Fallback: use normal approximation
-        z_score = 2.576 if confidence_level >= 0.99 else 1.96  # 95% fallback
-        margin_of_error = z_score * prediction_error
+    degrees_of_freedom = n - 1
+    alpha = 1 - confidence_level
+    t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
+    margin_of_error = t_critical * prediction_error
 
     # Calculate PI as percentage of mean
     pi_percentage = (margin_of_error / mean_val) * 100.0
@@ -189,14 +170,14 @@ def calculate_prediction_interval_percentage(
 
 
 def calculate_confidence_interval_percentage(
-    values: List[float], confidence_level: float = 0.99
+    values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> float:
     """
     Calculate confidence interval as a percentage of the mean value.
 
     Args:
         values: List of numeric values
-        confidence_level: Confidence level (default 0.99 for 99% CI)
+        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
 
     Returns:
         Confidence interval as percentage of mean (±X%), or 0.0 if insufficient data
@@ -455,22 +436,22 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 else:
                     averaged_item[f"{metric}_cv"] = (stdev_val / mean_val) * 100.0
 
-                # Calculate 99% confidence interval
-                ci_lower, ci_upper = calculate_confidence_interval(values, 0.99)
+                # Calculate confidence interval
+                ci_lower, ci_upper = calculate_confidence_interval(values)
                 averaged_item[f"{metric}_ci_lower"] = ci_lower
                 averaged_item[f"{metric}_ci_upper"] = ci_upper
 
                 # Calculate confidence interval as percentage of mean
-                ci_percentage = calculate_confidence_interval_percentage(values, 0.99)
+                ci_percentage = calculate_confidence_interval_percentage(values)
                 averaged_item[f"{metric}_ci_percent"] = ci_percentage
 
-                # Calculate 99% prediction interval
-                pi_lower, pi_upper = calculate_prediction_interval(values, 0.99)
+                # Calculate prediction interval
+                pi_lower, pi_upper = calculate_prediction_interval(values)
                 averaged_item[f"{metric}_pi_lower"] = pi_lower
                 averaged_item[f"{metric}_pi_upper"] = pi_upper
 
                 # Calculate prediction interval as percentage of mean
-                pi_percentage = calculate_prediction_interval_percentage(values, 0.99)
+                pi_percentage = calculate_prediction_interval_percentage(values)
                 averaged_item[f"{metric}_pi_percent"] = pi_percentage
 
             # Preserve the most recent timestamp and commit
@@ -852,26 +833,26 @@ def _extract_run_statistics(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             else:
                 stats[cv_key] = (stdev_val / mean_val) * 100.0
 
-            # Calculate 99% confidence interval
-            ci_lower, ci_upper = calculate_confidence_interval(values, 0.99)
+            # Calculate confidence interval
+            ci_lower, ci_upper = calculate_confidence_interval(values)
             stats[ci_lower_key] = ci_lower
             stats[ci_upper_key] = ci_upper
 
             # Calculate confidence interval as percentage of mean
             ci_percent_key = f"{metric_base}_ci_percent"
-            ci_percentage = calculate_confidence_interval_percentage(values, 0.99)
+            ci_percentage = calculate_confidence_interval_percentage(values)
             stats[ci_percent_key] = ci_percentage
 
-            # Calculate 99% prediction interval
+            # Calculate prediction interval
             pi_lower_key = f"{metric_base}_pi_lower"
             pi_upper_key = f"{metric_base}_pi_upper"
-            pi_lower, pi_upper = calculate_prediction_interval(values, 0.99)
+            pi_lower, pi_upper = calculate_prediction_interval(values)
             stats[pi_lower_key] = pi_lower
             stats[pi_upper_key] = pi_upper
 
             # Calculate prediction interval as percentage of mean
             pi_percent_key = f"{metric_base}_pi_percent"
-            pi_percentage = calculate_prediction_interval_percentage(values, 0.99)
+            pi_percentage = calculate_prediction_interval_percentage(values)
             stats[pi_percent_key] = pi_percentage
         else:
             stats[stdev_key] = 0.0
@@ -1202,10 +1183,10 @@ def format_comparison_report(
         "- **CV**: Coefficient of Variation - relative variability (σ/μ × 100%)"
     )
     report_lines.append(
-        "- **CI99%**: 99% Confidence Interval - range where the true population mean is likely to fall"
+        f"- **CI{CONFIDENCE_PERCENT}%**: {CONFIDENCE_PERCENT}% Confidence Interval - range where the true population mean is likely to fall"
     )
     report_lines.append(
-        "- **PI99%**: 99% Prediction Interval - range where a single future observation is likely to fall"
+        f"- **PI{CONFIDENCE_PERCENT}%**: {CONFIDENCE_PERCENT}% Prediction Interval - range where a single future observation is likely to fall"
     )
     report_lines.append("")
 
@@ -1248,6 +1229,56 @@ def _get_significance_indicator(
         return "➖"  # CIs overlap, not significant
 
 
+def calculate_percent_change_with_ci(
+    baseline_value: float,
+    baseline_stdev: float,
+    new_value: float,
+    new_stdev: float,
+    baseline_run_count: int,
+    new_run_count: int,
+) -> Tuple[float, Optional[float]]:
+    """
+    Calculate percentage change with optional CI margin via uncertainty propagation.
+
+    Uses standard errors (σ/√n) for propagation through the ratio, then scales
+    by t-critical to produce a CI at CONFIDENCE_LEVEL.
+
+    Returns:
+        Tuple of (change_percent, ci_margin) where ci_margin is None when
+        there is insufficient data for uncertainty propagation.
+    """
+    if baseline_value == 0:
+        return (0.0, None)
+
+    change_percent = ((new_value - baseline_value) / baseline_value) * 100
+
+    if (
+        baseline_run_count > 1
+        and new_run_count > 1
+        and baseline_stdev > 0
+        and new_stdev > 0
+    ):
+        baseline_se = baseline_stdev / math.sqrt(baseline_run_count)
+        new_se = new_stdev / math.sqrt(new_run_count)
+
+        baseline = ufloat(baseline_value, baseline_se)
+        new = ufloat(new_value, new_se)
+
+        change_with_uncertainty = (new - baseline) / baseline * 100
+
+        # Conservative: use the smaller df for a wider (safer) CI
+        df = min(baseline_run_count - 1, new_run_count - 1)
+        alpha = 1 - CONFIDENCE_LEVEL
+        t_crit = stats.t.ppf(1 - alpha / 2, df)
+
+        return (
+            change_with_uncertainty.nominal_value,
+            t_crit * change_with_uncertainty.std_dev,
+        )
+
+    return (change_percent, None)
+
+
 def _format_percent_change(
     baseline_value: float,
     baseline_stdev: float,
@@ -1256,34 +1287,24 @@ def _format_percent_change(
     baseline_run_count: int,
     new_run_count: int,
 ) -> str:
-    """
-    Format percentage change with uncertainty propagation.
-
-    Uses the uncertainties library to properly propagate error and
-    format with appropriate significant figures.
-    """
+    """Format percentage change with uncertainty as a display string."""
     if baseline_value == 0:
         return "N/A"
 
-    change_percent = ((new_value - baseline_value) / baseline_value) * 100
+    change, ci_margin = calculate_percent_change_with_ci(
+        baseline_value,
+        baseline_stdev,
+        new_value,
+        new_stdev,
+        baseline_run_count,
+        new_run_count,
+    )
 
-    # Propagate uncertainty if we have sufficient data
-    if (
-        baseline_run_count > 1
-        and new_run_count > 1
-        and baseline_stdev > 0
-        and new_stdev > 0
-    ):
-        baseline = ufloat(baseline_value, baseline_stdev)
-        new = ufloat(new_value, new_stdev)
+    if ci_margin is not None:
+        scaled = ufloat(change, ci_margin)
+        return f"{scaled:+.1uP}%"
 
-        change_with_uncertainty = (new - baseline) / baseline * 100
-
-        # Format with uncertainty - the library handles sig figs
-        # Use :P for pretty printing with ± symbol
-        return f"{change_with_uncertainty:+.1uP}%"
-
-    return f"{change_percent:+.1f}%"
+    return f"{change:+.1f}%"
 
 
 # Unit suffixes for 1000x scaling (largest first)
@@ -1346,9 +1367,9 @@ def _format_stats_only(
     # Format percentages with 1 decimal place
     stats_parts = [f"n={run_count}", f"σ={formatted_stdev}", f"CV={cv:.1f}%"]
     if ci_percent > 0.01:
-        stats_parts.append(f"CI99%=±{ci_percent:.1f}%")
+        stats_parts.append(f"CI{CONFIDENCE_PERCENT}%=±{ci_percent:.1f}%")
     if pi_percent > 0.01:
-        stats_parts.append(f"PI99%=±{pi_percent:.1f}%")
+        stats_parts.append(f"PI{CONFIDENCE_PERCENT}%=±{pi_percent:.1f}%")
 
     return ", ".join(stats_parts)
 
@@ -1582,9 +1603,7 @@ def _generate_single_variance_graph(
                 # Add mean line and prediction interval
                 if len(baseline_values) > 1:
                     mean_val = statistics.mean(baseline_values)
-                    pi_lower, pi_upper = calculate_prediction_interval(
-                        baseline_values, 0.99
-                    )
+                    pi_lower, pi_upper = calculate_prediction_interval(baseline_values)
                     ax.axhline(y=mean_val, color="steelblue", linestyle="--", alpha=0.6)
                     ax.fill_between(
                         baseline_x,
@@ -1592,7 +1611,7 @@ def _generate_single_variance_graph(
                         [pi_upper] * len(baseline_x),
                         color="steelblue",
                         alpha=0.2,
-                        label=f"{baseline_version} 99% PI",
+                        label=f"{baseline_version} {CONFIDENCE_PERCENT}% PI",
                     )
 
             # Plot new version runs
@@ -1612,7 +1631,7 @@ def _generate_single_variance_graph(
                 # Add mean line and prediction interval
                 if len(new_values) > 1:
                     mean_val = statistics.mean(new_values)
-                    pi_lower, pi_upper = calculate_prediction_interval(new_values, 0.99)
+                    pi_lower, pi_upper = calculate_prediction_interval(new_values)
                     ax.axhline(
                         y=mean_val, color="mediumseagreen", linestyle="--", alpha=0.6
                     )
@@ -1622,7 +1641,7 @@ def _generate_single_variance_graph(
                         [pi_upper] * len(new_x),
                         color="mediumseagreen",
                         alpha=0.2,
-                        label=f"{new_version} 99% PI",
+                        label=f"{new_version} {CONFIDENCE_PERCENT}% PI",
                     )
 
             # Formatting

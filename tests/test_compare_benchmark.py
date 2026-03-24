@@ -13,13 +13,16 @@ from utils.compare_benchmark_results import (
     group_by_command,
     calculate_prediction_interval_percentage,
     calculate_confidence_interval_percentage,
+    calculate_percent_change_with_ci,
     extract_version_identifier,
     create_config_signature,
     create_config_sort_key,
     summarize_benchmark_results,
     _format_with_sig_figs,
     _format_stats_only,
+    _format_percent_change,
     _extract_common_and_unique_config,
+    CONFIDENCE_PERCENT,
 )
 
 # --- calculate_mean ---
@@ -599,13 +602,74 @@ class TestFormatStatsOnly:
         assert "n=5" in result
         assert "σ=1.40K" in result
         assert "CV=0.6%" in result
-        assert "CI99%=±1.3%" in result
-        assert "PI99%=±3.1%" in result
+        assert f"CI{CONFIDENCE_PERCENT}%=±1.3%" in result
+        assert f"PI{CONFIDENCE_PERCENT}%=±3.1%" in result
 
     def test_skips_tiny_ci_pi(self):
         result = _format_stats_only(5, 1400, 0.6, 0.001, 0.001)
-        assert "CI99%" not in result
-        assert "PI99%" not in result
+        assert f"CI{CONFIDENCE_PERCENT}%" not in result
+        assert f"PI{CONFIDENCE_PERCENT}%" not in result
+
+
+# --- _format_percent_change ---
+
+
+class TestFormatPercentChange:
+    """Statistical property tests for percent change with uncertainty propagation."""
+
+    def test_identical_values_gives_zero_change_with_nonzero_margin(self):
+        change, margin = calculate_percent_change_with_ci(
+            1000.0, 50.0, 1000.0, 50.0, 5, 5
+        )
+        assert change == pytest.approx(0.0, abs=0.5)
+        assert margin is not None and margin > 0
+
+    def test_wider_stdev_gives_wider_margin(self):
+        _, narrow = calculate_percent_change_with_ci(
+            100000.0, 100.0, 105000.0, 100.0, 10, 10
+        )
+        _, wide = calculate_percent_change_with_ci(
+            100000.0, 5000.0, 105000.0, 5000.0, 10, 10
+        )
+        assert wide > narrow
+
+    def test_more_runs_gives_narrower_margin(self):
+        _, few = calculate_percent_change_with_ci(
+            100000.0, 5000.0, 105000.0, 5000.0, 3, 3
+        )
+        _, many = calculate_percent_change_with_ci(
+            100000.0, 5000.0, 105000.0, 5000.0, 100, 100
+        )
+        assert many < few
+
+    def test_zero_baseline_returns_zero_change_no_margin(self):
+        change, margin = calculate_percent_change_with_ci(0, 10.0, 100.0, 10.0, 5, 5)
+        assert change == 0.0
+        assert margin is None
+
+    def test_single_run_returns_no_margin(self):
+        change, margin = calculate_percent_change_with_ci(
+            1000.0, 0.0, 1050.0, 0.0, 1, 1
+        )
+        assert change == pytest.approx(5.0)
+        assert margin is None
+
+    def test_asymmetric_stdev_wider_than_narrower_input(self):
+        _, margin = calculate_percent_change_with_ci(1000.0, 5.0, 1050.0, 200.0, 10, 10)
+        assert margin > 0.5
+
+    def test_format_with_margin_shows_plus_minus(self):
+        result = _format_percent_change(1000.0, 50.0, 1050.0, 50.0, 5, 5)
+        assert "±" in result
+        assert "%" in result
+
+    def test_format_without_margin_shows_plain_percent(self):
+        result = _format_percent_change(1000.0, 0.0, 1050.0, 0.0, 1, 1)
+        assert "±" not in result
+        assert "%" in result
+
+    def test_format_zero_baseline_returns_na(self):
+        assert _format_percent_change(0, 10.0, 100.0, 10.0, 5, 5) == "N/A"
 
 
 # --- _extract_common_and_unique_config ---
