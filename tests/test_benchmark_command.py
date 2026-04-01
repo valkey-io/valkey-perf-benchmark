@@ -57,6 +57,41 @@ class TestBuildBenchmarkCommandSimpleFormat:
         )
         assert "taskset" not in cmd
 
+    def test_simple_format_includes_cluster_flag_in_cluster_mode(
+        self, minimal_client_runner, base_cmd_params
+    ):
+        """Simple format commands include --cluster when cluster mode is enabled."""
+        minimal_client_runner.cluster_mode = True
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            command="SET", **base_cmd_params
+        )
+
+        assert "--cluster" in cmd
+
+    def test_simple_format_omits_cluster_flag_when_cluster_mode_disabled(
+        self, minimal_client_runner, base_cmd_params
+    ):
+        """Simple format commands should not include --cluster outside cluster mode."""
+        cmd = minimal_client_runner._build_benchmark_command(
+            command="SET", **base_cmd_params
+        )
+
+        assert "--cluster" not in cmd
+
+    def test_simple_format_includes_cluster_flag_without_cluster_nodes_config(
+        self, minimal_client_runner, base_cmd_params
+    ):
+        """Issue #27 regression: cluster mode should not depend on cluster_nodes metadata."""
+        minimal_client_runner.cluster_mode = True
+        minimal_client_runner.config.pop("cluster_nodes", None)
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            command="SET", **base_cmd_params
+        )
+
+        assert "--cluster" in cmd
+
 
 class TestBuildBenchmarkCommandTLS:
     """Test TLS mode includes TLS flags."""
@@ -143,3 +178,68 @@ class TestBuildBenchmarkCommandDuration:
         assert "-n" in cmd
         assert cmd[cmd.index("-n") + 1] == "5000"
         assert "--duration" not in cmd
+
+
+class TestBuildBenchmarkCommandScenarios:
+    """Test scenario-based command construction."""
+
+    def test_single_node_scenario_includes_cluster_flag_in_cluster_mode(
+        self, minimal_client_runner
+    ):
+        """Scenario commands include --cluster for single-node execution in cluster mode."""
+        minimal_client_runner.cluster_mode = True
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "cluster_execution": "single",
+            }
+        )
+
+        assert "--cluster" in cmd
+
+    def test_single_node_scenario_includes_cluster_flag_without_cluster_nodes_config(
+        self, minimal_client_runner
+    ):
+        """Scenario cluster routing should not depend on cluster_nodes metadata."""
+        minimal_client_runner.cluster_mode = True
+        minimal_client_runner.config.pop("cluster_nodes", None)
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "cluster_execution": "single",
+            }
+        )
+
+        assert "--cluster" in cmd
+
+    def test_parallel_scenario_omits_cluster_flag(self, minimal_client_runner):
+        """Parallel cluster execution should not pass --cluster to a single command."""
+        minimal_client_runner.cluster_mode = True
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "cluster_execution": "parallel",
+            }
+        )
+
+        assert "--cluster" not in cmd
+
+    def test_single_node_scenario_omits_cluster_flag_when_cluster_mode_disabled(
+        self, minimal_client_runner
+    ):
+        """Scenario commands should not include --cluster outside cluster mode."""
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "cluster_execution": "single",
+            }
+        )
+
+        assert "--cluster" not in cmd

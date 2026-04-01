@@ -229,6 +229,14 @@ class ClientRunner:
             return self.config["cluster_ports"]
         return [self.config.get("port", 6379)]
 
+    def _should_add_cluster_flag(self, scenario: Optional[dict] = None) -> bool:
+        """Return whether the valkey-benchmark command should include --cluster."""
+        if not self.cluster_mode:
+            return False
+        if scenario is None:
+            return True
+        return scenario.get("cluster_execution", "single") == "single"
+
     def _flush_database(self) -> None:
         """Flush all data from the database before benchmark runs."""
         logging.info(
@@ -649,9 +657,8 @@ class ClientRunner:
             if scenario.get("sequential", False):
                 cmd += ["--sequential"]
 
-            if scenario.get("cluster_execution") == "single":
-                if self.cluster_mode and self.config.get("cluster_nodes"):
-                    cmd += ["--cluster"]
+            if self._should_add_cluster_flag(scenario):
+                cmd += ["--cluster"]
 
             # Seed: Default ON unless explicitly disabled with "seed": false
             if (
@@ -685,6 +692,9 @@ class ClientRunner:
 
             if sequential:
                 cmd += ["--sequential"]
+
+            if self._should_add_cluster_flag():
+                cmd += ["--cluster"]
 
             # Unified seed logic: Default ON unless config disables
             if self.config.get("seed") is not False:
