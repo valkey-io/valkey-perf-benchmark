@@ -490,9 +490,10 @@ def run_benchmark_matrix(
         f"Commit {commit_id[:10]} | TLS={'on' if cfg['tls_mode'] else 'off'} | Cluster={'on' if cfg['cluster_mode'] else 'off'}"
     )
 
-    client_cpu_ranges = calculate_client_cpu_ranges(cfg)
-
     for exec_config in _iterate_execution_configs(cfg, args):
+        # Calculate CPU ranges per iteration (respects actual cluster_mode)
+        client_cpu_ranges = calculate_client_cpu_ranges(exec_config["cfg"])
+
         _execute_benchmark_run(
             exec_config,
             args,
