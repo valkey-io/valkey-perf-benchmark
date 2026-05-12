@@ -35,6 +35,7 @@ defaults:
 permissions:
   id-token: write
   contents: read
+  issues: write
 
 env:
   benchmarking-manual-commits: ${{ github.event_name == 'workflow_dispatch' && inputs.commits || 'false' }}
@@ -245,6 +246,75 @@ jobs:
             --status complete \
             --config-file "$CONFIG_FILE" \
             $COMMIT_IDS
+
+      - name: Detect performance regression
+        id: detect_regression
+        working-directory: valkey-perf-benchmark
+        env:
+          REGRESSION_THRESHOLD: ${{ vars.REGRESSION_THRESHOLD_PCT || '5' }}
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          set +e
+          report=$(python utils/detect_regression.py \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
+            --table-name "benchmark_metrics" \
+            --threshold "$REGRESSION_THRESHOLD")
+          exit_code=$?
+          set -e
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+          echo "has_regression=$(echo "$report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
+          echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          echo "baseline_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          exit $exit_code
+
+      - name: Open GitHub issue for regression
+        if: steps.detect_regression.outputs.has_regression == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = JSON.parse(process.env.REPORT);
+            const lines = report.regressions.map(r => `- ${r.change} ${r.test}`);
+            const body = [
+              `## Performance Regression Detected`,
+              ``,
+              `**New commit:** \`${report.new_commit}\``,
+              `**Baseline commit:** \`${report.baseline_commit}\``,
+              `**Threshold:** ${report.threshold_pct}%`,
+              ``,
+              `### Regressions`,
+              ...lines,
+              ``,
+              `_Detected automatically by the [continuous benchmark workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Perf regression: ${report.new_commit.slice(0,8)} vs ${report.baseline_commit.slice(0,8)}`,
+              body,
+              labels: ['performance', 'regression'],
+            });
+        env:
+          REPORT: ${{ steps.detect_regression.outputs.report }}
+
+      - name: Notify Slack on regression
+        if: steps.detect_regression.outputs.has_regression == 'true'
+        continue-on-error: true
+        run: |
+          report='${{ steps.detect_regression.outputs.report }}'
+          new_commit=$(echo "$report" | python -c "import sys,json; d=json.load(sys.stdin); print(d['new_commit'][:8])")
+          baseline_commit=$(echo "$report" | python -c "import sys,json; d=json.load(sys.stdin); print(d['baseline_commit'][:8])")
+          count=$(echo "$report" | python -c "import sys,json; print(len(json.load(sys.stdin)['regressions']))")
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\":warning: *Valkey performance regression detected*\nNew: \`${new_commit}\` vs baseline: \`${baseline_commit}\`\n${count} regression(s) found. See the <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow run> for details.\"}"
 
       - name: Cleanup any running valkey processes and files
         if: always()
