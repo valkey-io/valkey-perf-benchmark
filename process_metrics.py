@@ -22,6 +22,8 @@ class MetricsProcessor:
         ISO8601 commit timestamp.
     repository : str, optional
         GitHub repository in "owner/repo" format (e.g., "valkey-io/valkey").
+    environment_metadata : dict, optional
+        System environment metadata (CPU governor, turbo state, kernel, etc.).
     """
 
     def __init__(
@@ -34,6 +36,7 @@ class MetricsProcessor:
         benchmark_threads: Optional[int] = None,
         architecture: Optional[str] = None,
         repository: Optional[str] = None,
+        environment_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.commit_id = commit_id
         self.cluster_mode = cluster_mode
@@ -43,6 +46,7 @@ class MetricsProcessor:
         self.benchmark_threads = benchmark_threads
         self.architecture = architecture
         self.repository = repository
+        self.environment_metadata = environment_metadata
 
     def create_metrics(
         self,
@@ -134,6 +138,10 @@ class MetricsProcessor:
             # Add architecture to metrics if it was specified
             if self.architecture is not None:
                 metrics_dict["architecture"] = self.architecture
+
+            # Add environment metadata for reproducibility
+            if self.environment_metadata:
+                metrics_dict["environment"] = self.environment_metadata
 
             return metrics_dict
         except Exception:

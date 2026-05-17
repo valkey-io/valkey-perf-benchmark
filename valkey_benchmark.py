@@ -18,6 +18,7 @@ from process_metrics import MetricsProcessor
 from valkey_server import ServerLauncher
 from profiler import PerformanceProfiler
 from utils.git_utils import resolve_ref, get_commit_timestamp
+from environment_metadata import collect_environment_metadata
 
 # Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
@@ -787,6 +788,11 @@ class ClientRunner:
 
         metrics_processor = None
         if not profiling_enabled:
+            env_metadata = collect_environment_metadata(
+                benchmark_path=self.valkey_benchmark_path,
+                server_cpu_range=self.config.get("server_cpu_range"),
+                client_cpu_range=self.cores,
+            )
             metrics_processor = MetricsProcessor(
                 self.commit_id,
                 self.cluster_mode,
@@ -796,6 +802,7 @@ class ClientRunner:
                 self.benchmark_threads,
                 self.architecture,
                 self.repository,
+                environment_metadata=env_metadata,
             )
 
         return profiler, metrics_processor, profiling_enabled
