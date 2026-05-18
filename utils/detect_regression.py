@@ -28,15 +28,14 @@ def fetch_last_two_commits(
     """Return the two most recently benchmarked commit SHAs (newest first)."""
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT DISTINCT commit
-            FROM {table}
+            f"""
+            SELECT commit, MAX(timestamp) as latest
+            FROM {table_name}
             WHERE test_type = %s
-            ORDER BY MAX(timestamp) DESC
+            GROUP BY commit
+            ORDER BY latest DESC
             LIMIT 2
-            """.replace(
-                "{table}", table_name
-            ),
+            """,
             (test_type,),
         )
         rows = cur.fetchall()
@@ -119,6 +118,7 @@ def main() -> None:
         help="Minimum RPS regression %% to trigger an alert (default: 5.0)",
     )
     parser.add_argument("--test-type", default="core")
+    parser.add_argument("--sslmode", default="require")
     args = parser.parse_args()
 
     try:
@@ -129,7 +129,7 @@ def main() -> None:
             user=args.username,
             password=args.password,
             connect_timeout=30,
-            sslmode="require",
+            sslmode=args.sslmode,
         )
     except Exception as e:
         print(f"Failed to connect to PostgreSQL: {e}", file=sys.stderr)
