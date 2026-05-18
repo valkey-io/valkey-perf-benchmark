@@ -4,10 +4,9 @@
 import argparse
 import json
 import logging
-import os
 import platform
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 import sys
 
 
@@ -17,7 +16,6 @@ from valkey_benchmark import ClientRunner
 from benchmark_build import BenchmarkBuilder
 from utils.cpu_utils import (
     parse_core_range,
-    calculate_cpu_ranges,
     calculate_server_cpu_ranges,
     calculate_client_cpu_ranges,
     validate_explicit_cpu_ranges,
@@ -59,6 +57,20 @@ OPTIONAL_CONF_KEYS = [
 
 
 # ---------- CLI --------------------------------------------------------------
+def _validate_repository_format(value: str) -> str:
+    """Validate repository is in 'owner/repo' format."""
+    if value.count("/") != 1:
+        raise argparse.ArgumentTypeError(
+            f"Invalid repository format: '{value}'. Expected 'owner/repo' format."
+        )
+    owner, repo = value.split("/")
+    if not owner or not repo:
+        raise argparse.ArgumentTypeError(
+            f"Invalid repository format: '{value}'. Owner and repo cannot be empty."
+        )
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -183,6 +195,14 @@ def parse_args() -> argparse.Namespace:
         help="Skip profiling and run single test pass only. "
         "Overrides profiling_sets and config_sets from config file. "
         "Use for quick benchmarks or when profiling overhead is unwanted.",
+    )
+
+    parser.add_argument(
+        "--repository",
+        type=_validate_repository_format,
+        default=None,
+        help="GitHub repository in 'owner/repo' format (e.g., 'valkey-io/valkey'). "
+        "Used to generate commit links in comparison reports.",
     )
 
     parser.add_argument(
@@ -455,7 +475,10 @@ def run_benchmark_matrix(
     )
     if not args.use_running_server:
         server_binary = valkey_dir / "src" / "valkey-server"
-        if server_binary.exists():
+        if args.valkey_path and commit_id != "HEAD":
+            # Shared directory with explicit commit: checkout and rebuild
+            builder.build()
+        elif server_binary.exists():
             logging.info("Using existing valkey-server binary")
         else:
             logging.info("valkey-server binary not found, building...")
@@ -475,6 +498,7 @@ def run_benchmark_matrix(
             args,
             results_dir,
             valkey_dir,
+            commit_id,
             module_path,
             uses_test_groups,
             architecture,
@@ -545,6 +569,7 @@ def _execute_benchmark_run(
     args,
     results_dir,
     valkey_dir,
+    commit_id,
     module_path,
     uses_test_groups,
     architecture,
@@ -600,7 +625,7 @@ def _execute_benchmark_run(
             logging.info(f"Built valkey-benchmark: {benchmark_path}")
 
         runner = ClientRunner(
-            commit_id=exec_config["cfg"].get("commit_id", "HEAD"),
+            commit_id=commit_id,
             config=cfg,
             cluster_mode=cfg["cluster_mode"],
             tls_mode=cfg["tls_mode"],
@@ -615,6 +640,7 @@ def _execute_benchmark_run(
             server_launcher=launcher,
             architecture=architecture,
             uses_test_groups=uses_test_groups,
+            repository=args.repository,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]

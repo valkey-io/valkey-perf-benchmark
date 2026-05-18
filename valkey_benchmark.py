@@ -17,6 +17,7 @@ import valkey
 from process_metrics import MetricsProcessor
 from valkey_server import ServerLauncher
 from profiler import PerformanceProfiler
+from utils.git_utils import resolve_ref, get_commit_timestamp
 
 # Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
@@ -24,7 +25,7 @@ DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
 
 # Supported Valkey benchmark commands
-READ_COMMANDS = ["GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN", "XRANGE"]
+READ_COMMANDS = ["GET", "MGET", "LRANGE", "SISMEMBER", "ZSCORE", "ZRANGE"]
 WRITE_COMMANDS = [
     "SET",
     "MSET",
@@ -37,6 +38,8 @@ WRITE_COMMANDS = [
     "HSET",
     "ZADD",
     "XADD",
+    "SPOP",
+    "ZPOPMIN",
 ]
 
 # Map for read commands to populate equivalents
@@ -44,8 +47,9 @@ READ_POPULATE_MAP = {
     "GET": "SET",
     "MGET": "MSET",
     "LRANGE": "LPUSH",
-    "SPOP": "SADD",
-    "ZPOPMIN": "ZADD",
+    "SISMEMBER": "SADD",
+    "ZSCORE": "ZADD",
+    "ZRANGE": "ZADD",
 }
 
 
@@ -80,6 +84,7 @@ class ClientRunner:
         server_launcher: Optional[ServerLauncher] = None,
         architecture: Optional[str] = None,
         uses_test_groups: bool = False,
+        repository: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -96,6 +101,7 @@ class ClientRunner:
         self.server_launcher = server_launcher
         self.architecture = architecture
         self.uses_test_groups = uses_test_groups
+        self.repository = repository
         self.current_profiling_set = {"enabled": False}
         self.current_config_set = {}
         self.config_suffix = "default"
@@ -208,14 +214,8 @@ class ClientRunner:
     def get_commit_time(self, commit_id: str) -> str:
         """Return timestamp for a commit."""
         try:
-            result = self._run(
-                ["git", "show", "-s", "--format=%cI", commit_id],
-                cwd=self.valkey_path,
-                capture_output=True,
-            )
-            if result is None:
-                raise RuntimeError("Failed to get commit time: no result returned")
-            return result.stdout.strip()
+            sha = resolve_ref(commit_id, self.valkey_path)
+            return get_commit_timestamp(sha, self.valkey_path)
         except Exception as e:
             logging.exception(f"Failed to get commit time for {commit_id}: {e}")
             raise
@@ -225,6 +225,14 @@ class ClientRunner:
         if self.cluster_mode and "cluster_ports" in self.config:
             return self.config["cluster_ports"]
         return [self.config.get("port", 6379)]
+
+    def _should_add_cluster_flag(self, scenario: Optional[dict] = None) -> bool:
+        """Return whether the valkey-benchmark command should include --cluster."""
+        if not self.cluster_mode:
+            return False
+        if scenario is None:
+            return True
+        return scenario.get("cluster_execution", "single") == "single"
 
     def _flush_database(self) -> None:
         """Flush all data from the database before benchmark runs."""
@@ -646,9 +654,8 @@ class ClientRunner:
             if scenario.get("sequential", False):
                 cmd += ["--sequential"]
 
-            if scenario.get("cluster_execution") == "single":
-                if self.cluster_mode and self.config.get("cluster_nodes"):
-                    cmd += ["--cluster"]
+            if self._should_add_cluster_flag(scenario):
+                cmd += ["--cluster"]
 
             # Seed: Default ON unless explicitly disabled with "seed": false
             if (
@@ -682,6 +689,9 @@ class ClientRunner:
 
             if sequential:
                 cmd += ["--sequential"]
+
+            if self._should_add_cluster_flag():
+                cmd += ["--cluster"]
 
             # Unified seed logic: Default ON unless config disables
             if self.config.get("seed") is not False:
@@ -785,6 +795,7 @@ class ClientRunner:
                 self.io_threads,
                 self.benchmark_threads,
                 self.architecture,
+                self.repository,
             )
 
         return profiler, metrics_processor, profiling_enabled

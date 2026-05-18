@@ -4,8 +4,7 @@ import logging
 import subprocess
 import threading
 import time
-from typing import Dict, List
-from pathlib import Path
+from typing import Dict
 
 from utils.cpu_utils import parse_core_range
 

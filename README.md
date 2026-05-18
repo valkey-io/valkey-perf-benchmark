@@ -23,8 +23,31 @@ A benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-mem
 - Python 3.6+
 - Linux environment (for taskset CPU pinning)
 - Build tools required by Valkey (gcc, make, etc.)
-- Install python modules required for this project: `pip install --require-hashes -r requirements.txt`
-- To update dependencies, edit `requirements.in` and run: `pip-compile --generate-hashes requirements.in -o requirements.txt`
+
+### Development Setup
+
+Use a virtual environment for development:
+
+```bash
+# Create and activate venv
+python3 -m venv venv
+. venv/bin/activate
+
+# Install dependencies
+pip install --require-hashes -r requirements.txt
+
+# Install pip-tools for dependency management
+pip install pip-tools
+```
+
+### Updating Dependencies
+
+To update dependencies, edit `requirements.in` and regenerate the lock file:
+
+```bash
+. venv/bin/activate
+pip-compile --generate-hashes requirements.in -o requirements.txt
+```
 
 ### Additional Prerequisites for FTS Tests
 
@@ -62,6 +85,9 @@ valkey-perf-benchmark/
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # Generic CPU monitoring
 ├── process_metrics.py       # Processes and formats benchmark results
+├── tests/                   # Test suite
+│   ├── integration/        # Integration tests
+│   └── test_*.py           # Unit tests (pytest)
 ├── scripts/                 # Helper scripts
 │   ├── setup_datasets.py   # FTS dataset generator
 │   ├── flamegraph.pl       # Flamegraph visualization
@@ -71,7 +97,7 @@ valkey-perf-benchmark/
 │   ├── search_terms.csv
 │   └── proximity_phrases.csv
 ├── requirements.in          # Direct dependencies (human-editable)
-└── requirements.txt         # Locked dependencies with hashes (auto-generated)
+└── requirements.txt         # Locked dependencies with hashes (auto-generated, includes test deps)
 ```
 
 Each benchmark run clones a fresh copy of the Valkey repository for the target commit. When `--valkey-path` is omitted, the repository is cloned into `valkey_<commit>` and removed after the run to maintain build isolation and repeatability.
@@ -378,6 +404,42 @@ For local development, simply run:
 ```bash
 python benchmark.py
 ```
+
+Code formatting is enforced by CI using black. To format locally:
+```bash
+pip install black==25.1.0
+black .
+```
+
+### Running Tests
+
+The project includes a comprehensive test suite:
+
+- **Unit tests**: Cover core logic functions (parsing, validation, statistics, metrics processing)
+- **Integration tests**: Validate benchmark workflows with mock components
+
+Tests run without requiring a Valkey server or PostgreSQL.
+
+```bash
+# Install dependencies (includes test deps)
+pip install --require-hashes -r requirements.txt
+
+# Run all tests
+python -m pytest tests/ -v
+
+# Run only unit tests
+python -m pytest tests/ -v --ignore=tests/integration/
+
+# Run only integration tests
+python -m pytest tests/integration/ -v
+
+# Run tests excluding slow tests
+python -m pytest tests/ -v -m "not slow"
+```
+
+#### Integration Tests
+
+The integration tests (`tests/integration/`) validate benchmark workflows end-to-end using mock components — no Valkey server, database, or network required. See `tests/integration/README.md` for details.
 
 ### Adding New Configurations
 

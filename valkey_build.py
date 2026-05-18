@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Iterable, Optional
 
+from utils.git_utils import resolve_ref
+
 
 class ServerBuilder:
     """Compile Valkey for a specific commit."""
@@ -43,12 +45,13 @@ class ServerBuilder:
         if self.commit_id == "HEAD":
             return
 
-        # Checkout the commit_id
+        # Resolve and checkout the commit_id
         logging.info(f"Checking out commit: {self.commit_id}")
         try:
-            self._run(["git", "checkout", self.commit_id], cwd=self.valkey_dir)
-        except subprocess.CalledProcessError:
-            logging.warning(f"Failed to checkout {self.commit_id}")
+            sha = resolve_ref(self.commit_id, self.valkey_dir)
+            self._run(["git", "checkout", sha], cwd=self.valkey_dir)
+        except (subprocess.CalledProcessError, RuntimeError) as e:
+            logging.warning(f"Failed to checkout {self.commit_id}: {e}")
 
     def build(self) -> None:
         self.clone_and_checkout()

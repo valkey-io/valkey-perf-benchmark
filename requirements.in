@@ -3,6 +3,8 @@
 #
 # To regenerate requirements.txt with pinned versions and hashes:
 #   pip-compile --generate-hashes requirements.in -o requirements.txt
+#   NOTE: Must target Python 3.10 (CI version) to capture all transitive deps.
+#   Recommended: uv pip compile --generate-hashes --python-version 3.10 requirements.in -o requirements.txt
 #
 # To upgrade all packages:
 #   pip-compile --generate-hashes --upgrade requirements.in -o requirements.txt
@@ -14,5 +16,11 @@ valkey
 matplotlib
 numpy
 scipy
+uncertainties
 psycopg2-binary>=2.9.0
 psutil
+pytest>=7.0
+hypothesis>=6.0
+exceptiongroup>=1.0.0  # Required by hypothesis/pytest on Python <3.11
+tomli>=1.0.0  # Required by pytest on Python <3.11
+async-timeout>=4.0.3  # Required by valkey on Python <3.11

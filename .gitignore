@@ -11,6 +11,7 @@ venv/
 env/
 .venv/
 .env/
+uv.lock
 
 # IDE and editor files
 .vscode/

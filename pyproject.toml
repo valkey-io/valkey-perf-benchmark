@@ -1,0 +1,4 @@
+# Black formatter config - CI uses black==25.1.0
+[tool.black]
+line-length = 88
+target-version = ["py310"]
