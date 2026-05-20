@@ -282,25 +282,48 @@ jobs:
 
       - name: Open GitHub issue for regression
         if: steps.detect_regression.outputs.has_regression == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const report = JSON.parse(process.env.REPORT);
             const newCommitShort = report.new_commit.slice(0, 8);
             const baselineCommitShort = report.baseline_commit.slice(0, 8);
-            const title = `Perf regression: ${newCommitShort} vs ${baselineCommitShort}`;
+            const title = `[PERF-REGRESSION] ${newCommitShort} vs ${baselineCommitShort}`;
+            const label = 'performance-regression';
 
-            // Check for duplicate issues (open or closed) with the same title
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'all',
-              labels: 'performance,regression',
-              per_page: 100,
-            });
-            const duplicate = existing.data.find(issue => issue.title === title);
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: 'e11d48',
+                  description: 'Performance regression detected by CI',
+                });
+              }
+            }
+
+            // Check for duplicate issues with the same title
+            const existingIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: label,
+                state: 'open',
+              },
+              (response) => response.data
+            );
+            const duplicate = existingIssues.find(i => i.title === title);
             if (duplicate) {
-              core.info(`Issue already exists for this commit pair: #${duplicate.number} — skipping.`);
+              core.info(`Issue already exists: #${duplicate.number} — skipping.`);
               return;
             }
 
@@ -315,6 +338,7 @@ jobs:
               `### Regressions`,
               ...lines,
               ``,
+              `---`,
               `_Detected automatically by the [continuous benchmark workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
             ].join('\n');
             await github.rest.issues.create({
@@ -322,22 +346,21 @@ jobs:
               repo: context.repo.repo,
               title,
               body,
-              labels: ['performance', 'regression'],
+              labels: [label],
             });
         env:
           REPORT: ${{ steps.detect_regression.outputs.report }}
 
       - name: Notify Slack on regression
         if: steps.detect_regression.outputs.has_regression == 'true'
-        continue-on-error: true
-        run: |
-          report='${{ steps.detect_regression.outputs.report }}'
-          new_commit=$(echo "$report" | python -c "import sys,json; d=json.load(sys.stdin); print(d['new_commit'][:8])")
-          baseline_commit=$(echo "$report" | python -c "import sys,json; d=json.load(sys.stdin); print(d['baseline_commit'][:8])")
-          count=$(echo "$report" | python -c "import sys,json; print(len(json.load(sys.stdin)['regressions']))")
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            -H 'Content-Type: application/json' \
-            -d "{\"text\":\":warning: *Valkey performance regression detected*\nNew: \`${new_commit}\` vs baseline: \`${baseline_commit}\`\n${count} regression(s) found. See the <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|workflow run> for details.\"}"
+        uses: ravsamhq/notify-slack-action@042f29088bb3bdbda5b4ff7b4818466a277fa8f7 # v2.5.0
+        with:
+          status: "failure"
+          notify_when: "failure"
+          notification_title: "Perf regression <${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}}|detected>"
+          message_format: ":warning: Regression in `${{ steps.detect_regression.outputs.new_commit }}` vs baseline `${{ steps.detect_regression.outputs.baseline_commit }}`"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
       - name: Cleanup any running valkey processes and files
         if: always()
