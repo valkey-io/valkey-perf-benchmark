@@ -32,27 +32,34 @@ CONFIGS  = [
 
 BASELINE_RPS = 500_000.0
 REGRESSION_FACTOR = 0.85  # 15% drop — above the 5% threshold
+NUM_RUNS = 10  # need >1 run for CI-based significance test
+RPS_NOISE = 0.005  # ±0.5% noise per run — tight enough that 15% drop is clearly significant
 
 
 def insert_rows(cur, commit: str, rps_multiplier: float, ts: datetime) -> None:
-    for cmd in COMMANDS:
-        for cfg in CONFIGS:
-            cur.execute(
-                """
-                INSERT INTO benchmark_metrics
-                  (timestamp, commit, command, pipeline, io_threads, clients,
-                   data_size, rps, avg_latency_ms, p50_latency_ms,
-                   p95_latency_ms, p99_latency_ms, test_type)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    ts, commit, cmd,
-                    cfg["pipeline"], cfg["io_threads"], cfg["clients"], cfg["data_size"],
-                    round(BASELINE_RPS * rps_multiplier, 2),
-                    0.5, 0.4, 1.2, 2.0,
-                    "core",
-                ),
-            )
+    import random
+    random.seed(42)
+    for run in range(NUM_RUNS):
+        run_ts = ts + timedelta(minutes=run)
+        noise = 1 + random.uniform(-RPS_NOISE, RPS_NOISE)
+        for cmd in COMMANDS:
+            for cfg in CONFIGS:
+                cur.execute(
+                    """
+                    INSERT INTO benchmark_metrics
+                      (timestamp, commit, command, pipeline, io_threads, clients,
+                       data_size, rps, avg_latency_ms, p50_latency_ms,
+                       p95_latency_ms, p99_latency_ms, test_type)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        run_ts, commit, cmd,
+                        cfg["pipeline"], cfg["io_threads"], cfg["clients"], cfg["data_size"],
+                        round(BASELINE_RPS * rps_multiplier * noise, 2),
+                        0.5, 0.4, 1.2, 2.0,
+                        "core",
+                    ),
+                )
 
 
 def setup_db() -> psycopg2.extensions.connection:
@@ -135,7 +142,7 @@ def main() -> None:
         print("FAIL: no regression detected — check the data or threshold")
         sys.exit(1)
     else:
-        print(f"FAIL: unexpected exit code {exit_code}")
+        print(f"FAIL: script crashed with exit code {exit_code} — check stderr above")
         sys.exit(1)
 
 

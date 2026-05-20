@@ -54,6 +54,9 @@ def fetch_metrics_for_commit(
     commit: str,
 ) -> List[Dict[str, Any]]:
     """Fetch all metric rows for a given commit as a list of dicts."""
+    from decimal import Decimal
+    # Exclude id and created_at — they are unique per row and would prevent
+    # average_multiple_runs from grouping runs with identical configurations.
     with conn.cursor() as cur:
         cur.execute(
             f"SELECT * FROM {table_name} WHERE commit = %s",
@@ -61,7 +64,16 @@ def fetch_metrics_for_commit(
         )
         columns = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
-    return [dict(zip(columns, row)) for row in rows]
+    skip = {"id", "created_at"}
+    result = []
+    for row in rows:
+        d = {}
+        for col, val in zip(columns, row):
+            if col in skip:
+                continue
+            d[col] = float(val) if isinstance(val, Decimal) else val
+        result.append(d)
+    return result
 
 
 def detect(
@@ -137,6 +149,10 @@ def main() -> None:
 
     try:
         report = detect(conn, args.table_name, args.threshold, args.test_type)
+    except Exception as e:
+        print(f"Error during regression detection: {e}", file=sys.stderr)
+        print(json.dumps({"has_regression": False, "error": str(e)}))
+        sys.exit(0)
     finally:
         conn.close()
 

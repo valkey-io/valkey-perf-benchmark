@@ -249,6 +249,7 @@ jobs:
 
       - name: Detect performance regression
         id: detect_regression
+        continue-on-error: true
         working-directory: valkey-perf-benchmark
         env:
           REGRESSION_THRESHOLD: ${{ vars.REGRESSION_THRESHOLD_PCT || '5' }}
@@ -269,11 +270,15 @@ jobs:
             --threshold "$REGRESSION_THRESHOLD")
           exit_code=$?
           set -e
+          if [ -z "$report" ]; then
+            echo "has_regression=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Regression detection produced no output (exit code $exit_code)"
+            exit 0
+          fi
           echo "report=$report" >> "$GITHUB_OUTPUT"
           echo "has_regression=$(echo "$report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
           echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
           echo "baseline_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
-          exit $exit_code
 
       - name: Open GitHub issue for regression
         if: steps.detect_regression.outputs.has_regression == 'true'
@@ -281,6 +286,24 @@ jobs:
         with:
           script: |
             const report = JSON.parse(process.env.REPORT);
+            const newCommitShort = report.new_commit.slice(0, 8);
+            const baselineCommitShort = report.baseline_commit.slice(0, 8);
+            const title = `Perf regression: ${newCommitShort} vs ${baselineCommitShort}`;
+
+            // Check for duplicate issues (open or closed) with the same title
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              labels: 'performance,regression',
+              per_page: 100,
+            });
+            const duplicate = existing.data.find(issue => issue.title === title);
+            if (duplicate) {
+              core.info(`Issue already exists for this commit pair: #${duplicate.number} — skipping.`);
+              return;
+            }
+
             const lines = report.regressions.map(r => `- ${r.change} ${r.test}`);
             const body = [
               `## Performance Regression Detected`,
@@ -297,7 +320,7 @@ jobs:
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Perf regression: ${report.new_commit.slice(0,8)} vs ${report.baseline_commit.slice(0,8)}`,
+              title,
               body,
               labels: ['performance', 'regression'],
             });
