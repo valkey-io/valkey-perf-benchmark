@@ -409,3 +409,70 @@ class TestGetActivePorts:
     def test_cluster_mode_without_cluster_ports_falls_back(self):
         cfg = {"cluster_mode": True, "port": 6380}
         assert _get_active_ports(cfg) == [6380]
+
+
+# ---------------------------------------------------------------------------
+# validate_config — custom-server-configs
+# ---------------------------------------------------------------------------
+
+
+class TestCustomServerConfigsValidation:
+    """Tests for custom-server-configs validation in validate_config."""
+
+    def test_valid_dict_with_str_int_float(self, minimal_valid_config):
+        minimal_valid_config["custom-server-configs"] = {
+            "maxmemory": "4gb",
+            "timeout": 300,
+            "tcp-keepalive": 60.0,
+        }
+        validate_config(minimal_valid_config)  # should not raise
+
+    def test_missing_key_is_fine(self, minimal_valid_config):
+        assert "custom-server-configs" not in minimal_valid_config
+        validate_config(minimal_valid_config)  # should not raise
+
+    def test_empty_dict_accepted(self, minimal_valid_config):
+        minimal_valid_config["custom-server-configs"] = {}
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["a string", ["a", "list"], 42, None])
+    def test_reject_non_dict(self, minimal_valid_config, bad_value):
+        minimal_valid_config["custom-server-configs"] = bad_value
+        with pytest.raises(ValueError, match="must be a dictionary"):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_key", [1, None])
+    def test_reject_non_string_key(self, minimal_valid_config, bad_key):
+        minimal_valid_config["custom-server-configs"] = {bad_key: "v"}
+        with pytest.raises(ValueError, match="keys must be strings"):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_value", [True, False])
+    def test_reject_bool_value(self, minimal_valid_config, bad_value):
+        minimal_valid_config["custom-server-configs"] = {"k": bad_value}
+        with pytest.raises(ValueError, match="values must be strings or numbers"):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_value", [[1, 2], {"nested": 1}, None])
+    def test_reject_non_scalar_value(self, minimal_valid_config, bad_value):
+        minimal_valid_config["custom-server-configs"] = {"k": bad_value}
+        with pytest.raises(ValueError, match="values must be strings or numbers"):
+            validate_config(minimal_valid_config)
+
+
+class TestCustomServerConfigFileValidation:
+    """Tests for custom-server-config-file validation in validate_config."""
+
+    def test_valid_string_path(self, minimal_valid_config):
+        minimal_valid_config["custom-server-config-file"] = "/etc/valkey/extra.conf"
+        validate_config(minimal_valid_config)  # should not raise
+
+    def test_missing_key_is_fine(self, minimal_valid_config):
+        assert "custom-server-config-file" not in minimal_valid_config
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", [42, ["/path"], {"path": "x"}, None, True])
+    def test_reject_non_string(self, minimal_valid_config, bad_value):
+        minimal_valid_config["custom-server-config-file"] = bad_value
+        with pytest.raises(ValueError, match="must be a string path"):
+            validate_config(minimal_valid_config)
