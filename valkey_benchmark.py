@@ -761,6 +761,7 @@ class ClientRunner:
         command: str,
         timestamp: str,
         config_set: dict,
+        description: str = "",
     ) -> dict:
         """Create failure marker dict for failed scenarios."""
         return {
@@ -920,6 +921,7 @@ class ClientRunner:
                         scenario["command"],
                         commit_time,
                         config_set,
+                        scenario.get("description", ""),
                     )
                 return None
 
@@ -971,6 +973,7 @@ class ClientRunner:
                     scenario["command"],
                     commit_time,
                     config_set,
+                    scenario.get("description", ""),
                 )
 
         return None
