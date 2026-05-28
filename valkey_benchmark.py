@@ -393,6 +393,7 @@ class ClientRunner:
         for test_group in self.config.get("test_groups", []):
             group_id = test_group.get("group", "unknown")
             group_description = test_group.get("description")
+            group_description = test_group.get("description")
 
             # Skip filtered groups
             if groups_to_run and group_id not in groups_to_run:
@@ -401,7 +402,9 @@ class ClientRunner:
                 )
                 continue
 
-            logging.info(f"=== Group {group_id}: {group_description or ''} ===")
+            logging.info(
+                f"=== Group {group_id}: {group_description or ''} ==="
+            )
 
             for scenario in test_group.get("scenarios", []):
                 # Expand scenario options (e.g., with/without flags)
@@ -420,6 +423,7 @@ class ClientRunner:
                         "format": "test_groups",
                         "scenario": expanded_scenario,
                         "group_id": group_id,
+                        "group_description": group_description,
                         "group_description": group_description,
                         "config_set": self.current_config_set,
                         "config_suffix": self.config_suffix,
@@ -545,6 +549,7 @@ class ClientRunner:
             commit_time,
             data["config_set"],
             data["config_suffix"],
+            data.get("group_description"),
             data.get("group_description"),
         )
 
@@ -752,6 +757,7 @@ class ClientRunner:
 
         return scenarios
 
+
     def _create_failure_marker(
         self,
         group_id: int,
@@ -761,7 +767,6 @@ class ClientRunner:
         command: str,
         timestamp: str,
         config_set: dict,
-        description: str = "",
     ) -> dict:
         """Create failure marker dict for failed scenarios."""
         return {
@@ -921,7 +926,6 @@ class ClientRunner:
                         scenario["command"],
                         commit_time,
                         config_set,
-                        scenario.get("description", ""),
                     )
                 return None
 
@@ -973,7 +977,6 @@ class ClientRunner:
                     scenario["command"],
                     commit_time,
                     config_set,
-                    scenario.get("description", ""),
                 )
 
         return None
