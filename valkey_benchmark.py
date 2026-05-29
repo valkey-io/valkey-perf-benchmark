@@ -392,6 +392,7 @@ class ClientRunner:
 
         for test_group in self.config.get("test_groups", []):
             group_id = test_group.get("group", "unknown")
+            group_description = test_group.get("description")
 
             # Skip filtered groups
             if groups_to_run and group_id not in groups_to_run:
@@ -400,9 +401,7 @@ class ClientRunner:
                 )
                 continue
 
-            logging.info(
-                f"=== Group {group_id}: {test_group.get('description', '')} ==="
-            )
+            logging.info(f"=== Group {group_id}: {group_description or ''} ===")
 
             for scenario in test_group.get("scenarios", []):
                 # Expand scenario options (e.g., with/without flags)
@@ -421,6 +420,7 @@ class ClientRunner:
                         "format": "test_groups",
                         "scenario": expanded_scenario,
                         "group_id": group_id,
+                        "group_description": group_description,
                         "config_set": self.current_config_set,
                         "config_suffix": self.config_suffix,
                     }
@@ -545,6 +545,7 @@ class ClientRunner:
             commit_time,
             data["config_set"],
             data["config_suffix"],
+            data.get("group_description"),
         )
 
     def _generate_combinations(self) -> List[tuple]:
@@ -765,6 +766,8 @@ class ClientRunner:
         return {
             "test_id": f"{group_id}_{scenario_id}",
             "test_phase": scenario_type,
+            "group": group_id,
+            "scenario": scenario_id,
             "status": "failed",
             "error": error,
             "command": command,
@@ -824,6 +827,7 @@ class ClientRunner:
         commit_time,
         config_set,
         config_suffix,
+        group_description=None,
     ):
         """Run a single scenario."""
         scenario_type = scenario.get("type", "test")
@@ -945,6 +949,13 @@ class ClientRunner:
                     metrics["status"] = "success"
                     metrics["test_id"] = f"{group_id}_{scenario_id}"
                     metrics["test_phase"] = scenario_type
+                    metrics["group"] = group_id
+                    metrics["scenario"] = scenario_id
+                    metrics["scenario_type"] = scenario_type
+                    if group_description:
+                        metrics["group_description"] = group_description
+                    if scenario.get("description"):
+                        metrics["scenario_description"] = scenario["description"]
                     metrics["config_set"] = config_set
                     if scenario.get("dataset"):
                         metrics["dataset"] = scenario["dataset"]

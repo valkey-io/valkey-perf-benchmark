@@ -223,6 +223,43 @@ class TestAnalyzeMetricsSchema:
         assert schema["rps"] == "DECIMAL(15,6)"
         assert schema["pipeline"] == "INTEGER"
 
+    def test_group_description_uses_varchar500(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "group_description": "small payload latency suite",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["group_description"] == "VARCHAR(500)"
+
+    def test_scenario_description_uses_varchar500(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "scenario_description": "GET, 64B payload, pipeline=1, 50 clients",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["scenario_description"] == "VARCHAR(500)"
+
+    def test_long_description_still_varchar500(self):
+        # Override default VARCHAR(50)/(255)/TEXT bucketing — descriptions
+        # always get VARCHAR(500) regardless of sample length.
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "group_description": "x" * 400,
+                "scenario_description": "y" * 10,
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["group_description"] == "VARCHAR(500)"
+        assert schema["scenario_description"] == "VARCHAR(500)"
+
 
 # ---------------------------------------------------------------------------
 # convert_metrics_to_rows

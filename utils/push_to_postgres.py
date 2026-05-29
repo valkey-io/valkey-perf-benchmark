@@ -80,6 +80,8 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
             schema[field] = "TIMESTAMPTZ NOT NULL"
         elif field in ["commit", "command"]:
             schema[field] = f"VARCHAR(255) NOT NULL"
+        elif field in ["group_description", "scenario_description"]:
+            schema[field] = "VARCHAR(500)"
         else:
             sample_value = field_samples.get(field)
             column_type = detect_field_type(sample_value)
