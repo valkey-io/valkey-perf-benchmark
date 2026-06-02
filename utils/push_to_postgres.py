@@ -259,6 +259,11 @@ def convert_metrics_to_rows(
                         row.append(None)
                 else:
                     row.append(None)
+            elif column in ["group_description", "scenario_description"]:
+                value = metric.get(column)
+                if isinstance(value, str) and len(value) > 500:
+                    value = value[:500]
+                row.append(value)
             else:
                 # Direct field mapping since field names are now normalized
                 row.append(metric.get(column))

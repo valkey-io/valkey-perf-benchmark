@@ -323,3 +323,22 @@ class TestConvertMetricsToRows:
         columns = ["timestamp", "commit"]
         rows, skipped = convert_metrics_to_rows(metrics, columns)
         assert isinstance(rows[0][0], datetime)
+
+    def test_descriptions_over_500_chars_truncated(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "group_description": "g" * 750,
+                "scenario_description": "s" * 600,
+            }
+        ]
+        columns = [
+            "timestamp",
+            "commit",
+            "group_description",
+            "scenario_description",
+        ]
+        rows, _ = convert_metrics_to_rows(metrics, columns)
+        assert rows[0][2] == "g" * 500
+        assert rows[0][3] == "s" * 500

@@ -951,7 +951,6 @@ class ClientRunner:
                     metrics["test_phase"] = scenario_type
                     metrics["group"] = group_id
                     metrics["scenario"] = scenario_id
-                    metrics["scenario_type"] = scenario_type
                     if group_description:
                         metrics["group_description"] = group_description
                     if scenario.get("description"):
