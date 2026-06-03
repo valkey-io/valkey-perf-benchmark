@@ -389,12 +389,16 @@ class TestIterateTestGroupsScenarios:
                     "group": 1,
                     "description": "small payload latency",
 <<<<<<< HEAD
+<<<<<<< HEAD
                     "scenarios": [{"id": "s1", "command": "GET", "type": "read"}],
 =======
                     "scenarios": [
                         {"id": "s1", "command": "GET", "type": "read"}
                     ],
 >>>>>>> c2961f0 (add additional unit tests for new features)
+=======
+                    "scenarios": [{"id": "s1", "command": "GET", "type": "read"}],
+>>>>>>> 5529b33 (Sync with PR branch: review feedback updates)
                 }
             ],
         )
@@ -412,12 +416,16 @@ class TestIterateTestGroupsScenarios:
                 {
                     "group": 2,
 <<<<<<< HEAD
+<<<<<<< HEAD
                     "scenarios": [{"id": "s1", "command": "SET", "type": "write"}],
 =======
                     "scenarios": [
                         {"id": "s1", "command": "SET", "type": "write"}
                     ],
 >>>>>>> c2961f0 (add additional unit tests for new features)
+=======
+                    "scenarios": [{"id": "s1", "command": "SET", "type": "write"}],
+>>>>>>> 5529b33 (Sync with PR branch: review feedback updates)
                 }
             ],
         )
