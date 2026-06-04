@@ -184,6 +184,14 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--module-commit",
+        type=str,
+        default=None,
+        metavar="SHA",
+        help="Module git commit SHA. If provided, recorded in metrics.json as module_commit.",
+    )
+
+    parser.add_argument(
         "--skip-config-set",
         action="store_true",
         help="Skip CONFIG SET commands during benchmark initialization. "
@@ -470,6 +478,7 @@ def run_benchmark_matrix(
     args: argparse.Namespace,
     module_path: Optional[str] = None,
     uses_test_groups: bool = False,
+    module_commit_id: Optional[str] = None,
 ) -> None:
     """Orchestrate benchmark execution for all configurations."""
     if args.module:
@@ -521,6 +530,7 @@ def run_benchmark_matrix(
             uses_test_groups,
             architecture,
             client_cpu_ranges,
+            module_commit_id,
         )
 
     # Cleanup
@@ -592,6 +602,7 @@ def _execute_benchmark_run(
     uses_test_groups,
     architecture,
     client_cpu_ranges,
+    module_commit_id=None,
 ):
     """Execute a single benchmark run with specific configuration."""
     cfg = exec_config["cfg"]
@@ -659,6 +670,7 @@ def _execute_benchmark_run(
             architecture=architecture,
             uses_test_groups=uses_test_groups,
             repository=args.repository,
+            module_commit_id=module_commit_id,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]
@@ -815,6 +827,7 @@ def main() -> None:
                 args=args,
                 module_path=module_path,
                 uses_test_groups=uses_test_groups,
+                module_commit_id=args.module_commit,
             )
 
 
