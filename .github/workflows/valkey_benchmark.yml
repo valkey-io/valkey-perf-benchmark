@@ -275,6 +275,7 @@ jobs:
             echo "::warning::Regression detection produced no output (exit code $exit_code)"
             exit 0
           fi
+          report=$(echo "$report" | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
           echo "report=$report" >> "$GITHUB_OUTPUT"
           echo "has_regression=$(echo "$report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
           echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"

@@ -96,7 +96,7 @@ jobs:
             --database postgres --username postgres --password test \
             --table-name benchmark_metrics \
             --threshold 5 \
-            --sslmode disable)
+            --sslmode disable 2>/dev/null)
           exit_code=$?
           set -e
           echo "Exit code: $exit_code"
@@ -105,10 +105,12 @@ jobs:
             echo "has_regression=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "report=$report" >> "$GITHUB_OUTPUT"
-          echo "has_regression=$(echo "$report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
-          echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
-          echo "baseline_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          # Compact JSON to single line for GITHUB_OUTPUT
+          compact_report=$(echo "$report" | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
+          echo "report=$compact_report" >> "$GITHUB_OUTPUT"
+          echo "has_regression=$(echo "$compact_report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
+          echo "new_commit=$(echo "$compact_report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          echo "baseline_commit=$(echo "$compact_report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
 
       - name: Open GitHub issue for regression
         if: steps.detect_regression.outputs.has_regression == 'true'
