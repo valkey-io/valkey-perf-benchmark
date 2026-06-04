@@ -82,6 +82,8 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
             schema[field] = "TIMESTAMPTZ NOT NULL"
         elif field in ["commit", "command"]:
             schema[field] = f"VARCHAR(255) NOT NULL"
+        elif field == "module_commit":
+            schema[field] = "VARCHAR(255)"
         elif field in ["group_description", "scenario_description"]:
             schema[field] = f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
         else:
