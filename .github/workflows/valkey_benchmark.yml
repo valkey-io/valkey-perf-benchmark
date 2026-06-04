@@ -291,19 +291,21 @@ jobs:
             const baselineCommitShort = report.baseline_commit.slice(0, 8);
             const title = `[PERF-REGRESSION] ${newCommitShort} vs ${baselineCommitShort}`;
             const label = 'performance-regression';
+            const targetOwner = 'valkey-io';
+            const targetRepo = 'valkey';
 
             // Ensure label exists
             try {
               await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: targetOwner,
+                repo: targetRepo,
                 name: label,
               });
             } catch (e) {
               if (e.status === 404) {
                 await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
+                  owner: targetOwner,
+                  repo: targetRepo,
                   name: label,
                   color: 'e11d48',
                   description: 'Performance regression detected by CI',
@@ -315,8 +317,8 @@ jobs:
             const existingIssues = await github.paginate(
               github.rest.issues.listForRepo,
               {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner: targetOwner,
+                repo: targetRepo,
                 labels: label,
                 state: 'open',
               },
@@ -343,8 +345,8 @@ jobs:
               `_Detected automatically by the [continuous benchmark workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
             ].join('\n');
             await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: targetOwner,
+              repo: targetRepo,
               title,
               body,
               labels: [label],
