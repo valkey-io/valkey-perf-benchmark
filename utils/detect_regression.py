@@ -31,7 +31,7 @@ def fetch_last_two_commits(
             f"""
             SELECT commit, MAX(timestamp) as latest
             FROM {table_name}
-            WHERE test_type = %s
+            WHERE test_type = %s OR test_type IS NULL
             GROUP BY commit
             ORDER BY latest DESC
             LIMIT 2
