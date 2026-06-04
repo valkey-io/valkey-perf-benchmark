@@ -55,6 +55,7 @@ def fetch_metrics_for_commit(
 ) -> List[Dict[str, Any]]:
     """Fetch all metric rows for a given commit as a list of dicts."""
     from decimal import Decimal
+
     # Exclude id and created_at — they are unique per row and would prevent
     # average_multiple_runs from grouping runs with identical configurations.
     with conn.cursor() as cur:
