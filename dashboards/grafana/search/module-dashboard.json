@@ -132,29 +132,17 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "palette-classic" },
           "custom": {
-            "axisLabel": "RPS",
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "lineWidth": 1
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
+            "filterable": true
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
       "id": 3,
       "options": {
-        "barRadius": 0.05,
-        "barWidth": 0.7,
-        "orientation": "horizontal",
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "showHeader": true,
+        "sortBy": [{ "displayName": "timestamp", "desc": true }]
       },
       "targets": [
         {
@@ -162,56 +150,12 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT scenario || ' (' || test_phase || ')' AS scenario, AVG(rps) AS rps FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' AND ('$scenario' = 'all' OR scenario = '$scenario') AND timestamp = (SELECT MAX(timestamp) FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description') GROUP BY scenario, test_phase ORDER BY rps DESC",
+          "rawSql": "SELECT * FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' AND ('$scenario' = 'all' OR scenario = '$scenario') ORDER BY timestamp DESC LIMIT 100",
           "refId": "A"
         }
       ],
-      "title": "RPS by scenario (latest run)",
-      "type": "barchart"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${DS_POSTGRES}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisLabel": "ms",
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "lineWidth": 1
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "green", "value": null }]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
-      "id": 4,
-      "options": {
-        "barRadius": 0.05,
-        "barWidth": 0.7,
-        "orientation": "horizontal",
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
-        "tooltip": { "mode": "single", "sort": "none" }
-      },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT scenario || ' (' || test_phase || ')' AS scenario, AVG(p99_latency_ms) AS p99_latency_ms FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' AND ('$scenario' = 'all' OR scenario = '$scenario') AND timestamp = (SELECT MAX(timestamp) FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description') GROUP BY scenario, test_phase ORDER BY p99_latency_ms DESC",
-          "refId": "A"
-        }
-      ],
-      "title": "p99 Latency by scenario (latest run)",
-      "type": "barchart"
+      "title": "Raw Metrics",
+      "type": "table"
     }
   ],
   "preload": false,
@@ -253,14 +197,14 @@
       {
         "current": {},
         "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
-        "definition": "SELECT DISTINCT scenario || ' (' || test_phase || ')' AS __text, scenario AS __value FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' ORDER BY scenario",
+        "definition": "SELECT DISTINCT scenario || COALESCE(' (' || scenario_description || ')', '') AS __text, scenario AS __value FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' ORDER BY scenario",
         "hide": 0,
         "includeAll": true,
         "label": "Scenario",
         "multi": false,
         "name": "scenario",
         "options": [],
-        "query": "SELECT DISTINCT scenario || ' (' || test_phase || ')' AS __text, scenario AS __value FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' ORDER BY scenario",
+        "query": "SELECT DISTINCT scenario || COALESCE(' (' || scenario_description || ')', '') AS __text, scenario AS __value FROM benchmark_metrics_search WHERE module = '$module' AND group_description = '$group_description' ORDER BY scenario",
         "refresh": 1,
         "sort": 0,
         "type": "query"
