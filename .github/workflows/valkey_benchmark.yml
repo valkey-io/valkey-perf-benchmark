@@ -342,7 +342,7 @@ jobs:
               `### Regressions`,
               ...lines,
               ``,
-              `📊 [View on Grafana Dashboard](https://perf-dashboard.valkey.io/public-dashboards/3e45bf8ded3043edaa941331cd1a94e2?from=now-7d&to=now&timezone=UTC)`,
+              `[View on Grafana Dashboard](https://perf-dashboard.valkey.io/public-dashboards/3e45bf8ded3043edaa941331cd1a94e2?from=now-7d&to=now&timezone=UTC)`,
               ``,
               `---`,
               `_Detected automatically by the [continuous benchmark workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
