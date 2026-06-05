@@ -281,27 +281,18 @@ jobs:
           echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
           echo "baseline_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
 
-      - name: Generate bot token
-        id: bot-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
-          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
-          owner: valkey-io
-          repositories: valkey
-
       - name: Open GitHub issue for regression
         if: steps.detect_regression.outputs.has_regression == 'true'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
-          github-token: ${{ steps.bot-token.outputs.token }}
+          github-token: ${{ secrets.AUTOMATION_PAT }}
           script: |
             const report = JSON.parse(process.env.REPORT);
             const newCommitShort = report.new_commit.slice(0, 8);
             const baselineCommitShort = report.baseline_commit.slice(0, 8);
             const title = `[PERF-REGRESSION] ${newCommitShort} vs ${baselineCommitShort}`;
             const label = 'performance-regression';
-            const targetOwner = 'valkey-io';
+            const targetOwner = 'hanxizh9910';
             const targetRepo = 'valkey';
 
             // Ensure label exists
