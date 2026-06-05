@@ -86,7 +86,7 @@ jobs:
           print('Inserted dummy data: baseline=500K RPS, new=425K RPS (15% drop)')
           "
 
-      - name: Detect regression
+      - name: Detect performance regression
         id: detect_regression
         continue-on-error: true
         run: |
@@ -96,21 +96,19 @@ jobs:
             --database postgres --username postgres --password test \
             --table-name benchmark_metrics \
             --threshold 5 \
-            --sslmode disable 2>/dev/null)
+            --sslmode disable)
           exit_code=$?
           set -e
-          echo "Exit code: $exit_code"
-          echo "$report"
           if [ -z "$report" ]; then
             echo "has_regression=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Regression detection produced no output (exit code $exit_code)"
             exit 0
           fi
-          # Compact JSON to single line for GITHUB_OUTPUT
-          compact_report=$(echo "$report" | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
-          echo "report=$compact_report" >> "$GITHUB_OUTPUT"
-          echo "has_regression=$(echo "$compact_report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
-          echo "new_commit=$(echo "$compact_report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
-          echo "baseline_commit=$(echo "$compact_report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          report=$(echo "$report" | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+          echo "has_regression=$(echo "$report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
+          echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          echo "baseline_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
 
       - name: Open GitHub issue for regression
         if: steps.detect_regression.outputs.has_regression == 'true'
@@ -155,9 +153,29 @@ jobs:
               `### Regressions`,
               ...lines,
               ``,
+              `[View on Grafana Dashboard](https://perf-dashboard.valkey.io/public-dashboards/3e45bf8ded3043edaa941331cd1a94e2?from=now-7d&to=now&timezone=UTC)`,
+              ``,
               `---`,
-              `_Detected automatically by the [test workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
+              `_Detected automatically by the [continuous benchmark workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
             ].join('\n');
+
+            // Check for duplicate issues
+            const existingIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: targetOwner,
+                repo: targetRepo,
+                labels: label,
+                state: 'open',
+              },
+              (response) => response.data
+            );
+            const duplicate = existingIssues.find(i => i.title === title);
+            if (duplicate) {
+              core.info(`Issue already exists: #${duplicate.number} — skipping.`);
+              return;
+            }
+
             await github.rest.issues.create({
               owner: targetOwner,
               repo: targetRepo,
