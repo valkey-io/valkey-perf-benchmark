@@ -19,6 +19,8 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import execute_values
 
+DESCRIPTION_MAX_LENGTH = 500
+
 
 def detect_field_type(value: Any) -> str:
     """Detect PostgreSQL column type from a sample value."""
@@ -81,7 +83,7 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
         elif field in ["commit", "command"]:
             schema[field] = f"VARCHAR(255) NOT NULL"
         elif field in ["group_description", "scenario_description"]:
-            schema[field] = "VARCHAR(500)"
+            schema[field] = f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
         else:
             sample_value = field_samples.get(field)
             column_type = detect_field_type(sample_value)
@@ -261,8 +263,8 @@ def convert_metrics_to_rows(
                     row.append(None)
             elif column in ["group_description", "scenario_description"]:
                 value = metric.get(column)
-                if isinstance(value, str) and len(value) > 500:
-                    value = value[:500]
+                if isinstance(value, str) and len(value) > DESCRIPTION_MAX_LENGTH:
+                    value = value[:DESCRIPTION_MAX_LENGTH]
                 row.append(value)
             else:
                 # Direct field mapping since field names are now normalized
