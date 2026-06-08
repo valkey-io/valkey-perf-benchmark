@@ -223,6 +223,43 @@ class TestAnalyzeMetricsSchema:
         assert schema["rps"] == "DECIMAL(15,6)"
         assert schema["pipeline"] == "INTEGER"
 
+    def test_group_description_uses_varchar500(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "group_description": "small payload latency suite",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["group_description"] == "VARCHAR(500)"
+
+    def test_scenario_description_uses_varchar500(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "scenario_description": "GET, 64B payload, pipeline=1, 50 clients",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["scenario_description"] == "VARCHAR(500)"
+
+    def test_long_description_still_varchar500(self):
+        # Override default VARCHAR(50)/(255)/TEXT bucketing — descriptions
+        # always get VARCHAR(500) regardless of sample length.
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "group_description": "x" * 400,
+                "scenario_description": "y" * 10,
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["group_description"] == "VARCHAR(500)"
+        assert schema["scenario_description"] == "VARCHAR(500)"
+
 
 # ---------------------------------------------------------------------------
 # convert_metrics_to_rows
@@ -286,3 +323,22 @@ class TestConvertMetricsToRows:
         columns = ["timestamp", "commit"]
         rows, skipped = convert_metrics_to_rows(metrics, columns)
         assert isinstance(rows[0][0], datetime)
+
+    def test_descriptions_over_500_chars_truncated(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "group_description": "g" * 750,
+                "scenario_description": "s" * 600,
+            }
+        ]
+        columns = [
+            "timestamp",
+            "commit",
+            "group_description",
+            "scenario_description",
+        ]
+        rows, _ = convert_metrics_to_rows(metrics, columns)
+        assert rows[0][2] == "g" * 500
+        assert rows[0][3] == "s" * 500

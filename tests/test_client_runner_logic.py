@@ -340,3 +340,181 @@ class TestCreateFailureMarker:
             config_set={},
         )
         assert marker["config_set"] == {}
+
+    def test_marker_includes_group_and_scenario(self, minimal_client_runner):
+        marker = minimal_client_runner._create_failure_marker(
+            group_id=7,
+            scenario_id="search_idx",
+            scenario_type="read",
+            error="boom",
+            command="FT.SEARCH",
+            timestamp="2024-01-01T00:00:00",
+            config_set={},
+        )
+        assert marker["group"] == 7
+        assert marker["scenario"] == "search_idx"
+
+
+# ---------------------------------------------------------------------------
+# _iterate_test_groups_scenarios
+# ---------------------------------------------------------------------------
+
+
+class TestIterateTestGroupsScenarios:
+    """Tests for ClientRunner._iterate_test_groups_scenarios.
+
+    Verifies that group_description (and per-scenario description) from
+    the config flow through to each yielded scenario item so they can
+    be picked up downstream when metrics are written.
+    """
+
+    def _runner_with_groups(self, minimal_valid_config, test_groups):
+        cfg = {**minimal_valid_config, "test_groups": test_groups}
+        return ClientRunner(
+            commit_id="abc",
+            config=cfg,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+        )
+
+    def test_yields_group_description(self, minimal_valid_config):
+        runner = self._runner_with_groups(
+            minimal_valid_config,
+            [
+                {
+                    "group": 1,
+                    "description": "small payload latency",
+                    "scenarios": [{"id": "s1", "command": "GET", "type": "read"}],
+                }
+            ],
+        )
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        assert len(items) == 1
+        assert items[0]["group_id"] == 1
+        assert items[0]["group_description"] == "small payload latency"
+
+    def test_group_description_is_none_when_missing(self, minimal_valid_config):
+        runner = self._runner_with_groups(
+            minimal_valid_config,
+            [
+                {
+                    "group": 2,
+                    "scenarios": [{"id": "s1", "command": "SET", "type": "write"}],
+                }
+            ],
+        )
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        assert items[0]["group_description"] is None
+
+    def test_description_propagates_to_every_scenario(self, minimal_valid_config):
+        runner = self._runner_with_groups(
+            minimal_valid_config,
+            [
+                {
+                    "group": 3,
+                    "description": "shared desc",
+                    "scenarios": [
+                        {"id": "a", "command": "GET", "type": "read"},
+                        {"id": "b", "command": "SET", "type": "write"},
+                    ],
+                }
+            ],
+        )
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        assert len(items) == 2
+        assert all(i["group_description"] == "shared desc" for i in items)
+
+    def test_distinct_descriptions_across_groups(self, minimal_valid_config):
+        runner = self._runner_with_groups(
+            minimal_valid_config,
+            [
+                {
+                    "group": 1,
+                    "description": "first",
+                    "scenarios": [{"id": "s1", "command": "GET", "type": "read"}],
+                },
+                {
+                    "group": 2,
+                    "description": "second",
+                    "scenarios": [{"id": "s2", "command": "SET", "type": "write"}],
+                },
+            ],
+        )
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        by_group = {i["group_id"]: i["group_description"] for i in items}
+        assert by_group == {1: "first", 2: "second"}
+
+    def test_both_group_and_scenario_description_present(self, minimal_valid_config):
+        # group_description rides on the yielded item; per-scenario
+        # "description" stays on the inner scenario dict and is read later
+        # by _run_single_scenario when it builds the metrics row.
+        runner = self._runner_with_groups(
+            minimal_valid_config,
+            [
+                {
+                    "group": 4,
+                    "description": "latency suite",
+                    "scenarios": [
+                        {
+                            "id": "s1",
+                            "command": "GET",
+                            "type": "read",
+                            "description": "GET, 64B, pipeline=1",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        assert len(items) == 1
+        assert items[0]["group_description"] == "latency suite"
+        assert items[0]["scenario"]["description"] == "GET, 64B, pipeline=1"
+
+
+# ---------------------------------------------------------------------------
+# _iterate_simple_scenarios — regression: simple (non-test_groups) format
+# must not pick up group_description / group_id / scenario fields.
+# ---------------------------------------------------------------------------
+
+
+class TestIterateSimpleScenarios:
+    """Tests for ClientRunner._iterate_simple_scenarios.
+
+    The simple/core config format (commands + data_sizes + ... cartesian)
+    does not have groups or descriptions. These tests lock in that the
+    new group/scenario_description plumbing did not leak into the simple
+    path.
+    """
+
+    def test_simple_yields_no_group_fields(self, minimal_client_runner):
+        items = list(minimal_client_runner._iterate_simple_scenarios())
+
+        assert len(items) > 0
+        for item in items:
+            assert item["format"] == "simple"
+            assert "group_description" not in item
+            assert "group_id" not in item
+            assert "scenario" not in item
+
+    def test_simple_format_has_combination_keys(self, minimal_client_runner):
+        # Sanity: simple-format dicts carry the per-run combination keys
+        # (command, data_size, pipeline, ...) instead of group/scenario.
+        items = list(minimal_client_runner._iterate_simple_scenarios())
+
+        first = items[0]
+        for key in ("command", "data_size", "pipeline", "clients", "requests"):
+            assert key in first
