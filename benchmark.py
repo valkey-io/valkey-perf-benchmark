@@ -479,6 +479,7 @@ def run_benchmark_matrix(
     module_path: Optional[str] = None,
     uses_test_groups: bool = False,
     module_commit_id: Optional[str] = None,
+    config_name: Optional[str] = None,
 ) -> None:
     """Orchestrate benchmark execution for all configurations."""
     if args.module:
@@ -531,6 +532,7 @@ def run_benchmark_matrix(
             architecture,
             client_cpu_ranges,
             module_commit_id,
+            config_name,
         )
 
     # Cleanup
@@ -603,6 +605,7 @@ def _execute_benchmark_run(
     architecture,
     client_cpu_ranges,
     module_commit_id=None,
+    config_name=None,
 ):
     """Execute a single benchmark run with specific configuration."""
     cfg = exec_config["cfg"]
@@ -671,6 +674,7 @@ def _execute_benchmark_run(
             uses_test_groups=uses_test_groups,
             repository=args.repository,
             module_commit_id=module_commit_id,
+            config_name=config_name,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]
@@ -827,7 +831,8 @@ def main() -> None:
                 args=args,
                 module_path=module_path,
                 uses_test_groups=uses_test_groups,
-                module_commit_id=args.module_commit,
+                module_commit_id=(args.module_commit or "HEAD") if args.module else None,
+                config_name=Path(args.config).name if args.module else None,
             )
 
 

@@ -356,6 +356,127 @@ class TestCreateFailureMarker:
 
 
 # ---------------------------------------------------------------------------
+# module_commit_id and config_name conditional output
+# ---------------------------------------------------------------------------
+
+
+class TestModuleCommitAndConfigName:
+    """Verify module_commit and config_name are only present when provided."""
+
+    def test_module_commit_present_when_set(self, minimal_valid_config):
+        """When module_commit_id is provided, metrics should contain module_commit."""
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            module_commit_id="deadbeef1234",
+        )
+        assert runner.module_commit_id == "deadbeef1234"
+
+    def test_module_commit_absent_when_not_set(self, minimal_valid_config):
+        """When module_commit_id is not provided, it should be None."""
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+        )
+        assert runner.module_commit_id is None
+
+    def test_config_name_present_when_set(self, minimal_valid_config):
+        """When config_name is provided, it should be stored on the runner."""
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            config_name="fts-benchmarks-arm.json",
+        )
+        assert runner.config_name == "fts-benchmarks-arm.json"
+
+    def test_config_name_absent_when_not_set(self, minimal_valid_config):
+        """When config_name is not provided, it should be None."""
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+        )
+        assert runner.config_name is None
+
+    def test_both_set_for_module_run(self, minimal_valid_config):
+        """Module runs should have both module_commit_id and config_name set."""
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            module_commit_id="deadbeef1234",
+            config_name="fts-benchmarks-arm.json",
+        )
+        assert runner.module_commit_id == "deadbeef1234"
+        assert runner.config_name == "fts-benchmarks-arm.json"
+
+    def test_neither_set_for_core_run(self, minimal_valid_config):
+        """Core runs should have neither module_commit_id nor config_name."""
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+        )
+        assert runner.module_commit_id is None
+        assert runner.config_name is None
+
+    def test_module_commit_defaults_to_head_for_module_run(self, minimal_valid_config):
+        """Module runs without explicit --module-commit should use 'HEAD'.
+
+        This mirrors how core's commit defaults to 'HEAD' when --commits is not passed.
+        The default is applied in benchmark.py: (args.module_commit or "HEAD") if args.module
+        Here we verify that passing "HEAD" works correctly on the runner.
+        """
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            module_commit_id="HEAD",
+            config_name="fts-benchmarks-arm.json",
+        )
+        assert runner.module_commit_id == "HEAD"
+        assert runner.config_name == "fts-benchmarks-arm.json"
+
+
+# ---------------------------------------------------------------------------
 # _iterate_test_groups_scenarios
 # ---------------------------------------------------------------------------
 
