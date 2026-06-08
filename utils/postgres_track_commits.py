@@ -453,8 +453,7 @@ def main():
 
     parser.add_argument(
         "operation",
-        choices=["determine", "mark", "query", "cleanup",
-                 "determine-module", "mark-module", "cleanup-module"],
+        choices=["determine", "mark", "query", "cleanup"],
         help="Operation to perform",
     )
 
