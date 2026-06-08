@@ -53,6 +53,8 @@ OPTIONAL_CONF_KEYS = [
     "query_generation",
     "port",
     "module_startup_args",
+    "custom-server-configs",
+    "custom-server-config-file",
 ]
 
 
@@ -331,6 +333,22 @@ def validate_config(cfg: dict) -> None:
     if "port" in cfg:
         if not isinstance(cfg["port"], int) or cfg["port"] <= 0 or cfg["port"] > 65535:
             raise ValueError("'port' must be between 1 and 65535")
+    if "custom-server-configs" in cfg:
+        if not isinstance(cfg["custom-server-configs"], dict):
+            raise ValueError("'custom-server-configs' must be a dictionary")
+        for key, value in cfg["custom-server-configs"].items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"'custom-server-configs' keys must be strings, got: {type(key)}"
+                )
+            # Note: bool is a subclass of int in Python, so check bool first.
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                raise ValueError(
+                    f"'custom-server-configs' values must be strings or numbers, got: {type(value)}"
+                )
+    if "custom-server-config-file" in cfg:
+        if not isinstance(cfg["custom-server-config-file"], str):
+            raise ValueError("'custom-server-config-file' must be a string path")
 
     if "cluster_mode" in cfg and not isinstance(cfg["cluster_mode"], list):
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])

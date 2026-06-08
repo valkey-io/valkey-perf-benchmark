@@ -253,9 +253,33 @@ Create benchmark configurations in JSON format. Each object represents a single 
     "warmup": 10,
     "io-threads": [1, 4, 8],
     "server_cpu_range": "0-1",
-    "client_cpu_range": "2-3"
+    "client_cpu_range": "2-3",
+    "custom-server-configs": {
+      "maxmemory": "4gb",
+      "timeout": "300"
+    }
   }
 ]
+```
+
+#### Custom Server Configs Examples
+
+Add server configs the benchmark does not manage (e.g. memory limits, timeouts):
+```json
+"custom-server-configs": {
+  "maxmemory": "4gb",
+  "timeout": "300",
+  "maxclients": "10000"
+}
+```
+
+Combine with a baseline `.conf` file:
+```json
+"custom-server-config-file": "/etc/valkey/baseline.conf",
+"custom-server-configs": {
+  "hz": "100",
+  "tcp-keepalive": "60"
+}
 ````
 
 ### Configuration Parameters
@@ -274,6 +298,18 @@ Create benchmark configurations in JSON format. Each object represents a single 
 | `io-threads`       | Number of I/O threads for server                               | Integer             | Yes             |
 | `server_cpu_range` | CPU cores for server (e.g. "0-3", "0,2,4", or "144-191,48-95") | String              | No              |
 | `client_cpu_range` | CPU cores for client (e.g. "4-7", "1,3,5", or "0-3,8-11")      | String              | No              |
+| `custom-server-configs` | Additional server configuration options the benchmark does not manage (e.g. `{"maxmemory": "4gb", "timeout": "300"}`). | Object (key-value pairs) | No |
+| `custom-server-config-file` | Path to a Valkey-format `.conf` file passed positionally to `valkey-server`. Used as a baseline configuration. | String (path) | No |
+
+**Note on `custom-server-configs`**: This field lets you pass *additional* configuration options to the Valkey server at startup — settings the benchmark itself does not manage (e.g. `maxmemory`, `timeout`, `maxclients`, `tcp-keepalive`, `hz`).
+
+**Precedence**: Configs are applied in this order on the `valkey-server` command line:
+
+1. `custom-server-config-file` (positional, parsed first — lowest priority)
+2. `custom-server-configs` (`--key value` flags)
+3. Benchmark-managed defaults (`--key value` flags — highest priority via Valkey's last-wins semantics)
+
+This means harness-critical settings (`port`, `daemonize`, `logfile`, `cluster-*`, etc.) always take effect regardless of what the user supplies. Setting them in `custom-server-configs` is allowed but has no effect.
 
 When `warmup` is provided for read commands, the benchmark performs three stages:
 

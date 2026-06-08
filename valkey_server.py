@@ -136,6 +136,16 @@ class ServerLauncher:
 
         cmd.append(VALKEY_SERVER)
 
+        # Optional positional config file (must come right after the binary,
+        # before any --flag args). Subsequent --flag values override file values.
+        custom_conf_file = (
+            (self.config or {}).get("custom-server-config-file")
+            if hasattr(self, "config")
+            else None
+        )
+        if custom_conf_file:
+            cmd.append(custom_conf_file)
+
         # Port and TLS configuration
         if tls_mode:
             cmd += ["--tls-port", str(port), "--port", "0"]
@@ -169,7 +179,20 @@ class ServerLauncher:
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
 
-        # Common server configuration
+        # Apply custom-server-configs from benchmark config. These are added
+        # BEFORE the benchmark defaults block so that, by valkey CLI last-wins
+        # semantics, the harness's defaults always take precedence over any
+        # user-supplied value for the same key.
+        custom_configs = (
+            (self.config or {}).get("custom-server-configs")
+            if hasattr(self, "config")
+            else None
+        )
+        if custom_configs:
+            for key, value in custom_configs.items():
+                cmd += [f"--{key}", str(value)]
+
+        # Common server configuration (benchmark defaults — always win).
         cmd += [
             "--cluster-enabled",
             "yes" if cluster_mode else "no",
