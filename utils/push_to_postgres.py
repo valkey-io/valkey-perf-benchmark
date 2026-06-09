@@ -408,6 +408,16 @@ def process_commit_metrics(
     return count, False
 
 
+def resolve_table_name(table_name: Optional[str], module: Optional[str]) -> Optional[str]:
+    """Resolve table name: use explicit --table-name if provided,
+    otherwise auto-generate from --module as 'benchmark_metrics_{module}'."""
+    if table_name:
+        return table_name
+    if module:
+        return f"benchmark_metrics_{module}"
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Push benchmark metrics to PostgreSQL")
     parser.add_argument(
@@ -427,6 +437,11 @@ def main() -> None:
         help="PostgreSQL table name (required if --module is not provided; "
         "auto-generated as 'benchmark_metrics_<module>' when --module is given; "
         "if both --table-name and --module are provided, --table-name takes precedence)",
+    )
+    parser.add_argument(
+        "--module",
+        help="Module name (e.g., 'search'). Used to auto-generate table name as "
+        "'benchmark_metrics_{module}' when --table-name is not provided.",
     )
     parser.add_argument(
         "--test-type",

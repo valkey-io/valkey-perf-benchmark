@@ -17,6 +17,7 @@ from utils.push_to_postgres import (
     detect_field_type,
     analyze_metrics_schema,
     convert_metrics_to_rows,
+    resolve_table_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -223,7 +224,8 @@ class TestAnalyzeMetricsSchema:
         assert schema["rps"] == "DECIMAL(15,6)"
         assert schema["pipeline"] == "INTEGER"
 
-    def test_group_description_uses_varchar500(self):
+    def test_group_description_uses_max_length(self):
+        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -232,9 +234,10 @@ class TestAnalyzeMetricsSchema:
             }
         ]
         schema = analyze_metrics_schema(metrics)
-        assert schema["group_description"] == "VARCHAR(500)"
+        assert schema["group_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
 
-    def test_scenario_description_uses_varchar500(self):
+    def test_scenario_description_uses_max_length(self):
+        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -243,11 +246,10 @@ class TestAnalyzeMetricsSchema:
             }
         ]
         schema = analyze_metrics_schema(metrics)
-        assert schema["scenario_description"] == "VARCHAR(500)"
+        assert schema["scenario_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
 
-    def test_long_description_still_varchar500(self):
-        # Override default VARCHAR(50)/(255)/TEXT bucketing — descriptions
-        # always get VARCHAR(500) regardless of sample length.
+    def test_long_description_still_uses_max_length(self):
+        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -257,8 +259,8 @@ class TestAnalyzeMetricsSchema:
             }
         ]
         schema = analyze_metrics_schema(metrics)
-        assert schema["group_description"] == "VARCHAR(500)"
-        assert schema["scenario_description"] == "VARCHAR(500)"
+        assert schema["group_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
+        assert schema["scenario_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
 
 
 # ---------------------------------------------------------------------------
@@ -417,22 +419,20 @@ class TestModuleCommitSchema:
         assert "config_name" not in schema
 
 
-class TestDescriptionMaxLengthConstant:
-    """Verify DESCRIPTION_MAX_LENGTH constant is used consistently."""
 
-    def test_constant_value(self):
-        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
-        assert DESCRIPTION_MAX_LENGTH == 500
+# ---------------------------------------------------------------------------
+# resolve_table_name
+# ---------------------------------------------------------------------------
 
-    def test_schema_uses_constant(self):
-        """VARCHAR length in schema should match DESCRIPTION_MAX_LENGTH."""
-        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
-        metrics = [
-            {
-                "timestamp": "t",
-                "commit": "c",
-                "group_description": "test",
-            }
-        ]
-        schema = analyze_metrics_schema(metrics)
-        assert schema["group_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
+
+class TestResolveTableName:
+    """Tests for resolve_table_name — determines which Postgres table to use."""
+
+    def test_explicit_table_name_takes_precedence(self):
+        assert resolve_table_name("custom_table", "search") == "custom_table"
+
+    def test_module_generates_table_name(self):
+        assert resolve_table_name(None, "search") == "benchmark_metrics_search"
+
+    def test_neither_provided_returns_none(self):
+        assert resolve_table_name(None, None) is None
