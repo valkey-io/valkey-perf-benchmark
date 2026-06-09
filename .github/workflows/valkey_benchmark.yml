@@ -249,7 +249,6 @@ jobs:
 
       - name: Detect performance regression
         id: detect_regression
-        continue-on-error: true
         working-directory: valkey-perf-benchmark
         env:
           REGRESSION_THRESHOLD: ${{ vars.REGRESSION_THRESHOLD_PCT || '5' }}
