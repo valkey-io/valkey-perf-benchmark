@@ -395,7 +395,6 @@ class ClientRunner:
         for test_group in self.config.get("test_groups", []):
             group_id = test_group.get("group", "unknown")
             group_description = test_group.get("description")
-            group_description = test_group.get("description")
 
             # Skip filtered groups
             if groups_to_run and group_id not in groups_to_run:
@@ -423,7 +422,6 @@ class ClientRunner:
                         "format": "test_groups",
                         "scenario": expanded_scenario,
                         "group_id": group_id,
-                        "group_description": group_description,
                         "group_description": group_description,
                         "config_set": self.current_config_set,
                         "config_suffix": self.config_suffix,
@@ -549,7 +547,6 @@ class ClientRunner:
             commit_time,
             data["config_set"],
             data["config_suffix"],
-            data.get("group_description"),
             data.get("group_description"),
         )
 
