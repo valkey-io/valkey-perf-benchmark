@@ -344,8 +344,8 @@ jobs:
             const body = [
               `## Performance Regression Detected`,
               ``,
-              `**New commit:** \`${report.new_commit}\``,
-              `**Baseline commit:** \`${report.baseline_commit}\``,
+              `**New commit:** [\`${report.new_commit}\`](https://github.com/valkey-io/valkey/commit/${report.new_commit})`,
+              `**Baseline commit:** [\`${report.baseline_commit}\`](https://github.com/valkey-io/valkey/commit/${report.baseline_commit})`,
               `**Threshold:** ${report.threshold_pct}%`,
               ``,
               `### Regressions`,
