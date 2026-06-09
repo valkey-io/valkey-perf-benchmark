@@ -1124,3 +1124,216 @@ class TestFullLifecycleIntegration:
         assert statuses[("core1", "mod2")] == "in_progress"
         assert statuses[("core2", "mod1")] == "in_progress"
         assert statuses[("core2", "mod2")] == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# Timestamp computation
+# ---------------------------------------------------------------------------
+
+
+class TestTimestampComputation:
+    """Verify max_commit_timestamp and min_commit_timestamp are computed correctly."""
+
+    def test_max_min_timestamps_computed(self, conn, mock_git):
+        """max_commit_timestamp = max(core_ts, module_ts), min = min of both.
+
+        Scenario: core_ts = June 5, module_ts = June 1.
+        Expected: max = June 5, min = June 1.
+        """
+        mock_rev_list, mock_commit_time = mock_git
+        mock_rev_list.side_effect = [["core1"], ["mod1"]]
+
+        def commit_time_by_sha(repo, sha):
+            if sha == "core1":
+                return "2026-06-05T10:00:00+00:00"
+            return "2026-06-01T10:00:00+00:00"
+
+        mock_commit_time.side_effect = commit_time_by_sha
+
+        populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+        )
+
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT core_timestamp, module_timestamp, max_commit_timestamp, min_commit_timestamp "
+                f"FROM {table} WHERE sha = 'core1' AND module_sha = 'mod1'"
+            )
+            row = cur.fetchone()
+
+        core_ts, mod_ts, max_ts, min_ts = row
+        assert core_ts.isoformat() == "2026-06-05T10:00:00+00:00"
+        assert mod_ts.isoformat() == "2026-06-01T10:00:00+00:00"
+        assert max_ts.isoformat() == "2026-06-05T10:00:00+00:00"
+        assert min_ts.isoformat() == "2026-06-01T10:00:00+00:00"
+
+    def test_max_min_when_module_is_newer(self, conn, mock_git):
+        """When module timestamp is newer than core.
+
+        Scenario: core_ts = June 1, module_ts = June 5.
+        Expected: max = June 5 (module), min = June 1 (core).
+        """
+        mock_rev_list, mock_commit_time = mock_git
+        mock_rev_list.side_effect = [["core1"], ["mod1"]]
+
+        def commit_time_by_sha(repo, sha):
+            if sha == "core1":
+                return "2026-06-01T10:00:00+00:00"
+            return "2026-06-05T10:00:00+00:00"
+
+        mock_commit_time.side_effect = commit_time_by_sha
+
+        populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+        )
+
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT max_commit_timestamp, min_commit_timestamp "
+                f"FROM {table} WHERE sha = 'core1' AND module_sha = 'mod1'"
+            )
+            row = cur.fetchone()
+
+        max_ts, min_ts = row
+        assert max_ts.isoformat() == "2026-06-05T10:00:00+00:00"
+        assert min_ts.isoformat() == "2026-06-01T10:00:00+00:00"
+
+
+# ---------------------------------------------------------------------------
+# Large cartesian product
+# ---------------------------------------------------------------------------
+
+
+class TestLargeCartesianProduct:
+    """Verify populate works correctly with larger sets."""
+
+    def test_10x10_cartesian(self, conn, mock_git):
+        """10 core SHAs × 10 module SHAs = 100 pairs.
+
+        Verifies correctness at scale — no duplicates, all inserted.
+        """
+        mock_rev_list, mock_commit_time = mock_git
+        core_shas = [f"core{i:02d}" for i in range(10)]
+        mod_shas = [f"mod{i:02d}" for i in range(10)]
+        mock_rev_list.side_effect = [core_shas, mod_shas]
+        mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
+
+        result = populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+        )
+
+        assert result == 100
+
+        # Verify all 100 rows exist and are pending with priority assigned
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE status = 'pending'")
+            assert cur.fetchone()[0] == 100
+
+            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL")
+            assert cur.fetchone()[0] == 0
+
+    def test_repopulate_large_set_inserts_zero(self, conn, mock_git):
+        """Running populate twice on 10×10 should insert 0 the second time."""
+        mock_rev_list, mock_commit_time = mock_git
+        core_shas = [f"core{i:02d}" for i in range(10)]
+        mod_shas = [f"mod{i:02d}" for i in range(10)]
+
+        mock_rev_list.side_effect = [core_shas, mod_shas]
+        mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
+        populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+        )
+
+        # Second populate — same SHAs
+        mock_rev_list.side_effect = [core_shas, mod_shas]
+        result = populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+        )
+
+        assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# Concurrent config populations
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentConfigPopulations:
+    """Verify two configs sharing the same table don't interfere."""
+
+    def test_two_configs_independent_queues(self, conn, mock_git):
+        """Populate same SHAs for config-A and config-B.
+        Fetch for config-A should only return config-A pairs.
+        Mark config-A complete should not affect config-B.
+        """
+        mock_rev_list, mock_commit_time = mock_git
+
+        # Populate config-A
+        mock_rev_list.side_effect = [["core1", "core2"], ["mod1"]]
+        mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
+        populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, "config-A.json",
+        )
+
+        # Populate config-B (same SHAs, different config)
+        mock_rev_list.side_effect = [["core1", "core2"], ["mod1"]]
+        mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
+        populate_module_commits(
+            conn, Path("/fake"), "unstable",
+            Path("/fake-mod"), "main",
+            ARCHITECTURE, MODULE_NAME, "config-B.json",
+        )
+
+        # Table should have 4 rows total (2 per config)
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            assert cur.fetchone()[0] == 4
+
+        # Fetch for config-A — should get 2 pairs
+        pairs_a = fetch_next_module_commits(
+            conn, MODULE_NAME, "config-A.json", ARCHITECTURE, max_pairs=10
+        )
+        assert len(pairs_a) == 2
+
+        # Config-B pairs should still be pending (not fetched)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {table} "
+                f"WHERE config_name = 'config-B.json' AND status = 'pending'"
+            )
+            assert cur.fetchone()[0] == 2
+
+        # Mark config-A pairs complete
+        mark_module_commits(conn, MODULE_NAME, pairs_a, "config-A.json", ARCHITECTURE)
+
+        # Config-B should still be untouched (all pending)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {table} "
+                f"WHERE config_name = 'config-B.json' AND status = 'pending'"
+            )
+            assert cur.fetchone()[0] == 2
+
+        # Config-A should be all complete
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {table} "
+                f"WHERE config_name = 'config-A.json' AND status = 'complete'"
+            )
+            assert cur.fetchone()[0] == 2

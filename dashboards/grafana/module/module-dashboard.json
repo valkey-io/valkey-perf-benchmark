@@ -1,0 +1,262 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(50, 172, 45, 0.97)",
+        "name": "Commit IDs",
+        "rawQuery": true,
+        "rawSql": "SELECT DISTINCT timestamp AS time, 'core: ' || commit || ' | module: ' || COALESCE(module_commit, 'N/A') AS text FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' ORDER BY timestamp",
+        "type": "tags"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "RPS",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND ('$scenario' = 'all' OR scenario = '$scenario') GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        }
+      ],
+      "title": "RPS over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(p99_latency_ms) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND ('$scenario' = 'all' OR scenario = '$scenario') GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        }
+      ],
+      "title": "p99 Latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 18 },
+      "id": 4,
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "max_commit_timestamp", "desc": true }] },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sha, module_sha, status, priority, core_timestamp, module_timestamp, max_commit_timestamp, config_name, architecture, created_at FROM ${tracking_table} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY status, max_commit_timestamp DESC LIMIT 200",
+          "refId": "A"
+        }
+      ],
+      "title": "Commit Tracking Queue",
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": ["valkey", "benchmark", "module"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT REPLACE(table_name, 'benchmark_metrics_', '') AS __text, table_name AS __value FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'benchmark_metrics_%' ORDER BY table_name",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Module",
+        "multi": false,
+        "name": "table_name",
+        "options": [],
+        "query": "SELECT REPLACE(table_name, 'benchmark_metrics_', '') AS __text, table_name AS __value FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'benchmark_metrics_%' ORDER BY table_name",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_module_commits_')",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Tracking Table",
+        "multi": false,
+        "name": "tracking_table",
+        "options": [],
+        "query": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_module_commits_')",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT DISTINCT config_name || ' | ' || architecture AS __text, config_name || '|' || architecture AS __value FROM ${table_name} WHERE config_name IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Config | Arch",
+        "multi": false,
+        "name": "config_arch",
+        "options": [],
+        "query": "SELECT DISTINCT config_name || ' | ' || architecture AS __text, config_name || '|' || architecture AS __value FROM ${table_name} WHERE config_name IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT SPLIT_PART('$config_arch', '|', 1)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Config Name",
+        "multi": false,
+        "name": "config_name",
+        "options": [],
+        "query": "SELECT SPLIT_PART('$config_arch', '|', 1)",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT SPLIT_PART('$config_arch', '|', 2)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Architecture",
+        "multi": false,
+        "name": "architecture",
+        "options": [],
+        "query": "SELECT SPLIT_PART('$config_arch', '|', 2)",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT DISTINCT group_description FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY group_description",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Group",
+        "multi": false,
+        "name": "group_description",
+        "options": [],
+        "query": "SELECT DISTINCT group_description FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY group_description",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+        "definition": "SELECT DISTINCT scenario || COALESCE(' (' || scenario_description || ')', '') AS __text, scenario AS __value FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' ORDER BY scenario",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Scenario",
+        "multi": false,
+        "name": "scenario",
+        "options": [],
+        "query": "SELECT DISTINCT scenario || COALESCE(' (' || scenario_description || ')', '') AS __text, scenario AS __value FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' ORDER BY scenario",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "UTC",
+  "title": "Valkey Performance - Module",
+  "uid": "",
+  "version": 1,
+  "__inputs": [
+    {
+      "name": "DS_POSTGRES",
+      "label": "PostgreSQL",
+      "description": "PostgreSQL data source for benchmark metrics",
+      "type": "datasource",
+      "pluginId": "postgres",
+      "pluginName": "PostgreSQL"
+    }
+  ]
+}

@@ -324,13 +324,14 @@ class TestConvertMetricsToRows:
         rows, skipped = convert_metrics_to_rows(metrics, columns)
         assert isinstance(rows[0][0], datetime)
 
-    def test_descriptions_over_500_chars_truncated(self):
+    def test_descriptions_over_max_length_truncated(self):
+        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
                 "commit": "abc",
-                "group_description": "g" * 750,
-                "scenario_description": "s" * 600,
+                "group_description": "g" * (DESCRIPTION_MAX_LENGTH + 250),
+                "scenario_description": "s" * (DESCRIPTION_MAX_LENGTH + 100),
             }
         ]
         columns = [
@@ -340,5 +341,98 @@ class TestConvertMetricsToRows:
             "scenario_description",
         ]
         rows, _ = convert_metrics_to_rows(metrics, columns)
-        assert rows[0][2] == "g" * 500
-        assert rows[0][3] == "s" * 500
+        assert len(rows[0][2]) == DESCRIPTION_MAX_LENGTH
+        assert rows[0][2] == "g" * DESCRIPTION_MAX_LENGTH
+        assert len(rows[0][3]) == DESCRIPTION_MAX_LENGTH
+        assert rows[0][3] == "s" * DESCRIPTION_MAX_LENGTH
+
+
+# ---------------------------------------------------------------------------
+# module_commit and config_name schema handling
+# ---------------------------------------------------------------------------
+
+
+class TestModuleCommitSchema:
+    """Tests for module_commit column type in analyze_metrics_schema."""
+
+    def test_module_commit_gets_varchar255(self):
+        """module_commit should be hardcoded to VARCHAR(255), not auto-detected."""
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc123",
+                "module_commit": "def456",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["module_commit"] == "VARCHAR(255)"
+
+    def test_module_commit_varchar255_regardless_of_length(self):
+        """Even a short module_commit should be VARCHAR(255), not VARCHAR(50)."""
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "module_commit": "ab",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["module_commit"] == "VARCHAR(255)"
+
+    def test_module_commit_not_in_schema_when_absent(self):
+        """If no metric has module_commit, it should not appear in schema."""
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "rps": 100000.0,
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert "module_commit" not in schema
+
+    def test_config_name_gets_varchar_max_length(self):
+        """config_name should be hardcoded to VARCHAR(CONFIG_NAME_MAX_LENGTH)."""
+        from utils.push_to_postgres import CONFIG_NAME_MAX_LENGTH
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "config_name": "fts-benchmarks-arm.json",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["config_name"] == f"VARCHAR({CONFIG_NAME_MAX_LENGTH})"
+
+    def test_config_name_not_in_schema_when_absent(self):
+        """If no metric has config_name, it should not appear in schema."""
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "rps": 100000.0,
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert "config_name" not in schema
+
+
+class TestDescriptionMaxLengthConstant:
+    """Verify DESCRIPTION_MAX_LENGTH constant is used consistently."""
+
+    def test_constant_value(self):
+        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
+        assert DESCRIPTION_MAX_LENGTH == 500
+
+    def test_schema_uses_constant(self):
+        """VARCHAR length in schema should match DESCRIPTION_MAX_LENGTH."""
+        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
+        metrics = [
+            {
+                "timestamp": "t",
+                "commit": "c",
+                "group_description": "test",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["group_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"

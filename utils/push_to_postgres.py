@@ -20,6 +20,7 @@ from psycopg2 import sql
 from psycopg2.extras import execute_values
 
 DESCRIPTION_MAX_LENGTH = 500
+CONFIG_NAME_MAX_LENGTH = 50
 
 
 def detect_field_type(value: Any) -> str:
@@ -84,6 +85,8 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
             schema[field] = f"VARCHAR(255) NOT NULL"
         elif field == "module_commit":
             schema[field] = "VARCHAR(255)"
+        elif field == "config_name":
+            schema[field] = f"VARCHAR({CONFIG_NAME_MAX_LENGTH})"
         elif field in ["group_description", "scenario_description"]:
             schema[field] = f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
         else:
@@ -268,6 +271,11 @@ def convert_metrics_to_rows(
                 if isinstance(value, str) and len(value) > DESCRIPTION_MAX_LENGTH:
                     value = value[:DESCRIPTION_MAX_LENGTH]
                 row.append(value)
+            elif column == "config_name":
+                value = metric.get(column)
+                if isinstance(value, str) and len(value) > CONFIG_NAME_MAX_LENGTH:
+                    value = value[:CONFIG_NAME_MAX_LENGTH]
+                row.append(value)
             else:
                 # Direct field mapping since field names are now normalized
                 row.append(metric.get(column))
@@ -359,7 +367,7 @@ def process_commit_metrics(
     table_name: str,
     dry_run: bool = False,
     test_type: str = "core",
-    module: Optional[str] = None,
+    module_commit: Optional[str] = None,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
@@ -369,7 +377,7 @@ def process_commit_metrics(
         table_name: Name of the PostgreSQL table to insert into.
         dry_run: If True, only show what would be inserted without actually inserting.
         test_type: Test type identifier (e.g., 'core', 'fts') for filtering in dashboards.
-        module: Module name being tested (e.g., 'valkey-search' for FTS tests).
+        module_commit: Module commit SHA (for tracking module-specific versions).
 
     Returns:
         Tuple of (number of metrics processed, whether any records were skipped).
@@ -386,12 +394,11 @@ def process_commit_metrics(
         print(f"Skipping {commit_dir.name}: empty metrics")
         return 0, True
 
-    # Augment metrics with test_type and module at push time
-    # (module_commit and config_name are already in metrics.json from benchmark.py)
+    # Augment metrics with test_type and module_commit at push time
     for metric in metrics_data:
         metric["test_type"] = test_type
-        if module:
-            metric["module"] = module
+        if module_commit:
+            metric["module_commit"] = module_commit
 
     print(f"\n=== Processing {commit_dir.name} ===")
     count = push_to_postgres(metrics_data, conn, table_name, dry_run)
@@ -415,21 +422,32 @@ def main() -> None:
     parser.add_argument(
         "--password", help="Database password (not required for dry-run)"
     )
-    parser.add_argument("--table-name", required=True, help="PostgreSQL table name")
+    parser.add_argument(
+        "--table-name",
+        help="PostgreSQL table name (required if --module is not provided; "
+        "auto-generated as 'benchmark_metrics_<module>' when --module is given; "
+        "if both --table-name and --module are provided, --table-name takes precedence)",
+    )
     parser.add_argument(
         "--test-type",
         default="core",
         help="Test type identifier (e.g., 'core', 'fts') for filtering in dashboards",
     )
     parser.add_argument(
-        "--module",
-        help="Module name being tested (e.g., 'valkey-search' for FTS tests)",
+        "--module-commit",
+        help="Module commit SHA (for tracking module-specific versions)",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
     )
 
     args = parser.parse_args()
+
+    args.table_name = resolve_table_name(args.table_name, args.module)
+    if args.table_name is None:
+        parser.error(
+            "--table-name is required when --module is not provided"
+        )
 
     if not args.dry_run:
         if not all([args.host, args.database, args.username]):
@@ -498,7 +516,7 @@ def main() -> None:
                     args.table_name,
                     args.dry_run,
                     test_type=args.test_type,
-                    module=args.module,
+                    module_commit=args.module_commit,
                 )
                 total_processed += count
                 if was_skipped:
