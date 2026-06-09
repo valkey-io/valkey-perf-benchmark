@@ -408,7 +408,9 @@ def process_commit_metrics(
     return count, False
 
 
-def resolve_table_name(table_name: Optional[str], module: Optional[str]) -> Optional[str]:
+def resolve_table_name(
+    table_name: Optional[str], module: Optional[str]
+) -> Optional[str]:
     """Resolve table name: use explicit --table-name if provided,
     otherwise auto-generate from --module as 'benchmark_metrics_{module}'."""
     if table_name:
@@ -460,9 +462,7 @@ def main() -> None:
 
     args.table_name = resolve_table_name(args.table_name, args.module)
     if args.table_name is None:
-        parser.error(
-            "--table-name is required when --module is not provided"
-        )
+        parser.error("--table-name is required when --module is not provided")
 
     if not args.dry_run:
         if not all([args.host, args.database, args.username]):

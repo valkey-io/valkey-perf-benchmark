@@ -129,8 +129,12 @@ def mock_git():
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         → Every call returns this timestamp regardless of which SHA is asked about
     """
-    with patch("utils.module_postgres_track_commits._git_rev_list") as mock_rev_list, \
-         patch("utils.module_postgres_track_commits._git_commit_time") as mock_commit_time:
+    with (
+        patch("utils.module_postgres_track_commits._git_rev_list") as mock_rev_list,
+        patch(
+            "utils.module_postgres_track_commits._git_commit_time"
+        ) as mock_commit_time,
+    ):
         yield mock_rev_list, mock_commit_time
 
 
@@ -202,9 +206,14 @@ class TestPopulateIntegration:
         mock_commit_time.side_effect = commit_time_by_sha
 
         result = populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         assert result == 4
@@ -222,18 +231,59 @@ class TestPopulateIntegration:
         assert len(rows) == 4
         expected = [
             # (sha, mod, expected_core_ts, expected_mod_ts, expected_max_ts, expected_min_ts)
-            ("core1", "mod1", "2026-06-04T10:00:00+00:00", "2026-06-02T10:00:00+00:00",
-             "2026-06-04T10:00:00+00:00", "2026-06-02T10:00:00+00:00"),
-            ("core1", "mod2", "2026-06-04T10:00:00+00:00", "2026-06-01T10:00:00+00:00",
-             "2026-06-04T10:00:00+00:00", "2026-06-01T10:00:00+00:00"),
-            ("core2", "mod1", "2026-06-03T10:00:00+00:00", "2026-06-02T10:00:00+00:00",
-             "2026-06-03T10:00:00+00:00", "2026-06-02T10:00:00+00:00"),
-            ("core2", "mod2", "2026-06-03T10:00:00+00:00", "2026-06-01T10:00:00+00:00",
-             "2026-06-03T10:00:00+00:00", "2026-06-01T10:00:00+00:00"),
+            (
+                "core1",
+                "mod1",
+                "2026-06-04T10:00:00+00:00",
+                "2026-06-02T10:00:00+00:00",
+                "2026-06-04T10:00:00+00:00",
+                "2026-06-02T10:00:00+00:00",
+            ),
+            (
+                "core1",
+                "mod2",
+                "2026-06-04T10:00:00+00:00",
+                "2026-06-01T10:00:00+00:00",
+                "2026-06-04T10:00:00+00:00",
+                "2026-06-01T10:00:00+00:00",
+            ),
+            (
+                "core2",
+                "mod1",
+                "2026-06-03T10:00:00+00:00",
+                "2026-06-02T10:00:00+00:00",
+                "2026-06-03T10:00:00+00:00",
+                "2026-06-02T10:00:00+00:00",
+            ),
+            (
+                "core2",
+                "mod2",
+                "2026-06-03T10:00:00+00:00",
+                "2026-06-01T10:00:00+00:00",
+                "2026-06-03T10:00:00+00:00",
+                "2026-06-01T10:00:00+00:00",
+            ),
         ]
-        for row, (exp_sha, exp_mod, exp_core_ts, exp_mod_ts, exp_max_ts, exp_min_ts) in zip(rows, expected):
-            sha, module_sha, status, config_name, architecture, priority, \
-                core_ts, mod_ts, max_ts, min_ts = row
+        for row, (
+            exp_sha,
+            exp_mod,
+            exp_core_ts,
+            exp_mod_ts,
+            exp_max_ts,
+            exp_min_ts,
+        ) in zip(rows, expected):
+            (
+                sha,
+                module_sha,
+                status,
+                config_name,
+                architecture,
+                priority,
+                core_ts,
+                mod_ts,
+                max_ts,
+                min_ts,
+            ) = row
             assert sha == exp_sha
             assert module_sha == exp_mod
             assert status == "pending"
@@ -260,9 +310,14 @@ class TestPopulateIntegration:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Second populate with same SHAs — nothing new
@@ -271,9 +326,14 @@ class TestPopulateIntegration:
             ["mod1"],
         ]
         result = populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         assert result == 0
@@ -290,17 +350,27 @@ class TestPopulateIntegration:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, "config-A.json",
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            "config-A.json",
         )
 
         # Same pair, different config — should insert a new row
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         result = populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, "config-B.json",
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            "config-B.json",
         )
 
         assert result == 1
@@ -332,9 +402,14 @@ class TestPopulateIntegration:
         mock_commit_time.side_effect = commit_time_by_sha
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # No NULLs
@@ -369,9 +444,14 @@ class TestFetchNextIntegration:
         mock_rev_list.side_effect = [core_shas, mod_shas]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
     def test_fetches_pending_pairs(self, conn, mock_git):
@@ -474,18 +554,28 @@ class TestFetchNextIntegration:
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, "config-A.json",
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            "config-A.json",
         )
 
         # Populate same SHAs with config-B
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, "config-B.json",
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            "config-B.json",
         )
 
         # Fetch for config-A — should get config-A's pair
@@ -535,9 +625,14 @@ class TestMarkModuleCommitsIntegration:
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
         fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1
@@ -577,7 +672,9 @@ class TestMarkModuleCommitsIntegration:
         # Verify row is still in_progress (unchanged)
         table = _module_table_name(MODULE_NAME)
         with conn.cursor() as cur:
-            cur.execute(f"SELECT status FROM {table} WHERE sha = 'core1' AND module_sha = 'mod1'")
+            cur.execute(
+                f"SELECT status FROM {table} WHERE sha = 'core1' AND module_sha = 'mod1'"
+            )
             assert cur.fetchone()[0] == "in_progress"
 
     def test_wrong_arch_does_not_match(self, conn, mock_git):
@@ -593,7 +690,9 @@ class TestMarkModuleCommitsIntegration:
         # Verify row is still in_progress (unchanged)
         table = _module_table_name(MODULE_NAME)
         with conn.cursor() as cur:
-            cur.execute(f"SELECT status FROM {table} WHERE sha = 'core1' AND module_sha = 'mod1'")
+            cur.execute(
+                f"SELECT status FROM {table} WHERE sha = 'core1' AND module_sha = 'mod1'"
+            )
             assert cur.fetchone()[0] == "in_progress"
 
     def test_completed_pair_not_fetched_again(self, conn, mock_git):
@@ -641,9 +740,14 @@ class TestCleanupIntegration:
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
         fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1
@@ -669,16 +773,23 @@ class TestCleanupIntegration:
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
         fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1
         )
 
         # Cleanup with DIFFERENT config — should not affect our row
-        result = cleanup_module_commits(conn, MODULE_NAME, "other-config.json", ARCHITECTURE)
+        result = cleanup_module_commits(
+            conn, MODULE_NAME, "other-config.json", ARCHITECTURE
+        )
 
         assert result == 0
 
@@ -697,9 +808,14 @@ class TestCleanupIntegration:
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
         fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1
@@ -742,9 +858,14 @@ class TestPriorityIntegration:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -766,14 +887,23 @@ class TestPriorityIntegration:
         mock_rev_list.side_effect = [["core_old"], ["mod_old"]]
         mock_commit_time.return_value = "2026-01-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Mark as complete — pointer is now at 2026-01-01
-        fetch_next_module_commits(conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1)
-        mark_module_commits(conn, MODULE_NAME, ["core_old:mod_old"], CONFIG_NAME, ARCHITECTURE)
+        fetch_next_module_commits(
+            conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1
+        )
+        mark_module_commits(
+            conn, MODULE_NAME, ["core_old:mod_old"], CONFIG_NAME, ARCHITECTURE
+        )
 
         # Populate new SHAs with mixed timestamps
         # core_new and mod_new are NEWER than pointer → forward
@@ -790,9 +920,14 @@ class TestPriorityIntegration:
         mock_commit_time.side_effect = commit_time_by_sha
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -841,12 +976,21 @@ class TestFetchOrderIntegration:
         mock_rev_list.side_effect = [["core_old"], ["mod_old"]]
         mock_commit_time.return_value = "2026-01-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
-        fetch_next_module_commits(conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1)
-        mark_module_commits(conn, MODULE_NAME, ["core_old:mod_old"], CONFIG_NAME, ARCHITECTURE)
+        fetch_next_module_commits(
+            conn, MODULE_NAME, CONFIG_NAME, ARCHITECTURE, max_pairs=1
+        )
+        mark_module_commits(
+            conn, MODULE_NAME, ["core_old:mod_old"], CONFIG_NAME, ARCHITECTURE
+        )
 
         # Now populate with mixed timestamps
         mock_rev_list.side_effect = [["core_old", "core_new"], ["mod_old", "mod_new"]]
@@ -858,9 +1002,14 @@ class TestFetchOrderIntegration:
 
         mock_commit_time.side_effect = commit_time_by_sha
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Verify priority assignment before fetching
@@ -893,7 +1042,9 @@ class TestFetchOrderIntegration:
         assert "core_new:mod_old" in fallback_pairs
         assert "core_old:mod_new" in fallback_pairs
 
-    def test_newer_max_timestamp_fetched_first_within_same_priority(self, conn, mock_git):
+    def test_newer_max_timestamp_fetched_first_within_same_priority(
+        self, conn, mock_git
+    ):
         """Within the same priority, pairs with newer max_commit_timestamp come first.
 
         Scenario: all pairs are forward (priority=1) but have different timestamps.
@@ -928,9 +1079,14 @@ class TestFetchOrderIntegration:
         mock_commit_time.side_effect = commit_time_by_sha
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Fetch all — should be ordered by max_commit_timestamp DESC
@@ -939,9 +1095,9 @@ class TestFetchOrderIntegration:
         )
 
         assert len(pairs) == 3
-        assert pairs[0] == "core_new:mod1"   # max_ts = 06-05
-        assert pairs[1] == "core_mid:mod1"   # max_ts = 06-03
-        assert pairs[2] == "core_old:mod1"   # max_ts = 06-02
+        assert pairs[0] == "core_new:mod1"  # max_ts = 06-05
+        assert pairs[1] == "core_mid:mod1"  # max_ts = 06-03
+        assert pairs[2] == "core_old:mod1"  # max_ts = 06-02
 
 
 # ---------------------------------------------------------------------------
@@ -959,9 +1115,14 @@ class TestMultipleMarksIntegration:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Fetch all 3
@@ -971,9 +1132,11 @@ class TestMultipleMarksIntegration:
 
         # Mark all 3 complete
         result = mark_module_commits(
-            conn, MODULE_NAME,
+            conn,
+            MODULE_NAME,
             ["core1:mod1", "core2:mod1", "core3:mod1"],
-            CONFIG_NAME, ARCHITECTURE,
+            CONFIG_NAME,
+            ARCHITECTURE,
         )
 
         assert result == 3
@@ -1012,9 +1175,14 @@ class TestCleanupDoesNotAffectComplete:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Fetch both
@@ -1066,9 +1234,14 @@ class TestFullLifecycleIntegration:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         pairs = fetch_next_module_commits(
@@ -1076,7 +1249,9 @@ class TestFullLifecycleIntegration:
         )
         assert pairs == ["core1:mod1"]
 
-        mark_module_commits(conn, MODULE_NAME, ["core1:mod1"], CONFIG_NAME, ARCHITECTURE)
+        mark_module_commits(
+            conn, MODULE_NAME, ["core1:mod1"], CONFIG_NAME, ARCHITECTURE
+        )
 
         # === Run 2 (new commits on both repos) ===
         mock_rev_list.side_effect = [["core1", "core2"], ["mod1", "mod2"]]
@@ -1093,9 +1268,14 @@ class TestFullLifecycleIntegration:
         mock_commit_time.side_effect = commit_time_run2
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         pairs = fetch_next_module_commits(
@@ -1151,9 +1331,14 @@ class TestTimestampComputation:
         mock_commit_time.side_effect = commit_time_by_sha
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -1187,9 +1372,14 @@ class TestTimestampComputation:
         mock_commit_time.side_effect = commit_time_by_sha
 
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -1225,9 +1415,14 @@ class TestLargeCartesianProduct:
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
         result = populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         assert result == 100
@@ -1250,17 +1445,27 @@ class TestLargeCartesianProduct:
         mock_rev_list.side_effect = [core_shas, mod_shas]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         # Second populate — same SHAs
         mock_rev_list.side_effect = [core_shas, mod_shas]
         result = populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, CONFIG_NAME,
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
         )
 
         assert result == 0
@@ -1285,18 +1490,28 @@ class TestConcurrentConfigPopulations:
         mock_rev_list.side_effect = [["core1", "core2"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, "config-A.json",
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            "config-A.json",
         )
 
         # Populate config-B (same SHAs, different config)
         mock_rev_list.side_effect = [["core1", "core2"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
         populate_module_commits(
-            conn, Path("/fake"), "unstable",
-            Path("/fake-mod"), "main",
-            ARCHITECTURE, MODULE_NAME, "config-B.json",
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            "config-B.json",
         )
 
         # Table should have 4 rows total (2 per config)

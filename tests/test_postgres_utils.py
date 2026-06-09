@@ -226,6 +226,7 @@ class TestAnalyzeMetricsSchema:
 
     def test_group_description_uses_max_length(self):
         from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
+
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -238,6 +239,7 @@ class TestAnalyzeMetricsSchema:
 
     def test_scenario_description_uses_max_length(self):
         from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
+
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -250,6 +252,7 @@ class TestAnalyzeMetricsSchema:
 
     def test_long_description_still_uses_max_length(self):
         from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
+
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -328,6 +331,7 @@ class TestConvertMetricsToRows:
 
     def test_descriptions_over_max_length_truncated(self):
         from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
+
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -396,6 +400,7 @@ class TestModuleCommitSchema:
     def test_config_name_gets_varchar_max_length(self):
         """config_name should be hardcoded to VARCHAR(CONFIG_NAME_MAX_LENGTH)."""
         from utils.push_to_postgres import CONFIG_NAME_MAX_LENGTH
+
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -417,7 +422,6 @@ class TestModuleCommitSchema:
         ]
         schema = analyze_metrics_schema(metrics)
         assert "config_name" not in schema
-
 
 
 # ---------------------------------------------------------------------------

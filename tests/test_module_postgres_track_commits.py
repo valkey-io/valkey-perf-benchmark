@@ -23,7 +23,10 @@ class TestGetConfigName:
         assert get_config_name(path) == "fts-benchmarks-arm.json"
 
     def test_extracts_filename_from_absolute_path(self):
-        assert get_config_name("/home/user/configs/benchmark-config-arm.json") == "benchmark-config-arm.json"
+        assert (
+            get_config_name("/home/user/configs/benchmark-config-arm.json")
+            == "benchmark-config-arm.json"
+        )
 
     def test_extracts_filename_when_just_filename(self):
         assert get_config_name("fts-benchmarks-arm.json") == "fts-benchmarks-arm.json"

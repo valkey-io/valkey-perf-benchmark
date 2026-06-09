@@ -195,9 +195,7 @@ def _check_null_priorities(conn, module_name: str, context: str) -> int:
     """
     table = _module_table_name(module_name)
     with conn.cursor() as cur:
-        cur.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL"
-        )
+        cur.execute(f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL")
         null_count = cur.fetchone()[0]
 
     if null_count > 0:
@@ -208,7 +206,9 @@ def _check_null_priorities(conn, module_name: str, context: str) -> int:
     return null_count
 
 
-def _determine_priority(conn, module_name: str, config_name: str, architecture: str) -> int:
+def _determine_priority(
+    conn, module_name: str, config_name: str, architecture: str
+) -> int:
     """Classify newly inserted pairs as forward (1) or fallback (2).
 
     Derives pointers from the newest completed pair for this config+arch:
@@ -417,7 +417,10 @@ def mark_module_commits(
                 )
 
     conn.commit()
-    print(f"mark_module_commits: {updated} pairs marked complete in {table}", file=sys.stderr)
+    print(
+        f"mark_module_commits: {updated} pairs marked complete in {table}",
+        file=sys.stderr,
+    )
     return updated
 
 
@@ -496,14 +499,19 @@ def main():
         "--module-branch", default="main", help="Git branch for module (default: main)"
     )
     parser.add_argument(
-        "--config-file", type=str, help="Path to config file (name extracted for tracking)"
+        "--config-file",
+        type=str,
+        help="Path to config file (name extracted for tracking)",
     )
     parser.add_argument(
-        "--architecture", type=str,
+        "--architecture",
+        type=str,
         help="Architecture (e.g., x86_64, aarch64). Auto-detected if not provided.",
     )
     parser.add_argument(
-        "--max-pairs", type=int, default=1,
+        "--max-pairs",
+        type=int,
+        default=1,
         help="Max pairs to fetch (for fetch-next, default: 1)",
     )
 
@@ -571,7 +579,9 @@ def main():
                 print("Error: --max-pairs must be >= 1", file=sys.stderr)
                 sys.exit(1)
             if not config_name:
-                print("Error: --config-file is required for fetch-next", file=sys.stderr)
+                print(
+                    "Error: --config-file is required for fetch-next", file=sys.stderr
+                )
                 sys.exit(1)
             if not args.architecture:
                 print("Error: architecture could not be determined", file=sys.stderr)
@@ -595,7 +605,10 @@ def main():
                 )
                 sys.exit(1)
             if not config_name:
-                print("Error: --config-file is required for mark-complete", file=sys.stderr)
+                print(
+                    "Error: --config-file is required for mark-complete",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             if not args.architecture:
                 print("Error: architecture could not be determined", file=sys.stderr)
@@ -634,7 +647,10 @@ def main():
             )
 
     except psycopg2.IntegrityError as e:
-        print(f"Database integrity error (likely NULL in NOT NULL field): {e}", file=sys.stderr)
+        print(
+            f"Database integrity error (likely NULL in NOT NULL field): {e}",
+            file=sys.stderr,
+        )
         conn.rollback()
         sys.exit(1)
     except psycopg2.Error as e:
