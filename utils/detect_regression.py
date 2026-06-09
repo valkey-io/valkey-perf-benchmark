@@ -123,7 +123,7 @@ def main() -> None:
     parser.add_argument("--database", required=True)
     parser.add_argument("--username", required=True)
     parser.add_argument("--password", required=True)
-    parser.add_argument("--table-name", default="benchmark_metrics")
+    parser.add_argument("--table-name", required=True)
     parser.add_argument(
         "--threshold",
         type=float,
