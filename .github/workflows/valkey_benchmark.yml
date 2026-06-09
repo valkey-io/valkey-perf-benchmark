@@ -366,17 +366,6 @@ jobs:
         env:
           REPORT: ${{ steps.detect_regression.outputs.report }}
 
-      - name: Notify Slack on regression
-        if: steps.detect_regression.outputs.has_regression == 'true'
-        uses: ravsamhq/notify-slack-action@042f29088bb3bdbda5b4ff7b4818466a277fa8f7 # v2.5.0
-        with:
-          status: "failure"
-          notify_when: "failure"
-          notification_title: "Perf regression <${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}}|detected>"
-          message_format: ":warning: Regression in `${{ steps.detect_regression.outputs.new_commit }}` vs baseline `${{ steps.detect_regression.outputs.baseline_commit }}`"
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
       - name: Cleanup any running valkey processes and files
         if: always()
         continue-on-error: true
