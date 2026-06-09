@@ -85,6 +85,8 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
             schema[field] = f"VARCHAR(255) NOT NULL"
         elif field == "module_commit":
             schema[field] = "VARCHAR(255)"
+        elif field == "config_set":
+            schema[field] = "JSONB"
         elif field == "config_name":
             schema[field] = f"VARCHAR({CONFIG_NAME_MAX_LENGTH})"
         elif field in ["group_description", "scenario_description"]:
@@ -271,6 +273,11 @@ def convert_metrics_to_rows(
                 if isinstance(value, str) and len(value) > DESCRIPTION_MAX_LENGTH:
                     value = value[:DESCRIPTION_MAX_LENGTH]
                 row.append(value)
+            elif column == "config_set":
+                from psycopg2.extras import Json
+
+                value = metric.get(column)
+                row.append(Json(value) if value is not None else None)
             elif column == "config_name":
                 value = metric.get(column)
                 if isinstance(value, str) and len(value) > CONFIG_NAME_MAX_LENGTH:

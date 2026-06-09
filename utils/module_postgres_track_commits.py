@@ -56,6 +56,7 @@ def create_module_table(conn, module_name: str) -> None:
                     CHECK (status IN ('pending', 'in_progress', 'complete')),
                 priority INTEGER,
                 config_name VARCHAR(255) NOT NULL,
+                config_set JSONB,
                 architecture VARCHAR(50),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),

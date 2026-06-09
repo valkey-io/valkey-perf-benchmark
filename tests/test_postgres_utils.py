@@ -440,3 +440,41 @@ class TestResolveTableName:
 
     def test_neither_provided_returns_none(self):
         assert resolve_table_name(None, None) is None
+
+
+# ---------------------------------------------------------------------------
+# config_set JSONB handling
+# ---------------------------------------------------------------------------
+
+
+class TestConfigSetJsonb:
+    """Tests for config_set being stored as JSONB."""
+
+    def test_config_set_stored_as_jsonb(self):
+        from psycopg2.extras import Json
+
+        metrics = [
+            {
+                "timestamp": "2026-06-01T00:00:00",
+                "commit": "abc123",
+                "command": "FT.SEARCH idx term",
+                "config_set": {
+                    "io-threads": 8,
+                    "search.reader-threads": 8,
+                    "search.writer-threads": 8,
+                },
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["config_set"] == "JSONB"
+
+        columns = ["timestamp", "commit", "command", "config_set"]
+        rows, skipped = convert_metrics_to_rows(metrics, columns)
+        assert skipped == 0
+        config_value = rows[0][3]
+        assert isinstance(config_value, Json)
+        assert config_value.adapted == {
+            "io-threads": 8,
+            "search.reader-threads": 8,
+            "search.writer-threads": 8,
+        }
