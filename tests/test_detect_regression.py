@@ -2,7 +2,11 @@
 
 import pytest
 from unittest.mock import patch, MagicMock
-from utils.detect_regression import fetch_last_two_commits, fetch_metrics_for_commit, detect
+from utils.detect_regression import (
+    fetch_last_two_commits,
+    fetch_metrics_for_commit,
+    detect,
+)
 
 
 class TestFetchLastTwoCommits:
@@ -40,7 +44,11 @@ class TestFetchMetricsForCommit:
         conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
         conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
         cursor.description = [
-            ("id",), ("commit",), ("rps",), ("created_at",), ("command",),
+            ("id",),
+            ("commit",),
+            ("rps",),
+            ("created_at",),
+            ("command",),
         ]
         cursor.fetchall.return_value = [
             (1, "abc123", Decimal("500000.00"), "2025-01-01", "SET"),
@@ -59,28 +67,32 @@ class TestFetchMetricsForCommit:
 class TestDetect:
     @patch("utils.detect_regression.fetch_metrics_for_commit")
     @patch("utils.detect_regression.fetch_last_two_commits")
-    def test_no_regression_when_rps_is_same(self, mock_fetch_commits, mock_fetch_metrics):
+    def test_no_regression_when_rps_is_same(
+        self, mock_fetch_commits, mock_fetch_metrics
+    ):
         mock_fetch_commits.return_value = ["new_commit", "baseline_commit"]
 
         # Both commits have same RPS across 5 runs
         def make_metrics(commit, rps):
             rows = []
             for i in range(5):
-                rows.append({
-                    "timestamp": f"2025-01-0{i+1} 00:00:00",
-                    "commit": commit,
-                    "command": "GET",
-                    "pipeline": 1,
-                    "io_threads": 1,
-                    "clients": 1600,
-                    "data_size": 16,
-                    "rps": rps + (i * 100),  # slight noise
-                    "avg_latency_ms": 0.5,
-                    "p50_latency_ms": 0.4,
-                    "p95_latency_ms": 1.2,
-                    "p99_latency_ms": 2.0,
-                    "test_type": "core",
-                })
+                rows.append(
+                    {
+                        "timestamp": f"2025-01-0{i+1} 00:00:00",
+                        "commit": commit,
+                        "command": "GET",
+                        "pipeline": 1,
+                        "io_threads": 1,
+                        "clients": 1600,
+                        "data_size": 16,
+                        "rps": rps + (i * 100),  # slight noise
+                        "avg_latency_ms": 0.5,
+                        "p50_latency_ms": 0.4,
+                        "p95_latency_ms": 1.2,
+                        "p99_latency_ms": 2.0,
+                        "test_type": "core",
+                    }
+                )
             return rows
 
         mock_fetch_metrics.side_effect = [
@@ -95,27 +107,31 @@ class TestDetect:
 
     @patch("utils.detect_regression.fetch_metrics_for_commit")
     @patch("utils.detect_regression.fetch_last_two_commits")
-    def test_regression_detected_when_rps_drops(self, mock_fetch_commits, mock_fetch_metrics):
+    def test_regression_detected_when_rps_drops(
+        self, mock_fetch_commits, mock_fetch_metrics
+    ):
         mock_fetch_commits.return_value = ["new_commit", "baseline_commit"]
 
         def make_metrics(commit, rps):
             rows = []
             for i in range(5):
-                rows.append({
-                    "timestamp": f"2025-01-0{i+1} 00:00:00",
-                    "commit": commit,
-                    "command": "GET",
-                    "pipeline": 1,
-                    "io_threads": 1,
-                    "clients": 1600,
-                    "data_size": 16,
-                    "rps": rps + (i * 10),
-                    "avg_latency_ms": 0.5,
-                    "p50_latency_ms": 0.4,
-                    "p95_latency_ms": 1.2,
-                    "p99_latency_ms": 2.0,
-                    "test_type": "core",
-                })
+                rows.append(
+                    {
+                        "timestamp": f"2025-01-0{i+1} 00:00:00",
+                        "commit": commit,
+                        "command": "GET",
+                        "pipeline": 1,
+                        "io_threads": 1,
+                        "clients": 1600,
+                        "data_size": 16,
+                        "rps": rps + (i * 10),
+                        "avg_latency_ms": 0.5,
+                        "p50_latency_ms": 0.4,
+                        "p95_latency_ms": 1.2,
+                        "p99_latency_ms": 2.0,
+                        "test_type": "core",
+                    }
+                )
             return rows
 
         mock_fetch_metrics.side_effect = [
@@ -132,27 +148,31 @@ class TestDetect:
 
     @patch("utils.detect_regression.fetch_metrics_for_commit")
     @patch("utils.detect_regression.fetch_last_two_commits")
-    def test_small_regression_below_threshold_not_reported(self, mock_fetch_commits, mock_fetch_metrics):
+    def test_small_regression_below_threshold_not_reported(
+        self, mock_fetch_commits, mock_fetch_metrics
+    ):
         mock_fetch_commits.return_value = ["new_commit", "baseline_commit"]
 
         def make_metrics(commit, rps):
             rows = []
             for i in range(5):
-                rows.append({
-                    "timestamp": f"2025-01-0{i+1} 00:00:00",
-                    "commit": commit,
-                    "command": "GET",
-                    "pipeline": 1,
-                    "io_threads": 1,
-                    "clients": 1600,
-                    "data_size": 16,
-                    "rps": rps + (i * 10),
-                    "avg_latency_ms": 0.5,
-                    "p50_latency_ms": 0.4,
-                    "p95_latency_ms": 1.2,
-                    "p99_latency_ms": 2.0,
-                    "test_type": "core",
-                })
+                rows.append(
+                    {
+                        "timestamp": f"2025-01-0{i+1} 00:00:00",
+                        "commit": commit,
+                        "command": "GET",
+                        "pipeline": 1,
+                        "io_threads": 1,
+                        "clients": 1600,
+                        "data_size": 16,
+                        "rps": rps + (i * 10),
+                        "avg_latency_ms": 0.5,
+                        "p50_latency_ms": 0.4,
+                        "p95_latency_ms": 1.2,
+                        "p99_latency_ms": 2.0,
+                        "test_type": "core",
+                    }
+                )
             return rows
 
         mock_fetch_metrics.side_effect = [
