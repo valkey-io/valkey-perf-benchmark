@@ -15,7 +15,7 @@ from typing import List, Optional
 import psycopg2
 from psycopg2.extras import Json
 
-from utils.postgres_track_commits import _git_rev_list, _git_commit_time
+from postgres_track_commits import _git_rev_list, _git_commit_time
 
 
 def get_config_name(config_file_path: str) -> str:
