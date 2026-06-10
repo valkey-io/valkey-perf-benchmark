@@ -67,8 +67,7 @@ def create_module_table(conn, module_name: str) -> None:
     """
     table = _module_table_name(module_name)
     with conn.cursor() as cur:
-        cur.execute(
-            f"""
+        cur.execute(f"""
             CREATE TABLE IF NOT EXISTS {table} (
                 id SERIAL PRIMARY KEY,
                 sha VARCHAR(40) NOT NULL,
@@ -98,8 +97,7 @@ def create_module_table(conn, module_name: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_{table}_fetch_order
                 ON {table}(status, created_at DESC, priority ASC,
                            max_commit_timestamp DESC, min_commit_timestamp DESC);
-        """
-        )
+        """)
     conn.commit()
     print(f"Created/verified {table} table", file=sys.stderr)
 
@@ -142,7 +140,9 @@ def populate_module_commits(
     _check_null_priorities(conn, module_name, "start of populate_module_commits")
 
     # Clean up stale in_progress entries from previous failed runs
-    cleanup_module_commits(conn, module_name, config_name, config_sets_json, architecture)
+    cleanup_module_commits(
+        conn, module_name, config_name, config_sets_json, architecture
+    )
 
     # Get all commits from both git repos (newest first)
     core_shas = _git_rev_list(repo, branch)
@@ -205,7 +205,9 @@ def populate_module_commits(
     )
 
     # Classify newly inserted pairs with priority
-    _determine_priority(conn, module_name, config_name, config_sets, config_sets_json, architecture)
+    _determine_priority(
+        conn, module_name, config_name, config_sets, config_sets_json, architecture
+    )
 
     _check_null_priorities(conn, module_name, "end of populate_module_commits")
 
@@ -306,8 +308,12 @@ def _mark_subset_rows(
                   )
             """,
                 (
-                    config_name, architecture, config_sets_json,
-                    config_name, architecture, Json(superset_cs),
+                    config_name,
+                    architecture,
+                    config_sets_json,
+                    config_name,
+                    architecture,
+                    Json(superset_cs),
                 ),
             )
             subset_count += cur.rowcount
@@ -398,7 +404,13 @@ def _determine_priority(
                   AND core_timestamp >= %s
                   AND module_timestamp >= %s
             """,
-                (config_name, config_sets_json, architecture, pointer_core_ts, pointer_module_ts),
+                (
+                    config_name,
+                    config_sets_json,
+                    architecture,
+                    pointer_core_ts,
+                    pointer_module_ts,
+                ),
             )
             forward_count = cur.rowcount
 
@@ -430,7 +442,12 @@ def _determine_priority(
 
 
 def fetch_next_module_commits(
-    conn, module_name: str, config_name: str, config_sets_json, architecture: str, max_pairs: int = 1
+    conn,
+    module_name: str,
+    config_name: str,
+    config_sets_json,
+    architecture: str,
+    max_pairs: int = 1,
 ) -> List[str]:
     """Fetch the next batch of pending pairs and mark them as in_progress.
 
@@ -498,7 +515,12 @@ def fetch_next_module_commits(
 
 
 def mark_module_commits(
-    conn, module_name: str, pairs: List[str], config_name: str, config_sets_json, architecture: str
+    conn,
+    module_name: str,
+    pairs: List[str],
+    config_name: str,
+    config_sets_json,
+    architecture: str,
 ) -> int:
     """Mark specific pairs as completed.
 
