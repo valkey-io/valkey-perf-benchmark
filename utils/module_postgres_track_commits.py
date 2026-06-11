@@ -139,7 +139,8 @@ def _create_module_table(conn, module_name: str) -> None:
     """
     table = _module_table_name(module_name)
     with conn.cursor() as cur:
-        cur.execute(f"""
+        cur.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS {table} (
                 id SERIAL PRIMARY KEY,
                 sha VARCHAR(40) NOT NULL,
@@ -172,7 +173,8 @@ def _create_module_table(conn, module_name: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_{table}_created_order
                 ON {table}(created_at DESC, priority ASC,
                            max_commit_timestamp DESC, min_commit_timestamp DESC);
-        """)
+        """
+        )
     conn.commit()
     print(f"Created/verified {table} table", file=sys.stderr)
 
