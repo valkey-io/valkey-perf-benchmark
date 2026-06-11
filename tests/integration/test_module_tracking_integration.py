@@ -2175,8 +2175,18 @@ class TestAssignPriorityInMemory:
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
-        core_times = {"A": "2026-06-01", "B": "2026-06-02", "C": "2026-06-03", "D": "2026-06-04"}
-        mod_times = {"a": "2026-06-01", "b": "2026-06-02", "c": "2026-06-03", "d": "2026-06-04"}
+        core_times = {
+            "A": "2026-06-01",
+            "B": "2026-06-02",
+            "C": "2026-06-03",
+            "D": "2026-06-04",
+        }
+        mod_times = {
+            "a": "2026-06-01",
+            "b": "2026-06-02",
+            "c": "2026-06-03",
+            "d": "2026-06-04",
+        }
 
         # Already completed pairs: Aa, Ab, Ba, Bb
         completed_pairs = [("A", "a"), ("A", "b"), ("B", "a"), ("B", "b")]
@@ -2192,11 +2202,15 @@ class TestAssignPriorityInMemory:
                     VALUES (%s, %s, %s, %s, %s, %s, 'completed', 1, %s, %s, %s)
                 """,
                     (
-                        core, mod,
-                        f"{core_t}T00:00:00+00:00", f"{mod_t}T00:00:00+00:00",
+                        core,
+                        mod,
+                        f"{core_t}T00:00:00+00:00",
+                        f"{mod_t}T00:00:00+00:00",
                         f"{max(core_t, mod_t)}T00:00:00+00:00",
                         f"{min(core_t, mod_t)}T00:00:00+00:00",
-                        CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE,
+                        CONFIG_NAME,
+                        CONFIG_SETS_JSON,
+                        ARCHITECTURE,
                     ),
                 )
         conn.commit()
@@ -2208,9 +2222,11 @@ class TestAssignPriorityInMemory:
             for mod, mod_t in mod_times.items():
                 if (core, mod) in completed_set:
                     continue
-                pairs.append(self._make_pair(
-                    f"{core_t}T00:00:00+00:00", f"{mod_t}T00:00:00+00:00"
-                ))
+                pairs.append(
+                    self._make_pair(
+                        f"{core_t}T00:00:00+00:00", f"{mod_t}T00:00:00+00:00"
+                    )
+                )
                 pairs[-1].core_sha = core
                 pairs[-1].module_sha = mod
 
@@ -2223,21 +2239,29 @@ class TestAssignPriorityInMemory:
 
         # Forward (priority=1): core >= B AND module >= b
         forward_expected = [
-            ("B", "c"), ("B", "d"),
-            ("C", "b"), ("C", "c"), ("C", "d"),
-            ("D", "b"), ("D", "c"), ("D", "d"),
+            ("B", "c"),
+            ("B", "d"),
+            ("C", "b"),
+            ("C", "c"),
+            ("C", "d"),
+            ("D", "b"),
+            ("D", "c"),
+            ("D", "d"),
         ]
         for pair in forward_expected:
             assert result[pair] == 1, f"{pair} should be forward(1), got {result[pair]}"
 
         # Fallback (priority=2): core < B OR module < b
         fallback_expected = [
-            ("A", "c"), ("A", "d"),
+            ("A", "c"),
+            ("A", "d"),
             ("C", "a"),
             ("D", "a"),
         ]
         for pair in fallback_expected:
-            assert result[pair] == 2, f"{pair} should be fallback(2), got {result[pair]}"
+            assert (
+                result[pair] == 2
+            ), f"{pair} should be fallback(2), got {result[pair]}"
 
     def test_skips_already_assigned_pairs(self, conn, mock_git):
         """Pairs with priority already set (e.g., subset=99) should not be changed."""
