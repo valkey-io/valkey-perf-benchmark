@@ -12,7 +12,6 @@ from .conftest import GitRepoFixture
 
 from utils.git_utils import resolve_ref, get_commit_timestamp
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

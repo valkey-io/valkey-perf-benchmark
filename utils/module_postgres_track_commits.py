@@ -178,8 +178,12 @@ def _create_module_table(conn, module_name: str) -> None:
 
 
 def _mark_subset_pairs_in_memory(
-    conn, pairs: List[CommitPair], table: str, config_name: str,
-    config_sets: List[dict], architecture: str
+    conn,
+    pairs: List[CommitPair],
+    table: str,
+    config_name: str,
+    config_sets: List[dict],
+    architecture: str,
 ) -> int:
     """Mark pairs as completed_as_subset if a superset config_sets already exists.
 
@@ -216,7 +220,8 @@ def _mark_subset_pairs_in_memory(
 
     # Find supersets of our config_sets
     superset_list = [
-        cs for cs in completed_config_sets_list
+        cs
+        for cs in completed_config_sets_list
         if _is_config_sets_subset(config_sets, cs)
     ]
 
@@ -261,8 +266,12 @@ def _mark_subset_pairs_in_memory(
 
 
 def _assign_priority_in_memory(
-    conn, pairs: List[CommitPair], table: str, config_name: str,
-    config_sets_json, architecture: str
+    conn,
+    pairs: List[CommitPair],
+    table: str,
+    config_name: str,
+    config_sets_json,
+    architecture: str,
 ) -> None:
     """Assign priority to pairs that are still pending (not subset-completed).
 
@@ -311,8 +320,10 @@ def _assign_priority_in_memory(
             pointer_core_ts = _parse_timestamp(pointer_row[0])
             pointer_module_ts = _parse_timestamp(pointer_row[1])
             # Forward: both core and module strictly newer than pointer
-            if pair.core_timestamp > pointer_core_ts and \
-               pair.module_timestamp > pointer_module_ts:
+            if (
+                pair.core_timestamp > pointer_core_ts
+                and pair.module_timestamp > pointer_module_ts
+            ):
                 pair.priority = 1
                 forward_count += 1
             else:
@@ -363,7 +374,9 @@ def populate_module_commits(
 
     # Get commits from both git repos (newest first, limited if specified)
     core_shas = _git_rev_list(repo, branch, max_count=max_core_commits)
-    module_shas = _git_rev_list(module_repo, module_branch, max_count=max_module_commits)
+    module_shas = _git_rev_list(
+        module_repo, module_branch, max_count=max_module_commits
+    )
     print(
         f"Scanned {len(core_shas)} core commits "
         f"(limited to most recent {max_core_commits}), "
@@ -426,7 +439,10 @@ def populate_module_commits(
     completed_as_subset = _mark_subset_pairs_in_memory(
         conn, pairs, table, config_name, config_sets, architecture
     )
-    print(f"Subset detection: {completed_as_subset} pairs marked as completed_as_subset", file=sys.stderr)
+    print(
+        f"Subset detection: {completed_as_subset} pairs marked as completed_as_subset",
+        file=sys.stderr,
+    )
 
     # Step 3: Assign priority in memory (for pairs not marked as subset)
     _assign_priority_in_memory(
@@ -475,8 +491,6 @@ def populate_module_commits(
     )
 
     return len(pairs)
-
-
 
 
 def check_incomplete_rows(
@@ -709,7 +723,13 @@ def main():
 
     parser.add_argument(
         "operation",
-        choices=["populate", "fetch-next", "mark-complete", "cleanup", "check-incomplete"],
+        choices=[
+            "populate",
+            "fetch-next",
+            "mark-complete",
+            "cleanup",
+            "check-incomplete",
+        ],
         help="Operation to perform",
     )
 
@@ -923,7 +943,10 @@ def main():
 
         elif args.operation == "check-incomplete":
             if not config_name:
-                print("Error: --config-file is required for check-incomplete", file=sys.stderr)
+                print(
+                    "Error: --config-file is required for check-incomplete",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             if not args.architecture:
                 print("Error: architecture could not be determined", file=sys.stderr)

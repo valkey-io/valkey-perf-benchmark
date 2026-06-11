@@ -2206,9 +2206,7 @@ class TestAssignPriorityInMemory:
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
-        pair = self._make_pair(
-            "2026-06-05T10:00:00+00:00", "2026-06-04T10:00:00+00:00"
-        )
+        pair = self._make_pair("2026-06-05T10:00:00+00:00", "2026-06-04T10:00:00+00:00")
         pair.priority = 99
         pair.status = "completed_as_subset"
 

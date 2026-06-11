@@ -191,16 +191,19 @@ class TestCommitPair:
 
     def test_exits_on_missing_core_sha(self):
         import pytest
+
         with pytest.raises(SystemExit):
             self._make_pair(core_sha="")
 
     def test_exits_on_missing_module_sha(self):
         import pytest
+
         with pytest.raises(SystemExit):
             self._make_pair(module_sha=None)
 
     def test_exits_on_missing_config_name(self):
         import pytest
+
         with pytest.raises(SystemExit):
             self._make_pair(config_name="")
 
@@ -232,6 +235,7 @@ class TestCommitPair:
 
     def test_to_insert_tuple_wraps_config_sets_as_json(self):
         from psycopg2.extras import Json
+
         pair = self._make_pair()
         pair.priority = 2
         t = pair.to_insert_tuple()
