@@ -2155,49 +2155,84 @@ class TestAssignPriorityInMemory:
         assert pairs[1].priority == 1
 
     def test_forward_and_fallback_classification(self, conn, mock_git):
-        """Forward: both timestamps >= pointer. Fallback: at least one < pointer.
+        """4x4 grid test mimicking the priority diagram.
 
-        Pointer is at (2026-06-03, 2026-06-03).
-        - forward_pair: core=06-05, module=06-04 → both >= pointer → priority=1
-        - fallback_pair: core=06-01, module=06-02 → both < pointer → priority=2
+        Core commits: A(oldest), B, C, D(newest)
+        Module commits: a(oldest), b, c, d(newest)
+
+        Pointer = completed pair (B, b).
+        Forward (>=): any pair where core >= B AND module >= b
+        Fallback (<): any pair where core < B OR module < b
+
+        Expected:
+          Forward: Bb, Bc, Bd, Cb, Cc, Cd, Db, Dc, Dd (9 pairs)
+          Fallback: Aa, Ba, Ca, Da, Ab, Ac, Ad (but Ab is the pointer itself,
+                    so only new pairs: Ba, Ca, Da = fallback on column a;
+                    and Ac, Ad = forward since core A < B → fallback)
+
+        Simplified: we test a subset of the grid to verify the boundary.
         """
         from utils.module_postgres_track_commits import _assign_priority_in_memory
 
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
-        # Insert a completed pair to establish the pointer at (06-03, 06-03)
+        # Pointer: core=B (time=2), module=b (time=2)
         with conn.cursor() as cur:
             cur.execute(
                 f"""
                 INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
                                      max_commit_timestamp, min_commit_timestamp,
                                      status, priority, config_name, config_sets, architecture)
-                VALUES ('pointer_core', 'pointer_mod',
-                        '2026-06-03T10:00:00+00:00', '2026-06-03T10:00:00+00:00',
-                        '2026-06-03T10:00:00+00:00', '2026-06-03T10:00:00+00:00',
+                VALUES ('B', 'b',
+                        '2026-06-02T00:00:00+00:00', '2026-06-02T00:00:00+00:00',
+                        '2026-06-02T00:00:00+00:00', '2026-06-02T00:00:00+00:00',
                         'completed', 1, %s, %s, %s)
             """,
                 (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
             )
         conn.commit()
 
-        # Forward: both strictly > pointer (06-05 > 06-03 AND 06-04 > 06-03)
-        forward_pair = self._make_pair(
-            "2026-06-05T10:00:00+00:00", "2026-06-04T10:00:00+00:00"
-        )
-        # Fallback: core > pointer but module = pointer (not strictly >)
-        fallback_pair = self._make_pair(
-            "2026-06-05T10:00:00+00:00", "2026-06-03T10:00:00+00:00"
-        )
+        # Build pairs for the full 4x4 grid (excluding the pointer Bb)
+        core_times = {"A": "2026-06-01", "B": "2026-06-02", "C": "2026-06-03", "D": "2026-06-04"}
+        mod_times = {"a": "2026-06-01", "b": "2026-06-02", "c": "2026-06-03", "d": "2026-06-04"}
 
-        pairs = [forward_pair, fallback_pair]
+        pairs = []
+        for core, core_t in core_times.items():
+            for mod, mod_t in mod_times.items():
+                if core == "B" and mod == "b":
+                    continue  # pointer already completed
+                pairs.append(self._make_pair(
+                    f"{core_t}T00:00:00+00:00", f"{mod_t}T00:00:00+00:00"
+                ))
+                pairs[-1].core_sha = core
+                pairs[-1].module_sha = mod
+
         _assign_priority_in_memory(
             conn, pairs, table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
         )
 
-        assert forward_pair.priority == 1
-        assert fallback_pair.priority == 2
+        # Build lookup: (core, mod) -> priority
+        result = {(p.core_sha, p.module_sha): p.priority for p in pairs}
+
+        # Forward (priority=1): core >= B AND module >= b
+        forward_expected = [
+            ("B", "c"), ("B", "d"),
+            ("C", "b"), ("C", "c"), ("C", "d"),
+            ("D", "b"), ("D", "c"), ("D", "d"),
+        ]
+        for pair in forward_expected:
+            assert result[pair] == 1, f"{pair} should be forward(1), got {result[pair]}"
+
+        # Fallback (priority=2): core < B OR module < b
+        fallback_expected = [
+            ("A", "a"), ("A", "b"), ("A", "c"), ("A", "d"),
+            ("B", "a"),
+            ("C", "a"),
+            ("D", "a"),
+        ]
+        for pair in fallback_expected:
+            assert result[pair] == 2, f"{pair} should be fallback(2), got {result[pair]}"
 
     def test_skips_already_assigned_pairs(self, conn, mock_git):
         """Pairs with priority already set (e.g., subset=99) should not be changed."""

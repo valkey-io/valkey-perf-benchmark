@@ -276,8 +276,8 @@ def _assign_priority_in_memory(
     """Assign priority to pairs that are still pending (not subset-completed).
 
     Derives pointer from the newest completed pair for this config+arch.
-    - Forward (priority=1): both timestamps strictly > pointer
-    - Fallback (priority=2): at least one timestamp <= pointer
+    - Forward (priority=1): both timestamps >= pointer (includes pointer row & column)
+    - Fallback (priority=2): at least one timestamp < pointer (old core × new module, or new core × old module)
     - No pointer (first run): all get priority=1
     - Completed as subset pairs (priority=99) are skipped
 
@@ -319,10 +319,10 @@ def _assign_priority_in_memory(
         else:
             pointer_core_ts = _parse_timestamp(pointer_row[0])
             pointer_module_ts = _parse_timestamp(pointer_row[1])
-            # Forward: both core and module strictly newer than pointer
+            # Forward: both core and module at or newer than pointer
             if (
-                pair.core_timestamp > pointer_core_ts
-                and pair.module_timestamp > pointer_module_ts
+                pair.core_timestamp >= pointer_core_ts
+                and pair.module_timestamp >= pointer_module_ts
             ):
                 pair.priority = 1
                 forward_count += 1
