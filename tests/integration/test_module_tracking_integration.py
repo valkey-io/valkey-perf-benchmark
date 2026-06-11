@@ -2160,48 +2160,54 @@ class TestAssignPriorityInMemory:
         Core commits: A(oldest), B, C, D(newest)
         Module commits: a(oldest), b, c, d(newest)
 
-        Pointer = completed pair (B, b).
-        Forward (>=): any pair where core >= B AND module >= b
-        Fallback (<): any pair where core < B OR module < b
+        Already completed: Aa, Ab, Ba, Bb (everything at or behind the pointer)
+        Pointer = newest completed pair (B, b).
 
-        Expected:
-          Forward: Bb, Bc, Bd, Cb, Cc, Cd, Db, Dc, Dd (9 pairs)
-          Fallback: Aa, Ba, Ca, Da, Ab, Ac, Ad (but Ab is the pointer itself,
-                    so only new pairs: Ba, Ca, Da = fallback on column a;
-                    and Ac, Ad = forward since core A < B → fallback)
-
-        Simplified: we test a subset of the grid to verify the boundary.
+        New pairs to classify:
+          Forward (>=): core >= B AND module >= b
+            Bc, Bd, Cb, Cc, Cd, Db, Dc, Dd
+          Fallback: core < B OR module < b
+            Ac, Ad, Ca, Da, Ba (wait — Ba is completed)
+            Actually only: Ac, Ad, Ca, Da
         """
         from utils.module_postgres_track_commits import _assign_priority_in_memory
 
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
-        # Pointer: core=B (time=2), module=b (time=2)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
-                                     max_commit_timestamp, min_commit_timestamp,
-                                     status, priority, config_name, config_sets, architecture)
-                VALUES ('B', 'b',
-                        '2026-06-02T00:00:00+00:00', '2026-06-02T00:00:00+00:00',
-                        '2026-06-02T00:00:00+00:00', '2026-06-02T00:00:00+00:00',
-                        'completed', 1, %s, %s, %s)
-            """,
-                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
-            )
-        conn.commit()
-
-        # Build pairs for the full 4x4 grid (excluding the pointer Bb)
         core_times = {"A": "2026-06-01", "B": "2026-06-02", "C": "2026-06-03", "D": "2026-06-04"}
         mod_times = {"a": "2026-06-01", "b": "2026-06-02", "c": "2026-06-03", "d": "2026-06-04"}
 
+        # Already completed pairs: Aa, Ab, Ba, Bb
+        completed_pairs = [("A", "a"), ("A", "b"), ("B", "a"), ("B", "b")]
+        with conn.cursor() as cur:
+            for core, mod in completed_pairs:
+                core_t = core_times[core]
+                mod_t = mod_times[mod]
+                cur.execute(
+                    f"""
+                    INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                         max_commit_timestamp, min_commit_timestamp,
+                                         status, priority, config_name, config_sets, architecture)
+                    VALUES (%s, %s, %s, %s, %s, %s, 'completed', 1, %s, %s, %s)
+                """,
+                    (
+                        core, mod,
+                        f"{core_t}T00:00:00+00:00", f"{mod_t}T00:00:00+00:00",
+                        f"{max(core_t, mod_t)}T00:00:00+00:00",
+                        f"{min(core_t, mod_t)}T00:00:00+00:00",
+                        CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE,
+                    ),
+                )
+        conn.commit()
+
+        # Build new pairs (everything not already completed)
+        completed_set = set(completed_pairs)
         pairs = []
         for core, core_t in core_times.items():
             for mod, mod_t in mod_times.items():
-                if core == "B" and mod == "b":
-                    continue  # pointer already completed
+                if (core, mod) in completed_set:
+                    continue
                 pairs.append(self._make_pair(
                     f"{core_t}T00:00:00+00:00", f"{mod_t}T00:00:00+00:00"
                 ))
@@ -2226,8 +2232,7 @@ class TestAssignPriorityInMemory:
 
         # Fallback (priority=2): core < B OR module < b
         fallback_expected = [
-            ("A", "a"), ("A", "b"), ("A", "c"), ("A", "d"),
-            ("B", "a"),
+            ("A", "c"), ("A", "d"),
             ("C", "a"),
             ("D", "a"),
         ]
