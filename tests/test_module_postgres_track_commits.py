@@ -7,6 +7,7 @@ Mirrors the testing approach of test_postgres_utils.py.
 from pathlib import Path
 
 from utils.module_postgres_track_commits import (
+    CommitPair,
     get_config_name,
     _module_table_name,
     _is_config_sets_subset,
@@ -152,3 +153,87 @@ class TestIsConfigSetsSubset:
             {"io-threads": 4, "search.reader-threads": 4, "search.writer-threads": 4},
         ]
         assert _is_config_sets_subset(subset, superset) is False
+
+
+# ---------------------------------------------------------------------------
+# CommitPair dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestCommitPair:
+    """Tests for CommitPair validation and methods."""
+
+    def _make_pair(self, **overrides):
+        """Helper to create a valid CommitPair with optional overrides."""
+        from datetime import datetime, timezone
+        from utils.module_postgres_track_commits import _parse_timestamp
+
+        defaults = {
+            "core_sha": "abc123",
+            "module_sha": "xyz789",
+            "core_timestamp": _parse_timestamp("2026-06-01T10:00:00+00:00"),
+            "module_timestamp": _parse_timestamp("2026-06-02T10:00:00+00:00"),
+            "max_commit_timestamp": _parse_timestamp("2026-06-02T10:00:00+00:00"),
+            "min_commit_timestamp": _parse_timestamp("2026-06-01T10:00:00+00:00"),
+            "config_name": "fts-benchmarks-arm.json",
+            "config_sets": [{"io-threads": 8}],
+            "architecture": "aarch64",
+        }
+        defaults.update(overrides)
+        return CommitPair(**defaults)
+
+    def test_creates_valid_pair(self):
+        pair = self._make_pair()
+        assert pair.core_sha == "abc123"
+        assert pair.module_sha == "xyz789"
+        assert pair.status == "pending"
+        assert pair.priority is None
+
+    def test_exits_on_missing_core_sha(self):
+        import pytest
+        with pytest.raises(SystemExit):
+            self._make_pair(core_sha="")
+
+    def test_exits_on_missing_module_sha(self):
+        import pytest
+        with pytest.raises(SystemExit):
+            self._make_pair(module_sha=None)
+
+    def test_exits_on_missing_config_name(self):
+        import pytest
+        with pytest.raises(SystemExit):
+            self._make_pair(config_name="")
+
+    def test_is_ready_to_insert_false_without_priority(self):
+        pair = self._make_pair()
+        assert pair.is_ready_to_insert() is False
+
+    def test_is_ready_to_insert_true_with_priority(self):
+        pair = self._make_pair()
+        pair.priority = 1
+        assert pair.is_ready_to_insert() is True
+
+    def test_is_ready_to_insert_true_with_subset_priority(self):
+        pair = self._make_pair()
+        pair.status = "completed_as_subset"
+        pair.priority = 99
+        assert pair.is_ready_to_insert() is True
+
+    def test_to_insert_tuple_correct_order(self):
+        pair = self._make_pair()
+        pair.priority = 1
+        t = pair.to_insert_tuple()
+        assert t[0] == "abc123"  # core_sha
+        assert t[1] == "xyz789"  # module_sha
+        assert t[6] == "pending"  # status
+        assert t[7] == 1  # priority
+        assert t[8] == "fts-benchmarks-arm.json"  # config_name
+        assert t[10] == "aarch64"  # architecture
+
+    def test_to_insert_tuple_wraps_config_sets_as_json(self):
+        from psycopg2.extras import Json
+        pair = self._make_pair()
+        pair.priority = 2
+        t = pair.to_insert_tuple()
+        assert isinstance(t[9], Json)
+        assert t[9].adapted == [{"io-threads": 8}]

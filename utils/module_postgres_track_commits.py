@@ -9,13 +9,85 @@ import argparse
 import json
 import platform
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 import psycopg2
 from psycopg2.extras import Json
 
+from datetime import datetime
+
 from postgres_track_commits import _git_rev_list, _git_commit_time
+
+
+def _parse_timestamp(ts) -> datetime:
+    """Convert a timestamp (string or datetime) to a datetime object for comparison."""
+    if isinstance(ts, datetime):
+        return ts
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+@dataclass
+class CommitPair:
+    """Represents a (core_sha, module_sha) pair to be benchmarked.
+
+    Validates required fields on creation. Status and priority are assigned
+    in-memory before any DB insert, ensuring no row is ever incomplete.
+    """
+
+    core_sha: str
+    module_sha: str
+    core_timestamp: datetime
+    module_timestamp: datetime
+    max_commit_timestamp: datetime
+    min_commit_timestamp: datetime
+    config_name: str
+    config_sets: List[dict]
+    architecture: str
+    status: str = "pending"
+    priority: Optional[int] = None
+
+    def __post_init__(self):
+        required = {
+            "core_sha": self.core_sha,
+            "module_sha": self.module_sha,
+            "core_timestamp": self.core_timestamp,
+            "module_timestamp": self.module_timestamp,
+            "max_commit_timestamp": self.max_commit_timestamp,
+            "min_commit_timestamp": self.min_commit_timestamp,
+            "config_name": self.config_name,
+            "config_sets": self.config_sets,
+            "architecture": self.architecture,
+        }
+        missing = [k for k, v in required.items() if v is None or v == ""]
+        if missing:
+            print(
+                f"FATAL: CommitPair missing required fields: {missing} "
+                f"(pair={self.core_sha}:{self.module_sha})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    def is_ready_to_insert(self) -> bool:
+        """Check if all fields including status and priority are set."""
+        return self.priority is not None and self.status is not None
+
+    def to_insert_tuple(self) -> tuple:
+        """Return tuple for SQL INSERT. Wraps config_sets as Json() at insert time."""
+        return (
+            self.core_sha,
+            self.module_sha,
+            self.core_timestamp,
+            self.module_timestamp,
+            self.max_commit_timestamp,
+            self.min_commit_timestamp,
+            self.status,
+            self.priority,
+            self.config_name,
+            Json(self.config_sets),
+            self.architecture,
+        )
 
 
 def get_config_name(config_file_path: str) -> str:
@@ -59,11 +131,11 @@ def _is_config_sets_subset(subset: List[dict], superset: List[dict]) -> bool:
     return True
 
 
-def create_module_table(conn, module_name: str) -> None:
+def _create_module_table(conn, module_name: str) -> None:
     """Create module benchmark queue table if it doesn't exist.
 
     Queue-based design: pairs are inserted as 'pending', classified with
-    priority (1=forward, 2=fallback), and fetched in priority order.
+    priority (1=forward, 2=fallback, 99=for completed as subset), and fetched in priority order.
     """
     table = _module_table_name(module_name)
     with conn.cursor() as cur:
@@ -76,8 +148,8 @@ def create_module_table(conn, module_name: str) -> None:
                 module_timestamp TIMESTAMPTZ NOT NULL,
                 max_commit_timestamp TIMESTAMPTZ NOT NULL,
                 min_commit_timestamp TIMESTAMPTZ NOT NULL,
-                status VARCHAR(20) NOT NULL DEFAULT 'new'
-                    CHECK (status IN ('new', 'pending', 'in_progress', 'completed', 'completed_as_subset')),
+                status VARCHAR(20) NOT NULL
+                    CHECK (status IN ('pending', 'in_progress', 'completed', 'completed_as_subset')),
                 priority INTEGER,
                 config_name VARCHAR(255) NOT NULL,
                 config_sets JSONB NOT NULL,
@@ -97,9 +169,160 @@ def create_module_table(conn, module_name: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_{table}_fetch_order
                 ON {table}(status, created_at DESC, priority ASC,
                            max_commit_timestamp DESC, min_commit_timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_{table}_created_order
+                ON {table}(created_at DESC, priority ASC,
+                           max_commit_timestamp DESC, min_commit_timestamp DESC);
         """)
     conn.commit()
     print(f"Created/verified {table} table", file=sys.stderr)
+
+
+def _mark_subset_pairs_in_memory(
+    conn, pairs: List[CommitPair], table: str, config_name: str,
+    config_sets: List[dict], architecture: str
+) -> int:
+    """Mark pairs as completed_as_subset if a superset config_sets already exists.
+
+    Checks if any completed config_sets in the DB is a superset of the current
+    config_sets. If yes, marks matching (sha, module_sha) pairs as completed_as_subset.
+
+    Args:
+        conn: PostgreSQL connection
+        pairs: List of CommitPair objects to check
+        table: Table name
+        config_name: Config file name
+        config_sets: Current config_sets (raw list for subset comparison)
+        architecture: Architecture
+
+    Returns:
+        Number of pairs marked as completed_as_subset
+    """
+    with conn.cursor() as cur:
+        # Find all distinct completed config_sets for this (config_name, arch)
+        cur.execute(
+            f"""
+            SELECT DISTINCT config_sets FROM {table}
+            WHERE status IN ('completed', 'completed_as_subset')
+              AND config_name = %s AND architecture = %s
+        """,
+            (config_name, architecture),
+        )
+        completed_config_sets_list = [row[0] for row in cur.fetchall()]
+
+    print(
+        f"  Subset check: found {len(completed_config_sets_list)} distinct completed config_sets in DB",
+        file=sys.stderr,
+    )
+
+    # Find supersets of our config_sets
+    superset_list = [
+        cs for cs in completed_config_sets_list
+        if _is_config_sets_subset(config_sets, cs)
+    ]
+
+    print(
+        f"  Subset check: {len(superset_list)} of those are supersets of current config_sets",
+        file=sys.stderr,
+    )
+
+    if not superset_list:
+        return 0
+
+    # Get (sha, module_sha) pairs that are completed with a superset config
+    completed_pairs = set()
+    with conn.cursor() as cur:
+        for superset_cs in superset_list:
+            cur.execute(
+                f"""
+                SELECT sha, module_sha FROM {table}
+                WHERE status = 'completed'
+                  AND config_name = %s AND architecture = %s
+                  AND config_sets = %s
+            """,
+                (config_name, architecture, Json(superset_cs)),
+            )
+            for row in cur.fetchall():
+                completed_pairs.add((row[0], row[1]))
+
+    print(
+        f"  Subset check: {len(completed_pairs)} completed pairs found from superset configs",
+        file=sys.stderr,
+    )
+
+    # Mark matching pairs in memory
+    count = 0
+    for pair in pairs:
+        if (pair.core_sha, pair.module_sha) in completed_pairs:
+            pair.status = "completed_as_subset"
+            pair.priority = 99
+            count += 1
+
+    return count
+
+
+def _assign_priority_in_memory(
+    conn, pairs: List[CommitPair], table: str, config_name: str,
+    config_sets_json, architecture: str
+) -> None:
+    """Assign priority to pairs that are still pending (not subset-completed).
+
+    Derives pointer from the newest completed pair for this config+arch.
+    - Forward (priority=1): both timestamps strictly > pointer
+    - Fallback (priority=2): at least one timestamp <= pointer
+    - No pointer (first run): all get priority=1
+    - Completed as subset pairs (priority=99) are skipped
+
+    Args:
+        conn: PostgreSQL connection
+        pairs: List of CommitPair objects (modifies in-place)
+        table: Table name
+        config_name: Config file name
+        config_sets_json: Pre-wrapped Json for SQL
+        architecture: Architecture
+    """
+    # Find pointer: max_commit_timestamp of the newest completed pair
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT core_timestamp, module_timestamp FROM {table}
+            WHERE status IN ('completed', 'completed_as_subset')
+              AND config_name = %s AND config_sets = %s AND architecture = %s
+            ORDER BY created_at DESC, priority ASC,
+                     max_commit_timestamp DESC, min_commit_timestamp DESC
+            LIMIT 1
+        """,
+            (config_name, config_sets_json, architecture),
+        )
+        pointer_row = cur.fetchone()
+
+    forward_count = 0
+    fallback_count = 0
+
+    for pair in pairs:
+        # Skip already-assigned pairs (e.g., completed_as_subset)
+        if pair.priority is not None:
+            continue
+
+        if pointer_row is None:
+            # No pointer — all forward
+            pair.priority = 1
+            forward_count += 1
+        else:
+            pointer_core_ts = _parse_timestamp(pointer_row[0])
+            pointer_module_ts = _parse_timestamp(pointer_row[1])
+            # Forward: both core and module strictly newer than pointer
+            if pair.core_timestamp > pointer_core_ts and \
+               pair.module_timestamp > pointer_module_ts:
+                pair.priority = 1
+                forward_count += 1
+            else:
+                pair.priority = 2
+                fallback_count += 1
+
+    print(
+        f"Priority assigned in memory: {forward_count} forward, {fallback_count} fallback",
+        file=sys.stderr,
+    )
 
 
 def populate_module_commits(
@@ -116,12 +339,11 @@ def populate_module_commits(
     max_core_commits: Optional[int] = None,
     max_module_commits: Optional[int] = None,
 ) -> int:
-    """Insert all new (core_sha, module_sha, config_set) combos into the queue table.
+    """Insert all new (core_sha, module_sha) combos into the queue table.
 
-    Computes the cartesian product of core commits, module commits, and config_sets,
-    then inserts any combos not already in the table. Existing rows
-    (any status) are skipped via ON CONFLICT DO NOTHING.
-    Also clears any stale in_progress entries from previous failed runs.
+    Computes the cartesian product of core commits and module commits,
+    filters out pairs already in the table, assigns priority in memory,
+    then batch-inserts all new pairs in a single transaction.
 
     Args:
         conn: PostgreSQL connection
@@ -137,14 +359,7 @@ def populate_module_commits(
     Returns:
         Number of new rows inserted
     """
-    create_module_table(conn, module_name)
-
-    _check_null_priorities(conn, module_name, "start of populate_module_commits")
-
-    # Clean up stale in_progress entries from previous failed runs
-    cleanup_module_commits(
-        conn, module_name, config_name, config_sets_json, architecture
-    )
+    _create_module_table(conn, module_name)
 
     # Get commits from both git repos (newest first, limited if specified)
     core_shas = _git_rev_list(repo, branch, max_count=max_core_commits)
@@ -154,6 +369,14 @@ def populate_module_commits(
         f"(limited to most recent {max_core_commits}), "
         f"{len(module_shas)} module commits "
         f"(limited to most recent {max_module_commits})",
+        file=sys.stderr,
+    )
+
+    # Cache timestamps — fetch once per unique SHA (avoids redundant subprocess calls)
+    core_timestamps = {sha: _git_commit_time(repo, sha) for sha in core_shas}
+    module_timestamps = {sha: _git_commit_time(module_repo, sha) for sha in module_shas}
+    print(
+        f"Cached {len(core_timestamps)} core + {len(module_timestamps)} module timestamps",
         file=sys.stderr,
     )
 
@@ -170,297 +393,139 @@ def populate_module_commits(
         existing = {(row[0], row[1]) for row in cur.fetchall()}
     print(f"Found {len(existing)} existing pairs in {table}", file=sys.stderr)
 
-    # Insert new rows from the cartesian product of commits
-    inserted = 0
-    with conn.cursor() as cur:
-        for core_sha in core_shas:
-            core_ts = _git_commit_time(repo, core_sha)
-            for module_sha in module_shas:
-                if (core_sha, module_sha) in existing:
-                    continue
-
-                module_ts = _git_commit_time(module_repo, module_sha)
-                max_ts = max(core_ts, module_ts)
-                min_ts = min(core_ts, module_ts)
-
-                cur.execute(
-                    f"""
-                    INSERT INTO {table} (sha, module_sha, core_timestamp,
-                                         module_timestamp, max_commit_timestamp,
-                                         min_commit_timestamp,
-                                         config_name, config_sets, architecture)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (sha, module_sha, config_name, config_sets, architecture)
-                    DO NOTHING
-                """,
-                    (
-                        core_sha,
-                        module_sha,
-                        core_ts,
-                        module_ts,
-                        max_ts,
-                        min_ts,
-                        config_name,
-                        config_sets_json,
-                        architecture,
-                    ),
+    # Step 1: Build CommitPair objects in memory
+    pairs: List[CommitPair] = []
+    for core_sha in core_shas:
+        core_ts = core_timestamps[core_sha]
+        for module_sha in module_shas:
+            if (core_sha, module_sha) in existing:
+                continue
+            module_ts = module_timestamps[module_sha]
+            core_dt = _parse_timestamp(core_ts)
+            module_dt = _parse_timestamp(module_ts)
+            pairs.append(
+                CommitPair(
+                    core_sha=core_sha,
+                    module_sha=module_sha,
+                    core_timestamp=core_dt,
+                    module_timestamp=module_dt,
+                    max_commit_timestamp=max(core_dt, module_dt),
+                    min_commit_timestamp=min(core_dt, module_dt),
+                    config_name=config_name,
+                    config_sets=config_sets,
+                    architecture=architecture,
                 )
-                inserted += cur.rowcount
+            )
+    print(f"Built {len(pairs)} new CommitPair objects", file=sys.stderr)
 
-    conn.commit()
-    print(
-        f"Populated {table}: {inserted} new pairs inserted "
-        f"({len(core_shas)} core × {len(module_shas)} module commits)",
-        file=sys.stderr,
+    if not pairs:
+        print("No new pairs to insert", file=sys.stderr)
+        return 0
+
+    # Step 2: Check for subset — find completed superset config_sets
+    completed_as_subset = _mark_subset_pairs_in_memory(
+        conn, pairs, table, config_name, config_sets, architecture
+    )
+    print(f"Subset detection: {completed_as_subset} pairs marked as completed_as_subset", file=sys.stderr)
+
+    # Step 3: Assign priority in memory (for pairs not marked as subset)
+    _assign_priority_in_memory(
+        conn, pairs, table, config_name, config_sets_json, architecture
     )
 
-    # Classify newly inserted pairs with priority
-    _determine_priority(
-        conn, module_name, config_name, config_sets, config_sets_json, architecture
-    )
-
-    null_count = _check_null_priorities(conn, module_name, "end of populate_module_commits")
-    if null_count > 0:
+    # Step 4: Validate — all pairs must be ready before insert
+    not_ready = [p for p in pairs if not p.is_ready_to_insert()]
+    if not_ready:
         print(
-            f"FATAL: {null_count} rows still have NULL priority after _determine_priority. Exiting.",
+            f"FATAL: {len(not_ready)} pairs not ready to insert "
+            f"(missing priority or status). Aborting.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    return inserted
+    # Step 5: Batch insert — single transaction, all or nothing
+    from psycopg2.extras import execute_values
 
-
-def _check_null_priorities(conn, module_name: str, context: str) -> int:
-    """Check for NULL priority values in the table and print a warning.
-
-    Args:
-        conn: PostgreSQL connection
-        module_name: Module name (determines table)
-        context: Description of when this check is happening (for the message)
-
-    Returns:
-        Number of rows with NULL priority
+    insert_sql = f"""
+        INSERT INTO {table} (sha, module_sha, core_timestamp,
+                             module_timestamp, max_commit_timestamp,
+                             min_commit_timestamp, status, priority,
+                             config_name, config_sets, architecture)
+        VALUES %s
     """
-    table = _module_table_name(module_name)
-    with conn.cursor() as cur:
-        cur.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL AND status = 'pending'"
-        )
-        null_count = cur.fetchone()[0]
+    data = [pair.to_insert_tuple() for pair in pairs]
 
-    if null_count > 0:
+    try:
+        with conn.cursor() as cur:
+            execute_values(cur, insert_sql, data)
+        conn.commit()
+    except psycopg2.IntegrityError as e:
+        conn.rollback()
         print(
-            f"WARNING [{context}]: {null_count} pending rows with NULL priority in {table}",
+            f"FATAL: Unexpected duplicate row during insert. "
+            f"This should not happen — existing pairs were filtered beforehand. "
+            f"Error: {e}",
             file=sys.stderr,
         )
-    return null_count
-
-
-def _mark_subset_rows(
-    conn,
-    module_name: str,
-    config_name: str,
-    config_sets: List[dict],
-    config_sets_json,
-    architecture: str,
-) -> int:
-    """Mark 'new' rows as 'completed_as_subset' if a superset config_sets already exists.
-
-    Batch approach:
-      1. Find all distinct config_sets with 'completed' status for this (config_name, arch)
-      2. Check if our config_sets is a subset of any of them
-      3. If yes, batch-UPDATE all 'new' rows whose (sha, module_sha) has a completed
-         superset row
-
-    Args:
-        conn: PostgreSQL connection
-        module_name: Module name (determines table)
-        config_name: Config file name to scope
-        config_sets: The config_sets array (raw Python list for subset comparison)
-        config_sets_json: Pre-wrapped Json(config_sets) for SQL queries
-        architecture: Architecture to scope
-
-    Returns:
-        Number of rows marked as completed_as_subset
-    """
-    table = _module_table_name(module_name)
-
-    with conn.cursor() as cur:
-        # Step 1: Get all distinct completed config_sets for this (config_name, arch)
-        cur.execute(
-            f"""
-            SELECT DISTINCT config_sets FROM {table}
-            WHERE status IN ('completed', 'completed_as_subset')
-              AND config_name = %s AND architecture = %s
-        """,
-            (config_name, architecture),
-        )
-        completed_config_sets_list = [row[0] for row in cur.fetchall()]
-
-        # Step 2: Find all completed config_sets that are supersets of ours
-        superset_config_sets_list = []
-        for completed_cs in completed_config_sets_list:
-            if _is_config_sets_subset(config_sets, completed_cs):
-                superset_config_sets_list.append(completed_cs)
-
-        print(
-            f"Subset detection: checked {len(completed_config_sets_list)} completed config_sets, "
-            f"found {len(superset_config_sets_list)} supersets",
-            file=sys.stderr,
-        )
-
-        if not superset_config_sets_list:
-            return 0
-
-        # Step 3: Batch-mark all 'new' rows whose pair exists in ANY superset's completed rows
-        subset_count = 0
-        for superset_cs in superset_config_sets_list:
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET status = 'completed_as_subset', updated_at = NOW()
-                WHERE status = 'new'
-                  AND config_name = %s AND architecture = %s
-                  AND config_sets = %s
-                  AND (sha, module_sha) IN (
-                      SELECT sha, module_sha FROM {table}
-                      WHERE status = 'completed'
-                        AND config_name = %s AND architecture = %s
-                        AND config_sets = %s
-                  )
-            """,
-                (
-                    config_name,
-                    architecture,
-                    config_sets_json,
-                    config_name,
-                    architecture,
-                    Json(superset_cs),
-                ),
-            )
-            subset_count += cur.rowcount
-
-    conn.commit()
-    if subset_count > 0:
-        print(
-            f"Subset detection: {subset_count} rows marked completed_as_subset",
-            file=sys.stderr,
-        )
-    return subset_count
-
-
-def _determine_priority(
-    conn,
-    module_name: str,
-    config_name: str,
-    config_sets: List[dict],
-    config_sets_json,
-    architecture: str,
-) -> int:
-    """Process 'new' rows: detect subsets, then assign priority to the rest.
-
-    Steps:
-      1. Call _mark_subset_rows to batch-mark any rows covered by a superset.
-      2. For remaining 'new' rows, derive priority from the newest completed pair:
-         - Forward (1): core_timestamp >= pointer AND module_timestamp >= pointer
-         - Fallback (2): everything else
-      3. Move processed rows from 'new' → 'pending'.
-
-    Args:
-        conn: PostgreSQL connection
-        module_name: Module name (determines table)
-        config_name: Config file name to scope
-        config_sets: The config_sets array being processed (raw Python list)
-        config_sets_json: Pre-wrapped Json(config_sets) for SQL queries
-        architecture: Architecture to scope
-
-    Returns:
-        Number of rows processed
-    """
-    table = _module_table_name(module_name)
-
-    # Step 1: Subset detection (batch)
-    subset_count = _mark_subset_rows(
-        conn, module_name, config_name, config_sets, config_sets_json, architecture
+        sys.exit(1)
+    print(
+        f"Populated {table}: {len(pairs)} new pairs inserted "
+        f"({len(core_shas)} core × {len(module_shas)} module commits)",
+        file=sys.stderr,
     )
 
-    # Step 2: Assign priority to remaining 'new' rows
-    updated = 0
+    return len(pairs)
+
+
+
+
+def check_incomplete_rows(
+    conn, module_name: str, config_name: str, config_sets_json, architecture: str
+) -> int:
+    """Check for rows with NULL values in required fields. Exit if found.
+
+    Required fields that must not be NULL: sha, module_sha, core_timestamp,
+    module_timestamp, max_commit_timestamp, min_commit_timestamp, status,
+    priority.
+
+    Called at start and end of workflow to catch any corrupt/incomplete state.
+
+    Args:
+        conn: PostgreSQL connection
+        module_name: Module name (determines table)
+        config_name: Config file name to scope
+        config_sets_json: Pre-wrapped Json(config_sets) for SQL queries
+        architecture: Architecture to scope
+
+    Returns:
+        Number of incomplete rows found (0 if clean)
+    """
+    _create_module_table(conn, module_name)
+    table = _module_table_name(module_name)
+
     with conn.cursor() as cur:
-        # Find pointer from newest completed pair for this config+config_sets+arch
         cur.execute(
             f"""
-            SELECT core_timestamp, module_timestamp FROM {table}
-            WHERE status IN ('completed', 'completed_as_subset')
-              AND config_name = %s AND config_sets = %s AND architecture = %s
-            ORDER BY created_at DESC, priority ASC,
-                     max_commit_timestamp DESC, min_commit_timestamp DESC
-            LIMIT 1
+            SELECT COUNT(*) FROM {table}
+            WHERE config_name = %s AND config_sets = %s AND architecture = %s
+              AND (sha IS NULL OR module_sha IS NULL OR core_timestamp IS NULL
+                   OR module_timestamp IS NULL OR max_commit_timestamp IS NULL
+                   OR min_commit_timestamp IS NULL OR status IS NULL
+                   OR priority IS NULL)
         """,
             (config_name, config_sets_json, architecture),
         )
-        pointer_row = cur.fetchone()
+        count = cur.fetchone()[0]
 
-        if pointer_row is None:
-            # No completed pairs — all 'new' with our config_sets get priority=1
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET status = 'pending', priority = 1, updated_at = NOW()
-                WHERE status = 'new'
-                  AND config_name = %s AND config_sets = %s AND architecture = %s
-            """,
-                (config_name, config_sets_json, architecture),
-            )
-            updated = cur.rowcount
-        else:
-            pointer_core_ts, pointer_module_ts = pointer_row
+    if count > 0:
+        print(
+            f"FATAL: {count} rows with NULL required fields found in {table}. Exiting.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-            # Forward (1): both timestamps >= pointer
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET status = 'pending', priority = 1, updated_at = NOW()
-                WHERE status = 'new'
-                  AND config_name = %s AND config_sets = %s AND architecture = %s
-                  AND core_timestamp >= %s
-                  AND module_timestamp >= %s
-            """,
-                (
-                    config_name,
-                    config_sets_json,
-                    architecture,
-                    pointer_core_ts,
-                    pointer_module_ts,
-                ),
-            )
-            forward_count = cur.rowcount
-
-            # Fallback (2): remaining 'new' rows with our config_sets
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET status = 'pending', priority = 2, updated_at = NOW()
-                WHERE status = 'new'
-                  AND config_name = %s AND config_sets = %s AND architecture = %s
-            """,
-                (config_name, config_sets_json, architecture),
-            )
-            fallback_count = cur.rowcount
-
-            updated = forward_count + fallback_count
-            print(
-                f"Priority assigned: {forward_count} forward, {fallback_count} fallback",
-                file=sys.stderr,
-            )
-
-    conn.commit()
-    total = subset_count + updated
-    print(
-        f"determine_priority: {total} rows processed ({subset_count} subset, {updated} prioritized)",
-        file=sys.stderr,
-    )
-    return total
+    print(f"Integrity check passed: no incomplete rows in {table}", file=sys.stderr)
+    return count
 
 
 def fetch_next_module_commits(
@@ -494,7 +559,7 @@ def fetch_next_module_commits(
     Returns:
         List of 'core_sha:module_sha' strings marked as in_progress
     """
-    create_module_table(conn, module_name)
+    _create_module_table(conn, module_name)
     table = _module_table_name(module_name)
 
     with conn.cursor() as cur:
@@ -560,7 +625,7 @@ def mark_module_commits(
     Returns:
         Number of rows updated
     """
-    create_module_table(conn, module_name)
+    _create_module_table(conn, module_name)
     table = _module_table_name(module_name)
     updated = 0
 
@@ -611,7 +676,7 @@ def cleanup_module_commits(
         Number of entries reset
     """
     # Ensure table exists (mirrors: create_tables in core cleanup)
-    create_module_table(conn, module_name)
+    _create_module_table(conn, module_name)
 
     table = _module_table_name(module_name)
     with conn.cursor() as cur:
@@ -637,66 +702,6 @@ def cleanup_module_commits(
     return count
 
 
-def delete_incomplete_inserts(
-    conn, module_name: str, config_name: str, config_sets_json, architecture: str
-) -> int:
-    """Delete rows with NULL priority from the most recent created_at batch.
-
-    When populate is cancelled mid-way, some rows are inserted but
-    _determine_priority never runs on them, leaving priority as NULL.
-    This function removes only those from the latest batch so the next
-    populate can re-insert them cleanly.
-
-    Scoped to the current config+config_sets+arch, latest created_at only.
-
-    Returns:
-        Number of rows deleted
-    """
-    create_module_table(conn, module_name)
-    table = _module_table_name(module_name)
-
-    with conn.cursor() as cur:
-        # Find the most recent created_at value for rows with NULL priority
-        cur.execute(
-            f"""
-            SELECT created_at FROM {table}
-            WHERE priority IS NULL
-              AND config_name = %s AND config_sets = %s AND architecture = %s
-            ORDER BY created_at DESC
-            LIMIT 1
-        """,
-            (config_name, config_sets_json, architecture),
-        )
-        row = cur.fetchone()
-
-        if row is None:
-            return 0
-
-        latest_created_at = row[0]
-
-        # Delete only rows from that batch
-        cur.execute(
-            f"""
-            DELETE FROM {table}
-            WHERE priority IS NULL
-              AND config_name = %s AND config_sets = %s AND architecture = %s
-              AND created_at = %s
-        """,
-            (config_name, config_sets_json, architecture, latest_created_at),
-        )
-        count = cur.rowcount
-
-    conn.commit()
-
-    if count > 0:
-        print(
-            f"Deleted {count} incomplete rows (NULL priority, batch={latest_created_at}) from {table}",
-            file=sys.stderr,
-        )
-
-    return count
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Module benchmark commit tracking (queue-based)"
@@ -704,7 +709,7 @@ def main():
 
     parser.add_argument(
         "operation",
-        choices=["populate", "fetch-next", "mark-complete", "cleanup", "delete-incomplete"],
+        choices=["populate", "fetch-next", "mark-complete", "cleanup", "check-incomplete"],
         help="Operation to perform",
     )
 
@@ -759,6 +764,12 @@ def main():
         default=None,
         help="Max module commits to scan during populate (default: all)",
     )
+    parser.add_argument(
+        "--idle-timeout",
+        type=int,
+        default=60000,
+        help="Idle-in-transaction timeout in ms (default: 60000)",
+    )
 
     args, remaining_args = parser.parse_known_args()
 
@@ -798,6 +809,7 @@ def main():
             password=args.password,
             connect_timeout=30,
             sslmode="prefer",
+            options=f"-c idle_in_transaction_session_timeout={args.idle_timeout}",
         )
         print(f"Connected to PostgreSQL at {args.host}:{args.port}", file=sys.stderr)
     except Exception as err:
@@ -909,15 +921,15 @@ def main():
                 architecture=args.architecture,
             )
 
-        elif args.operation == "delete-incomplete":
+        elif args.operation == "check-incomplete":
             if not config_name:
-                print("Error: --config-file is required for delete-incomplete", file=sys.stderr)
+                print("Error: --config-file is required for check-incomplete", file=sys.stderr)
                 sys.exit(1)
             if not args.architecture:
                 print("Error: architecture could not be determined", file=sys.stderr)
                 sys.exit(1)
 
-            delete_incomplete_inserts(
+            check_incomplete_rows(
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,

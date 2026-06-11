@@ -37,14 +37,12 @@ import psycopg2
 from psycopg2.extras import Json
 
 from utils.module_postgres_track_commits import (
-    create_module_table,
+    _create_module_table,
     populate_module_commits,
     fetch_next_module_commits,
     mark_module_commits,
     cleanup_module_commits,
-    delete_incomplete_inserts,
-    _determine_priority,
-    _check_null_priorities,
+    check_incomplete_rows,
     _module_table_name,
 )
 
@@ -146,7 +144,7 @@ def mock_git():
 
 
 # ---------------------------------------------------------------------------
-# create_module_table
+# _create_module_table
 # ---------------------------------------------------------------------------
 
 
@@ -154,8 +152,8 @@ class TestCreateModuleTable:
     """Verify table creation works correctly."""
 
     def test_creates_table(self, conn):
-        """Table should exist after create_module_table is called."""
-        create_module_table(conn, MODULE_NAME)
+        """Table should exist after _create_module_table is called."""
+        _create_module_table(conn, MODULE_NAME)
 
         table = _module_table_name(MODULE_NAME)
         with conn.cursor() as cur:
@@ -166,9 +164,9 @@ class TestCreateModuleTable:
             assert cur.fetchone()[0] is True
 
     def test_idempotent(self, conn):
-        """Calling create_module_table twice should not error."""
-        create_module_table(conn, MODULE_NAME)
-        create_module_table(conn, MODULE_NAME)
+        """Calling _create_module_table twice should not error."""
+        _create_module_table(conn, MODULE_NAME)
+        _create_module_table(conn, MODULE_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +182,7 @@ class TestPopulateIntegration:
     2. Gets git histories from both repos (mocked here)
     3. Queries DB for existing pairs (to skip duplicates)
     4. Inserts new pairs with ON CONFLICT DO NOTHING
-    5. Calls _determine_priority to classify new rows
+    5. Calls _assign_priority_in_memory to classify new rows
     """
 
     def test_inserts_cartesian_product(self, conn, mock_git):
@@ -401,7 +399,7 @@ class TestPopulateIntegration:
         """After populate with no prior completions, all rows get priority=1 (forward).
 
         Scenario: fresh table (no pointer), populate inserts rows and calls
-                  _determine_priority which sees no completed pairs.
+                  _assign_priority_in_memory which sees no completed pairs.
         Expected: every row has priority=1 (forward), no NULLs.
         """
         mock_rev_list, mock_commit_time = mock_git
@@ -431,8 +429,11 @@ class TestPopulateIntegration:
             CONFIG_SETS_JSON,
         )
 
-        # No NULLs
-        assert _check_null_priorities(conn, MODULE_NAME, "test") == 0
+        # No NULL priorities — all rows should have priority assigned
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL")
+            assert cur.fetchone()[0] == 0
 
         # All rows should be priority=1 (forward) since no pointer exists
         table = _module_table_name(MODULE_NAME)
@@ -908,7 +909,7 @@ class TestPriorityIntegration:
         """With no completed pairs (first run), all pairs get priority=1 (forward).
 
         Scenario: empty table, first populate ever.
-        Expected: no pointer exists → _determine_priority sets all to 1.
+        Expected: no pointer exists → _assign_priority_in_memory sets all to 1.
         """
         mock_rev_list, mock_commit_time = mock_git
         mock_rev_list.side_effect = [["core1", "core2"], ["mod1", "mod2"]]
@@ -1712,7 +1713,7 @@ class TestConcurrentConfigPopulations:
 
 
 # ---------------------------------------------------------------------------
-# Subset detection (_mark_subset_rows via _determine_priority)
+# Subset detection (_mark_subset_pairs_in_memory via _assign_priority_in_memory)
 # ---------------------------------------------------------------------------
 
 
@@ -1760,7 +1761,7 @@ class TestSubsetDetectionIntegration:
         Scenario:
           1. Populate with LARGE config_sets (2 elements), mark completed
           2. Populate with SMALL config_sets (1 element, subset of LARGE)
-          3. _determine_priority detects subset, marks new rows 'completed_as_subset'
+          3. _assign_priority_in_memory detects subset, marks new rows 'completed_as_subset'
         """
         # Step 1: Complete the superset
         self._populate_and_complete(
@@ -2036,71 +2037,19 @@ class TestSubsetDetectionIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Delete incomplete inserts
+# check_incomplete_rows
 # ---------------------------------------------------------------------------
 
 
-class TestDeleteIncompleteInserts:
-    """Verify delete_incomplete_inserts removes only NULL-priority rows from latest batch."""
+class TestCheckIncompleteRows:
+    """Verify check_incomplete_rows detects NULL values in required fields."""
 
-    def test_deletes_null_priority_rows(self, conn, mock_git):
-        """Simulate a cancelled populate: insert rows directly with NULL priority,
-        then verify delete_incomplete_inserts removes them.
-        """
-        mock_rev_list, mock_commit_time = mock_git
-        create_module_table(conn, MODULE_NAME)
-        table = _module_table_name(MODULE_NAME)
-
-        # Manually insert rows with NULL priority (simulating cancelled populate)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
-                                     max_commit_timestamp, min_commit_timestamp,
-                                     config_name, config_sets, architecture)
-                VALUES ('orphan1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        %s, %s, %s)
-            """,
-                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
-            )
-            cur.execute(
-                f"""
-                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
-                                     max_commit_timestamp, min_commit_timestamp,
-                                     config_name, config_sets, architecture)
-                VALUES ('orphan2', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        %s, %s, %s)
-            """,
-                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
-            )
-        conn.commit()
-
-        # Verify they exist with NULL priority
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL")
-            assert cur.fetchone()[0] == 2
-
-        # Run delete_incomplete_inserts
-        count = delete_incomplete_inserts(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
-        )
-
-        assert count == 2
-
-        # Verify they're gone
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
-            assert cur.fetchone()[0] == 0
-
-    def test_does_not_delete_rows_with_priority(self, conn, mock_git):
-        """Rows that have priority assigned should NOT be deleted."""
+    def test_passes_when_all_rows_complete(self, conn, mock_git):
+        """Normal populate produces complete rows — check should pass (return 0)."""
         mock_rev_list, mock_commit_time = mock_git
         mock_rev_list.side_effect = [["core1"], ["mod1"]]
         mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
 
-        # Normal populate — rows get priority assigned
         populate_module_commits(
             conn,
             Path("/fake"),
@@ -2114,75 +2063,157 @@ class TestDeleteIncompleteInserts:
             CONFIG_SETS_JSON,
         )
 
-        # Run delete_incomplete_inserts — should find nothing to delete
-        count = delete_incomplete_inserts(
+        # Should pass — all rows have priority and status
+        count = check_incomplete_rows(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
         )
-
         assert count == 0
 
-        # Row still exists
-        table = _module_table_name(MODULE_NAME)
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
-            assert cur.fetchone()[0] == 1
+    def test_exits_when_null_priority_found(self, conn, mock_git):
+        """Manually insert a row with NULL priority — check should exit with error."""
+        import pytest
 
-    def test_only_deletes_latest_batch(self, conn, mock_git):
-        """If there are NULL-priority rows from different created_at times,
-        only the most recent batch is deleted.
-        """
         mock_rev_list, mock_commit_time = mock_git
-        create_module_table(conn, MODULE_NAME)
+        _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
-        # Insert older batch with NULL priority
+        # Insert a row with NULL priority (simulating corruption)
         with conn.cursor() as cur:
             cur.execute(
                 f"""
                 INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
                                      max_commit_timestamp, min_commit_timestamp,
-                                     config_name, config_sets, architecture, created_at)
-                VALUES ('old1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                                     status, config_name, config_sets, architecture)
+                VALUES ('bad1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
                         '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        %s, %s, %s, '2026-06-01T00:00:00+00:00')
-            """,
-                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
-            )
-            # Insert newer batch with NULL priority (2 rows, same created_at)
-            cur.execute(
-                f"""
-                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
-                                     max_commit_timestamp, min_commit_timestamp,
-                                     config_name, config_sets, architecture, created_at)
-                VALUES ('new1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        %s, %s, %s, '2026-06-05T00:00:00+00:00')
-            """,
-                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
-            )
-            cur.execute(
-                f"""
-                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
-                                     max_commit_timestamp, min_commit_timestamp,
-                                     config_name, config_sets, architecture, created_at)
-                VALUES ('new2', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        %s, %s, %s, '2026-06-05T00:00:00+00:00')
+                        'pending', %s, %s, %s)
             """,
                 (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
             )
         conn.commit()
 
-        # Delete — should remove both rows from the newer batch
-        count = delete_incomplete_inserts(
+        # Should detect the NULL priority and exit
+        with pytest.raises(SystemExit):
+            check_incomplete_rows(
+                conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            )
+
+    def test_passes_on_empty_table(self, conn, mock_git):
+        """Empty table should pass (nothing to check)."""
+        mock_rev_list, mock_commit_time = mock_git
+        _create_module_table(conn, MODULE_NAME)
+
+        count = check_incomplete_rows(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
         )
+        assert count == 0
 
-        assert count == 2
 
-        # Only the older orphan remains
+# ---------------------------------------------------------------------------
+# _assign_priority_in_memory
+# ---------------------------------------------------------------------------
+
+
+class TestAssignPriorityInMemory:
+    """Verify in-memory priority assignment based on pointer."""
+
+    def _make_pair(self, core_ts, module_ts):
+        """Helper to build a CommitPair with specific timestamps."""
+        from utils.module_postgres_track_commits import CommitPair, _parse_timestamp
+
+        core_dt = _parse_timestamp(core_ts)
+        module_dt = _parse_timestamp(module_ts)
+        return CommitPair(
+            core_sha="core_" + core_ts[:10],
+            module_sha="mod_" + module_ts[:10],
+            core_timestamp=core_dt,
+            module_timestamp=module_dt,
+            max_commit_timestamp=max(core_dt, module_dt),
+            min_commit_timestamp=min(core_dt, module_dt),
+            config_name=CONFIG_NAME,
+            config_sets=CONFIG_SETS,
+            architecture=ARCHITECTURE,
+        )
+
+    def test_no_pointer_all_forward(self, conn, mock_git):
+        """When no completed pairs exist, all get priority=1 (forward)."""
+        from utils.module_postgres_track_commits import _assign_priority_in_memory
+
+        _create_module_table(conn, MODULE_NAME)
+        table = _module_table_name(MODULE_NAME)
+
+        pairs = [
+            self._make_pair("2026-06-01T10:00:00+00:00", "2026-06-02T10:00:00+00:00"),
+            self._make_pair("2026-06-03T10:00:00+00:00", "2026-06-04T10:00:00+00:00"),
+        ]
+
+        _assign_priority_in_memory(
+            conn, pairs, table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+        )
+
+        assert pairs[0].priority == 1
+        assert pairs[1].priority == 1
+
+    def test_forward_and_fallback_classification(self, conn, mock_git):
+        """Forward: both timestamps >= pointer. Fallback: at least one < pointer.
+
+        Pointer is at (2026-06-03, 2026-06-03).
+        - forward_pair: core=06-05, module=06-04 → both >= pointer → priority=1
+        - fallback_pair: core=06-01, module=06-02 → both < pointer → priority=2
+        """
+        from utils.module_postgres_track_commits import _assign_priority_in_memory
+
+        _create_module_table(conn, MODULE_NAME)
+        table = _module_table_name(MODULE_NAME)
+
+        # Insert a completed pair to establish the pointer at (06-03, 06-03)
         with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
-            assert cur.fetchone()[0] == 1
-            cur.execute(f"SELECT sha FROM {table}")
-            assert cur.fetchone()[0] == "old1"
+            cur.execute(
+                f"""
+                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                     max_commit_timestamp, min_commit_timestamp,
+                                     status, priority, config_name, config_sets, architecture)
+                VALUES ('pointer_core', 'pointer_mod',
+                        '2026-06-03T10:00:00+00:00', '2026-06-03T10:00:00+00:00',
+                        '2026-06-03T10:00:00+00:00', '2026-06-03T10:00:00+00:00',
+                        'completed', 1, %s, %s, %s)
+            """,
+                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+            )
+        conn.commit()
+
+        # Forward: both strictly > pointer (06-05 > 06-03 AND 06-04 > 06-03)
+        forward_pair = self._make_pair(
+            "2026-06-05T10:00:00+00:00", "2026-06-04T10:00:00+00:00"
+        )
+        # Fallback: core > pointer but module = pointer (not strictly >)
+        fallback_pair = self._make_pair(
+            "2026-06-05T10:00:00+00:00", "2026-06-03T10:00:00+00:00"
+        )
+
+        pairs = [forward_pair, fallback_pair]
+        _assign_priority_in_memory(
+            conn, pairs, table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+        )
+
+        assert forward_pair.priority == 1
+        assert fallback_pair.priority == 2
+
+    def test_skips_already_assigned_pairs(self, conn, mock_git):
+        """Pairs with priority already set (e.g., subset=99) should not be changed."""
+        from utils.module_postgres_track_commits import _assign_priority_in_memory
+
+        _create_module_table(conn, MODULE_NAME)
+        table = _module_table_name(MODULE_NAME)
+
+        pair = self._make_pair(
+            "2026-06-05T10:00:00+00:00", "2026-06-04T10:00:00+00:00"
+        )
+        pair.priority = 99
+        pair.status = "completed_as_subset"
+
+        _assign_priority_in_memory(
+            conn, [pair], table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+        )
+
+        assert pair.priority == 99
