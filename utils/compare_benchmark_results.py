@@ -982,8 +982,6 @@ def _generate_summary(
                         "test": test_label,
                         "change": change_formatted,
                         "change_magnitude": abs(row["change"]),
-                        "baseline_value": row["baseline_value"],
-                        "new_value": row["new_value"],
                     }
                 )
             elif significance == "❌":
@@ -992,8 +990,6 @@ def _generate_summary(
                         "test": test_label,
                         "change": change_formatted,
                         "change_magnitude": abs(row["change"]),
-                        "baseline_value": row["baseline_value"],
-                        "new_value": row["new_value"],
                     }
                 )
             elif significance == "❔":
