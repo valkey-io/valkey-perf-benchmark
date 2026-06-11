@@ -158,7 +158,7 @@ jobs:
               return;
             }
 
-            const lines = report.regressions.map(r => `- ${r.change} ${r.test} (${Math.round(r.baseline_value).toLocaleString()} → ${Math.round(r.new_value).toLocaleString()})`);
+            const lines = report.regressions.map(r => `- ${r.change} ${r.test}`);
             const body = [
               `## Performance Regression Detected`,
               ``,
