@@ -113,6 +113,8 @@ def populate_module_commits(
     config_name: str,
     config_sets: List[dict],
     config_sets_json,
+    max_core_commits: Optional[int] = None,
+    max_module_commits: Optional[int] = None,
 ) -> int:
     """Insert all new (core_sha, module_sha, config_set) combos into the queue table.
 
@@ -144,9 +146,16 @@ def populate_module_commits(
         conn, module_name, config_name, config_sets_json, architecture
     )
 
-    # Get all commits from both git repos (newest first)
-    core_shas = _git_rev_list(repo, branch)
-    module_shas = _git_rev_list(module_repo, module_branch)
+    # Get commits from both git repos (newest first, limited if specified)
+    core_shas = _git_rev_list(repo, branch, max_count=max_core_commits)
+    module_shas = _git_rev_list(module_repo, module_branch, max_count=max_module_commits)
+    print(
+        f"Scanned {len(core_shas)} core commits "
+        f"(limited to most recent {max_core_commits}), "
+        f"{len(module_shas)} module commits "
+        f"(limited to most recent {max_module_commits})",
+        file=sys.stderr,
+    )
 
     # Get existing (sha, module_sha) pairs for this config+arch to avoid redundant inserts
     table = _module_table_name(module_name)
@@ -159,6 +168,7 @@ def populate_module_commits(
             (config_name, config_sets_json, architecture),
         )
         existing = {(row[0], row[1]) for row in cur.fetchall()}
+    print(f"Found {len(existing)} existing pairs in {table}", file=sys.stderr)
 
     # Insert new rows from the cartesian product of commits
     inserted = 0
@@ -209,7 +219,13 @@ def populate_module_commits(
         conn, module_name, config_name, config_sets, config_sets_json, architecture
     )
 
-    _check_null_priorities(conn, module_name, "end of populate_module_commits")
+    null_count = _check_null_priorities(conn, module_name, "end of populate_module_commits")
+    if null_count > 0:
+        print(
+            f"FATAL: {null_count} rows still have NULL priority after _determine_priority. Exiting.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     return inserted
 
@@ -286,6 +302,12 @@ def _mark_subset_rows(
         for completed_cs in completed_config_sets_list:
             if _is_config_sets_subset(config_sets, completed_cs):
                 superset_config_sets_list.append(completed_cs)
+
+        print(
+            f"Subset detection: checked {len(completed_config_sets_list)} completed config_sets, "
+            f"found {len(superset_config_sets_list)} supersets",
+            file=sys.stderr,
+        )
 
         if not superset_config_sets_list:
             return 0
@@ -615,6 +637,66 @@ def cleanup_module_commits(
     return count
 
 
+def delete_incomplete_inserts(
+    conn, module_name: str, config_name: str, config_sets_json, architecture: str
+) -> int:
+    """Delete rows with NULL priority from the most recent created_at batch.
+
+    When populate is cancelled mid-way, some rows are inserted but
+    _determine_priority never runs on them, leaving priority as NULL.
+    This function removes only those from the latest batch so the next
+    populate can re-insert them cleanly.
+
+    Scoped to the current config+config_sets+arch, latest created_at only.
+
+    Returns:
+        Number of rows deleted
+    """
+    create_module_table(conn, module_name)
+    table = _module_table_name(module_name)
+
+    with conn.cursor() as cur:
+        # Find the most recent created_at value for rows with NULL priority
+        cur.execute(
+            f"""
+            SELECT created_at FROM {table}
+            WHERE priority IS NULL
+              AND config_name = %s AND config_sets = %s AND architecture = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+        """,
+            (config_name, config_sets_json, architecture),
+        )
+        row = cur.fetchone()
+
+        if row is None:
+            return 0
+
+        latest_created_at = row[0]
+
+        # Delete only rows from that batch
+        cur.execute(
+            f"""
+            DELETE FROM {table}
+            WHERE priority IS NULL
+              AND config_name = %s AND config_sets = %s AND architecture = %s
+              AND created_at = %s
+        """,
+            (config_name, config_sets_json, architecture, latest_created_at),
+        )
+        count = cur.rowcount
+
+    conn.commit()
+
+    if count > 0:
+        print(
+            f"Deleted {count} incomplete rows (NULL priority, batch={latest_created_at}) from {table}",
+            file=sys.stderr,
+        )
+
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Module benchmark commit tracking (queue-based)"
@@ -622,7 +704,7 @@ def main():
 
     parser.add_argument(
         "operation",
-        choices=["populate", "fetch-next", "mark-complete", "cleanup"],
+        choices=["populate", "fetch-next", "mark-complete", "cleanup", "delete-incomplete"],
         help="Operation to perform",
     )
 
@@ -664,6 +746,18 @@ def main():
         type=int,
         default=1,
         help="Max pairs to fetch (for fetch-next, default: 1)",
+    )
+    parser.add_argument(
+        "--max-core-commits",
+        type=int,
+        default=None,
+        help="Max core commits to scan during populate (default: all)",
+    )
+    parser.add_argument(
+        "--max-module-commits",
+        type=int,
+        default=None,
+        help="Max module commits to scan during populate (default: all)",
     )
 
     args, remaining_args = parser.parse_known_args()
@@ -736,6 +830,8 @@ def main():
                 config_name=config_name,
                 config_sets=config_sets,
                 config_sets_json=config_sets_json,
+                max_core_commits=args.max_core_commits,
+                max_module_commits=args.max_module_commits,
             )
 
         elif args.operation == "fetch-next":
@@ -806,6 +902,22 @@ def main():
                 sys.exit(1)
 
             cleanup_module_commits(
+                conn=conn,
+                module_name=args.module_name,
+                config_name=config_name,
+                config_sets_json=config_sets_json,
+                architecture=args.architecture,
+            )
+
+        elif args.operation == "delete-incomplete":
+            if not config_name:
+                print("Error: --config-file is required for delete-incomplete", file=sys.stderr)
+                sys.exit(1)
+            if not args.architecture:
+                print("Error: architecture could not be determined", file=sys.stderr)
+                sys.exit(1)
+
+            delete_incomplete_inserts(
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,

@@ -128,6 +128,63 @@
       ],
       "title": "Commit Tracking Queue",
       "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 27 },
+      "id": 5,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT table_name, pg_size_pretty(pg_total_relation_size(quote_ident(table_name))) AS size, (SELECT COUNT(*) FROM information_schema.columns c WHERE c.table_name = t.table_name) AS columns FROM information_schema.tables t WHERE table_schema = 'public' ORDER BY table_name",
+          "refId": "A"
+        }
+      ],
+      "title": "Debug: All Tables",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 33 },
+      "id": 6,
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "timestamp", "desc": true }] },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT * FROM ${table_name} ORDER BY timestamp DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Debug: Raw Metrics (${table_name})",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 42 },
+      "id": 7,
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "max_commit_timestamp", "desc": true }] },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "${DS_POSTGRES}" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT * FROM ${tracking_table} ORDER BY max_commit_timestamp DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Debug: Raw Tracking (${tracking_table})",
+      "type": "table"
     }
   ],
   "preload": false,

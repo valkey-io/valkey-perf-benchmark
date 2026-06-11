@@ -42,6 +42,7 @@ from utils.module_postgres_track_commits import (
     fetch_next_module_commits,
     mark_module_commits,
     cleanup_module_commits,
+    delete_incomplete_inserts,
     _determine_priority,
     _check_null_priorities,
     _module_table_name,
@@ -1579,6 +1580,42 @@ class TestLargeCartesianProduct:
 
         assert result == 0
 
+    def test_max_commits_limits_populate(self, conn, mock_git):
+        """max_core_commits and max_module_commits limit how many SHAs are scanned.
+
+        Scenario: git has 10 core and 10 module commits, but max is set to 3 each.
+        Expected: only 3×3 = 9 pairs inserted (not 100).
+        """
+        mock_rev_list, mock_commit_time = mock_git
+        # _git_rev_list will be called with max_count=3, so mock returns only 3
+        mock_rev_list.side_effect = [
+            [f"core{i:02d}" for i in range(3)],
+            [f"mod{i:02d}" for i in range(3)],
+        ]
+        mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
+
+        result = populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            CONFIG_SETS_JSON,
+            max_core_commits=3,
+            max_module_commits=3,
+        )
+
+        assert result == 9
+
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            assert cur.fetchone()[0] == 9
+
 
 # ---------------------------------------------------------------------------
 # Concurrent config populations
@@ -1996,3 +2033,156 @@ class TestSubsetDetectionIntegration:
             max_pairs=10,
         )
         assert pairs == ["core3:mod1"]
+
+
+# ---------------------------------------------------------------------------
+# Delete incomplete inserts
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteIncompleteInserts:
+    """Verify delete_incomplete_inserts removes only NULL-priority rows from latest batch."""
+
+    def test_deletes_null_priority_rows(self, conn, mock_git):
+        """Simulate a cancelled populate: insert rows directly with NULL priority,
+        then verify delete_incomplete_inserts removes them.
+        """
+        mock_rev_list, mock_commit_time = mock_git
+        create_module_table(conn, MODULE_NAME)
+        table = _module_table_name(MODULE_NAME)
+
+        # Manually insert rows with NULL priority (simulating cancelled populate)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                     max_commit_timestamp, min_commit_timestamp,
+                                     config_name, config_sets, architecture)
+                VALUES ('orphan1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        %s, %s, %s)
+            """,
+                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+            )
+            cur.execute(
+                f"""
+                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                     max_commit_timestamp, min_commit_timestamp,
+                                     config_name, config_sets, architecture)
+                VALUES ('orphan2', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        %s, %s, %s)
+            """,
+                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+            )
+        conn.commit()
+
+        # Verify they exist with NULL priority
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL")
+            assert cur.fetchone()[0] == 2
+
+        # Run delete_incomplete_inserts
+        count = delete_incomplete_inserts(
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+        )
+
+        assert count == 2
+
+        # Verify they're gone
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            assert cur.fetchone()[0] == 0
+
+    def test_does_not_delete_rows_with_priority(self, conn, mock_git):
+        """Rows that have priority assigned should NOT be deleted."""
+        mock_rev_list, mock_commit_time = mock_git
+        mock_rev_list.side_effect = [["core1"], ["mod1"]]
+        mock_commit_time.return_value = "2026-06-01T10:00:00+00:00"
+
+        # Normal populate — rows get priority assigned
+        populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            CONFIG_SETS_JSON,
+        )
+
+        # Run delete_incomplete_inserts — should find nothing to delete
+        count = delete_incomplete_inserts(
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+        )
+
+        assert count == 0
+
+        # Row still exists
+        table = _module_table_name(MODULE_NAME)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            assert cur.fetchone()[0] == 1
+
+    def test_only_deletes_latest_batch(self, conn, mock_git):
+        """If there are NULL-priority rows from different created_at times,
+        only the most recent batch is deleted.
+        """
+        mock_rev_list, mock_commit_time = mock_git
+        create_module_table(conn, MODULE_NAME)
+        table = _module_table_name(MODULE_NAME)
+
+        # Insert older batch with NULL priority
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                     max_commit_timestamp, min_commit_timestamp,
+                                     config_name, config_sets, architecture, created_at)
+                VALUES ('old1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        %s, %s, %s, '2026-06-01T00:00:00+00:00')
+            """,
+                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+            )
+            # Insert newer batch with NULL priority (2 rows, same created_at)
+            cur.execute(
+                f"""
+                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                     max_commit_timestamp, min_commit_timestamp,
+                                     config_name, config_sets, architecture, created_at)
+                VALUES ('new1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        %s, %s, %s, '2026-06-05T00:00:00+00:00')
+            """,
+                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+            )
+            cur.execute(
+                f"""
+                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
+                                     max_commit_timestamp, min_commit_timestamp,
+                                     config_name, config_sets, architecture, created_at)
+                VALUES ('new2', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
+                        %s, %s, %s, '2026-06-05T00:00:00+00:00')
+            """,
+                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+            )
+        conn.commit()
+
+        # Delete — should remove both rows from the newer batch
+        count = delete_incomplete_inserts(
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+        )
+
+        assert count == 2
+
+        # Only the older orphan remains
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            assert cur.fetchone()[0] == 1
+            cur.execute(f"SELECT sha FROM {table}")
+            assert cur.fetchone()[0] == "old1"

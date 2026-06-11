@@ -45,10 +45,13 @@ def create_tables(conn):
 
 
 
-def _git_rev_list(repo: Path, branch: str) -> List[str]:
+def _git_rev_list(repo: Path, branch: str, max_count: Optional[int] = None) -> List[str]:
     """Get list of commit SHAs from git."""
+    cmd = ["git", "rev-list", branch]
+    if max_count:
+        cmd.extend(["--max-count", str(max_count)])
     proc = subprocess.run(
-        ["git", "rev-list", branch],
+        cmd,
         cwd=repo,
         capture_output=True,
         text=True,
