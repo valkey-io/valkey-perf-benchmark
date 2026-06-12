@@ -532,7 +532,7 @@ def main():
             user=args.username,
             password=args.password,
             connect_timeout=30,
-            sslmode="prefer",
+            sslmode="require",
         )
         print(f"Connected to PostgreSQL at {args.host}:{args.port}", file=sys.stderr)
     except Exception as err:
