@@ -375,6 +375,7 @@ def process_commit_metrics(
     dry_run: bool = False,
     test_type: str = "core",
     module_commit: Optional[str] = None,
+    max_timestamp: Optional[str] = None,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
@@ -385,6 +386,7 @@ def process_commit_metrics(
         dry_run: If True, only show what would be inserted without actually inserting.
         test_type: Test type identifier (e.g., 'core', 'fts') for filtering in dashboards.
         module_commit: Module commit SHA (for tracking module-specific versions).
+        max_timestamp: Override timestamp with max(core_ts, module_ts) for 2D tracking.
 
     Returns:
         Tuple of (number of metrics processed, whether any records were skipped).
@@ -401,11 +403,13 @@ def process_commit_metrics(
         print(f"Skipping {commit_dir.name}: empty metrics")
         return 0, True
 
-    # Augment metrics with test_type and module_commit at push time
+    # Augment metrics with test_type, module_commit, and timestamp override at push time
     for metric in metrics_data:
         metric["test_type"] = test_type
         if module_commit:
             metric["module_commit"] = module_commit
+        if max_timestamp:
+            metric["timestamp"] = max_timestamp
 
     print(f"\n=== Processing {commit_dir.name} ===")
     count = push_to_postgres(metrics_data, conn, table_name, dry_run)
@@ -460,6 +464,10 @@ def main() -> None:
     parser.add_argument(
         "--module-commit",
         help="Module commit SHA (for tracking module-specific versions)",
+    )
+    parser.add_argument(
+        "--max-timestamp",
+        help="Override timestamp with max(core_ts, module_ts) ISO 8601 string",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
@@ -539,6 +547,7 @@ def main() -> None:
                     args.dry_run,
                     test_type=args.test_type,
                     module_commit=args.module_commit,
+                    max_timestamp=args.max_timestamp,
                 )
                 total_processed += count
                 if was_skipped:

@@ -1,0 +1,559 @@
+{
+  "_config": {
+    "_comment": "To switch data source, replace UID 'efnv1zvlondhcb' throughout this file",
+    "how_to_switch": "sed -i 's/efnv1zvlondhcb/NEW_UID/g' module-dashboard.json"
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "postgres",
+          "uid": "efnv1zvlondhcb"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "rgba(50, 172, 45, 0.97)",
+        "name": "Commit IDs",
+        "target": {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT DISTINCT timestamp AS time, 'core: ' || LEFT(commit, 7) || ' | module: ' || COALESCE(LEFT(module_commit, 7), 'N/A') AS text FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "Anno"
+        }
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "RPS",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "links": [
+            { "targetBlank": true, "title": "View Core Commit", "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}" },
+            { "targetBlank": true, "title": "View Module Commit", "url": "https://github.com/valkey-io/valkey-search/commit/${__data.fields['module_commit_hash']}" }
+          ],
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "B"
+        }
+      ],
+      "transformations": [{ "id": "joinByField", "options": { "byField": "Time", "mode": "outer" } }],
+      "title": "RPS over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "links": [
+            { "targetBlank": true, "title": "View Core Commit", "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}" },
+            { "targetBlank": true, "title": "View Module Commit", "url": "https://github.com/valkey-io/valkey-search/commit/${__data.fields['module_commit_hash']}" }
+          ],
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(p99_latency_ms) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "B"
+        }
+      ],
+      "transformations": [{ "id": "joinByField", "options": { "byField": "Time", "mode": "outer" } }],
+      "title": "p99 Latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "links": [
+            { "targetBlank": true, "title": "View Core Commit", "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}" },
+            { "targetBlank": true, "title": "View Module Commit", "url": "https://github.com/valkey-io/valkey-search/commit/${__data.fields['module_commit_hash']}" }
+          ],
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "id": 8,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(p95_latency_ms) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "B"
+        }
+      ],
+      "transformations": [{ "id": "joinByField", "options": { "byField": "Time", "mode": "outer" } }],
+      "title": "p95 Latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "links": [
+            { "targetBlank": true, "title": "View Core Commit", "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}" },
+            { "targetBlank": true, "title": "View Module Commit", "url": "https://github.com/valkey-io/valkey-search/commit/${__data.fields['module_commit_hash']}" }
+          ],
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "id": 9,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(p50_latency_ms) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "B"
+        }
+      ],
+      "transformations": [{ "id": "joinByField", "options": { "byField": "Time", "mode": "outer" } }],
+      "title": "p50 Latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "links": [
+            { "targetBlank": true, "title": "View Core Commit", "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}" },
+            { "targetBlank": true, "title": "View Module Commit", "url": "https://github.com/valkey-io/valkey-search/commit/${__data.fields['module_commit_hash']}" }
+          ],
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "id": 10,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(min_latency_ms) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "B"
+        }
+      ],
+      "transformations": [{ "id": "joinByField", "options": { "byField": "Time", "mode": "outer" } }],
+      "title": "Min Latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "mode": "none" }
+          },
+          "links": [
+            { "targetBlank": true, "title": "View Core Commit", "url": "https://github.com/valkey-io/valkey/commit/${__data.fields['commit_hash']}" },
+            { "targetBlank": true, "title": "View Module Commit", "url": "https://github.com/valkey-io/valkey-search/commit/${__data.fields['module_commit_hash']}" }
+          ],
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "id": 11,
+      "options": {
+        "legend": { "calcs": ["max", "min", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, AVG(max_latency_ms) AS value, scenario || ' (' || test_phase || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase ORDER BY timestamp",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "refId": "B"
+        }
+      ],
+      "transformations": [{ "id": "joinByField", "options": { "byField": "Time", "mode": "outer" } }],
+      "title": "Max Latency over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 27 },
+      "id": 5,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT table_name, pg_size_pretty(pg_total_relation_size(quote_ident(table_name))) AS size, (SELECT COUNT(*) FROM information_schema.columns c WHERE c.table_name = t.table_name) AS columns FROM information_schema.tables t WHERE table_schema = 'public' ORDER BY table_name",
+          "refId": "A"
+        }
+      ],
+      "title": "Debug: All Tables",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 33 },
+      "id": 6,
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "timestamp", "desc": true }] },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT * FROM ${table_name} ORDER BY timestamp DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Debug: Raw Metrics (${table_name})",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+      "fieldConfig": { "defaults": { "custom": { "filterable": true } }, "overrides": [] },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 42 },
+      "id": 7,
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "created_at", "desc": true }] },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT * FROM ${tracking_table} ORDER BY created_at DESC, priority ASC, max_commit_timestamp DESC, min_commit_timestamp DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Debug: Raw Tracking (${tracking_table})",
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": ["valkey", "benchmark", "module"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT REPLACE(table_name, 'benchmark_metrics_', '') AS __text, table_name AS __value FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'benchmark_metrics_%' ORDER BY table_name",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Module",
+        "multi": false,
+        "name": "table_name",
+        "options": [],
+        "query": "SELECT REPLACE(table_name, 'benchmark_metrics_', '') AS __text, table_name AS __value FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'benchmark_metrics_%' ORDER BY table_name",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_module_commits_')",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Tracking Table",
+        "multi": false,
+        "name": "tracking_table",
+        "options": [],
+        "query": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_module_commits_')",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT DISTINCT config_name || ' | ' || architecture AS __text, config_name || '|' || architecture AS __value FROM ${table_name} WHERE config_name IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Config | Arch",
+        "multi": false,
+        "name": "config_arch",
+        "options": [],
+        "query": "SELECT DISTINCT config_name || ' | ' || architecture AS __text, config_name || '|' || architecture AS __value FROM ${table_name} WHERE config_name IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT SPLIT_PART('$config_arch', '|', 1)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Config Name",
+        "multi": false,
+        "name": "config_name",
+        "options": [],
+        "query": "SELECT SPLIT_PART('$config_arch', '|', 1)",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT SPLIT_PART('$config_arch', '|', 2)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Architecture",
+        "multi": false,
+        "name": "architecture",
+        "options": [],
+        "query": "SELECT SPLIT_PART('$config_arch', '|', 2)",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT DISTINCT config_set::text FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Config Set",
+        "multi": false,
+        "name": "config_set",
+        "options": [],
+        "query": "SELECT DISTINCT config_set::text FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT DISTINCT group_description FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY group_description",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Group",
+        "multi": false,
+        "name": "group_description",
+        "options": [],
+        "query": "SELECT DISTINCT group_description FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' ORDER BY group_description",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "postgres", "uid": "efnv1zvlondhcb" },
+        "definition": "SELECT DISTINCT scenario || COALESCE(' (' || scenario_description || ')', '') AS __text, scenario AS __value FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' ORDER BY scenario",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Scenario",
+        "multi": true,
+        "name": "scenario",
+        "options": [],
+        "query": "SELECT DISTINCT scenario || COALESCE(' (' || scenario_description || ')', '') AS __text, scenario AS __value FROM ${table_name} WHERE config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' ORDER BY scenario",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "UTC",
+  "title": "Valkey Performance - Module",
+  "uid": "",
+  "version": 1,
+  "__inputs": []
+}
