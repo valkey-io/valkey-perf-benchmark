@@ -509,7 +509,7 @@ def main() -> None:
                 user=args.username,
                 password=password,
                 connect_timeout=30,
-                sslmode="prefer",
+                sslmode="require",
             )
             print(f"Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:

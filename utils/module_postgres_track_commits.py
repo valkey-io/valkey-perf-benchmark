@@ -830,7 +830,7 @@ def main():
             user=args.username,
             password=args.password,
             connect_timeout=30,
-            sslmode="prefer",
+            sslmode="require",
             options=f"-c idle_in_transaction_session_timeout={args.idle_timeout}",
         )
         print(f"Connected to PostgreSQL at {args.host}:{args.port}", file=sys.stderr)
