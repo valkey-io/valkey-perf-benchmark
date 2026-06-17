@@ -1,0 +1,325 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 4,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "description": "**What the metrics mean:**\n- 512B \u2192 Size of the value used in SET operations\n- IO \u2192 Number of client-side I/O threads used by valkey-benchmark\n- P \u2192 Pipeline level (number of requests grouped into one network round-trip)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Requests Per Sec. in Millions",
+            "axisPlacement": "auto",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Config"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "B: Size of the value in Bytes, IO : No. of IO-Threads, P: Pipeline no. of requests"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "barRadius": 0.1,
+        "barWidth": 0.75,
+        "fullHighlight": false,
+        "groupWidth": 0.66,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xField": "Field",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.3.0",
+      "targets": [
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  commit AS version,\n  AVG(CASE \n        WHEN data_size = 512 AND io_threads = 1 AND pipeline = 1 \n        THEN rps \n      END) AS \"512B , IO 1, P 1\",\n  AVG(CASE \n        WHEN data_size = 512 AND io_threads = 1 AND pipeline = 10 \n        THEN rps \n      END) AS \"512B, IO 1, P 10\",\n  AVG(CASE \n      WHEN data_size = 512 AND io_threads = 9 AND pipeline = 1\n      THEN rps \n    END) AS \"512B , IO 9, P 1\",\n  AVG(CASE \n        WHEN data_size = 512 AND io_threads = 9 AND pipeline = 10 \n        THEN rps \n      END) AS \"512B , IO 9, P 10\"\nFROM benchmark_tags_metrics\nWHERE command = 'SET'\n  AND data_size = 512\n  AND io_threads IN (1, 9)\n  AND pipeline IN (1, 10)\nGROUP BY commit\nORDER BY commit;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "SET COMMAND",
+      "transformations": [
+        {
+          "id": "transpose",
+          "options": {
+            "firstFieldName": "Config"
+          }
+        }
+      ],
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "description": "**What the metrics mean:**\n- 512B \u2192 Size of the value used in GET operations\n- IO \u2192 Number of client-side I/O threads used by valkey-benchmark\n- P \u2192 Pipeline level (number of requests grouped into one network round-trip)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 100,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Config"
+            },
+            "properties": [
+              {
+                "id": "custom.axisLabel",
+                "value": "B: Size of the value in Bytes, IO : No. of IO-Threads, P: Pipeline no. of requests"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "barRadius": 0.1,
+        "barWidth": 0.75,
+        "fullHighlight": false,
+        "groupWidth": 0.66,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xField": "Field",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.3.0",
+      "targets": [
+        {
+          "dataset": "postgres",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  commit AS version,\n  AVG(CASE \n        WHEN data_size = 512 AND io_threads = 1 AND pipeline = 1 \n        THEN rps \n      END) AS \"512B , IO 1, P 1\",\n  AVG(CASE \n        WHEN data_size = 512 AND io_threads = 1 AND pipeline = 10 \n        THEN rps \n      END) AS \"512B, IO 1, P 10\",\n  AVG(CASE \n      WHEN data_size = 512 AND io_threads = 9 AND pipeline = 1\n      THEN rps \n    END) AS \"512B , IO 9, P 1\",\n  AVG(CASE \n        WHEN data_size = 512 AND io_threads = 9 AND pipeline = 10 \n        THEN rps \n      END) AS \"512B , IO 9, P 10\"\nFROM benchmark_tags_metrics\nWHERE command = 'GET'\n  AND data_size = 512\n  AND io_threads IN (1, 9)\n  AND pipeline IN (1, 10)\nGROUP BY commit\nORDER BY commit;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "GET COMMAND",
+      "transformations": [
+        {
+          "id": "transpose",
+          "options": {
+            "firstFieldName": "Config"
+          }
+        }
+      ],
+      "type": "barchart"
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 3,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "**What the metrics mean:**  \n- *512B* \u2192 Size of the value used in SET/GET operations (in Bytes).\n- *IO* \u2192 Number I/O threads used by `valkey-server`  \n- *P* \u2192 Pipeline level (number of requests grouped into one network round-trip).\n\n**Hardware:**  \n- AWS `c8g.metal-48xl` bare metal instance  \n- NUMA-separated: server and client pinned to different NUMA nodes  \n- Network IRQs isolated away from server CPU cores  \n- Valkey server pinned to dedicated CPU cores  ",
+        "mode": "markdown"
+      },
+      "pluginVersion": "12.3.0",
+      "type": "text"
+    }
+  ],
+  "preload": false,
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Valkey Throughput Comparison",
+  "uid": "adscrkt",
+  "version": 7,
+  "weekStart": ""
+}

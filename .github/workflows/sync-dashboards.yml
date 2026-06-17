@@ -1,0 +1,120 @@
+name: Sync Grafana Dashboards
+
+# Syncs changed dashboards in dashboards/grafana/*.json to Grafana using the
+# Grafana CLI (gcx). gcx pushes via the app-platform API (dashboard.grafana.app/v1).
+#
+# This workflow only does real work when the GRAFANA_API_TOKEN secret is set.
+# On forks or before the secret is configured, the guard step skips the sync
+# so the run succeeds as a no-op instead of failing.
+#
+# NOTE on create vs update:
+#   - UPDATE of an existing dashboard (uid already in Grafana): works today.
+#   - CREATE of a brand-new dashboard (new uid): only works when the Grafana
+#     server has the `kubernetesDashboards` feature toggle enabled. Until then,
+#     gcx-created dashboards are not visible in the UI/search. To add a new
+#     dashboard before that toggle is on, create it in the Grafana UI first,
+#     then manage it as code here.
+
+on:
+  push:
+    branches: [main]
+    paths: ['dashboards/grafana/*.json']
+  workflow_dispatch:
+    inputs:
+      sync_all:
+        description: 'Sync all dashboards, not just changed ones'
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    shell: 'bash -Eeuo pipefail -x {0}'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GRAFANA_SERVER: https://perf-dashboard.valkey.io
+      GRAFANA_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
+    steps:
+      - name: Check GRAFANA_API_TOKEN is configured
+        id: guard
+        run: |
+          if [ -z "${GRAFANA_TOKEN:-}" ]; then
+            echo "GRAFANA_API_TOKEN secret is not set — skipping dashboard sync."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "GRAFANA_API_TOKEN is set — proceeding."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2  # need the previous commit to diff against
+
+      - name: Install gcx
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh \
+            | INSTALL_DIR=/usr/local/bin sh
+          gcx --version
+
+      - name: Configure gcx (on-prem org id) and verify connectivity
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          gcx config set contexts.default.grafana.org-id 1
+          gcx config check
+
+      - name: Determine changed dashboards
+        id: changed
+        if: steps.guard.outputs.run == 'true'
+        env:
+          SYNC_ALL: ${{ github.event.inputs.sync_all }}
+        run: |
+          if [ "${SYNC_ALL:-false}" = "true" ]; then
+            files=$(ls dashboards/grafana/*.json)
+          else
+            files=$(git diff --name-only --diff-filter=ACM \
+                      "${{ github.event.before }}" "${{ github.sha }}" \
+                      -- 'dashboards/grafana/*.json')
+          fi
+          {
+            echo 'files<<EOF'
+            echo "$files"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+          echo "Changed dashboards:"; echo "${files:-(none)}"
+
+      - name: Build gcx manifests and push
+        if: steps.guard.outputs.run == 'true' && steps.changed.outputs.files != ''
+        run: |
+          tmp=$(mktemp -d)
+          dir="$tmp/dashboards.v1.dashboard.grafana.app"
+          mkdir -p "$dir"
+
+          # Convert each bare dashboard JSON into a gcx resource manifest:
+          #   metadata.name = the dashboard uid (stable identifier)
+          #   spec          = the dashboard model minus internal `id` and `uid`
+          while IFS= read -r json; do
+            [ -z "$json" ] && continue
+            uid=$(jq -r '.uid // empty' "$json")
+            if [ -z "$uid" ]; then
+              echo "✗ $json has no uid — set a stable uid in the JSON"; exit 1
+            fi
+            echo "→ preparing $json (uid=$uid)"
+            jq '{
+                  apiVersion: "dashboard.grafana.app/v1",
+                  kind: "Dashboard",
+                  metadata: { name: .uid, namespace: "default" },
+                  spec: (del(.id) | del(.uid))
+                }' "$json" > "$dir/$uid.json"
+          done <<< "${{ steps.changed.outputs.files }}"
+
+          echo "=== validate ==="
+          gcx resources validate -p "$tmp"
+          echo "=== dry-run ==="
+          gcx resources push -p "$tmp" --dry-run
+          echo "=== push ==="
+          gcx resources push -p "$tmp" --on-error abort
