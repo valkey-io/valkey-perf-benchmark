@@ -94,7 +94,7 @@ def detect(
     )
 
     config_groups, baseline_version, new_version, _, _ = create_comparison_table_data(
-        baseline_data, new_data
+        baseline_data, new_data, metrics_filter="rps"
     )
     _, groups_with_unique = _extract_common_and_unique_config(config_groups)
     improvements, regressions, _, _ = _generate_summary(groups_with_unique)

@@ -35,7 +35,6 @@ defaults:
 permissions:
   id-token: write
   contents: read
-  issues: write
 
 env:
   benchmarking-manual-commits: ${{ github.event_name == 'workflow_dispatch' && inputs.commits || 'false' }}
@@ -259,7 +258,7 @@ jobs:
             --region ${{ secrets.AWS_REGION }} \
             --username ${{ secrets.RDS_USERNAME }})
           set +e
-          report=$(python utils/detect_regression.py \
+          report=$(python -m utils.detect_regression \
             --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
             --port 5432 \
             --database ${{ secrets.RDS_DATABASE }} \
@@ -291,7 +290,7 @@ jobs:
           repositories: valkey
 
       - name: Open GitHub issue for regression
-        if: steps.detect_regression.outputs.has_regression == 'true'
+        if: steps.detect_regression.outputs.has_regression == 'true' && github.repository_owner == 'valkey-io'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           github-token: ${{ steps.bot-token.outputs.token }}
