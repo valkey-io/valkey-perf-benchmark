@@ -303,25 +303,6 @@ jobs:
             const targetOwner = 'valkey-io';
             const targetRepo = 'valkey';
 
-            // Ensure label exists
-            try {
-              await github.rest.issues.getLabel({
-                owner: targetOwner,
-                repo: targetRepo,
-                name: label,
-              });
-            } catch (e) {
-              if (e.status === 404) {
-                await github.rest.issues.createLabel({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  name: label,
-                  color: 'e11d48',
-                  description: 'Performance regression detected by CI',
-                });
-              }
-            }
-
             // Check for duplicate issues with the same title
             const existingIssues = await github.paginate(
               github.rest.issues.listForRepo,
