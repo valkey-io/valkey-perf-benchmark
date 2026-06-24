@@ -4,15 +4,18 @@ Tests pure functions that don't require a database connection.
 Mirrors the testing approach of test_postgres_utils.py.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from psycopg2.extras import Json
 
 from utils.module_postgres_track_commits import (
     CommitPair,
     get_config_name,
     _module_table_name,
     _is_config_sets_subset,
+    _parse_timestamp,
 )
 
 # ---------------------------------------------------------------------------
@@ -88,7 +91,6 @@ class TestModuleConfigSetsJsonb:
     """Test that config_sets array is wrapped as Json for JSONB insertion."""
 
     def test_config_sets_array_wrapped_as_json(self):
-        from psycopg2.extras import Json
 
         config_sets = [
             {"io-threads": 8, "search.reader-threads": 1, "search.writer-threads": 1},
@@ -100,7 +102,6 @@ class TestModuleConfigSetsJsonb:
         assert len(wrapped.adapted) == 2
 
     def test_none_config_sets_defaults_to_empty_dict_list(self):
-        from psycopg2.extras import Json
 
         config_sets = None
         resolved = config_sets or [{}]
@@ -183,8 +184,6 @@ class TestCommitPair:
 
     def _make_pair(self, **overrides):
         """Helper to create a valid CommitPair with optional overrides."""
-        from datetime import datetime, timezone
-        from utils.module_postgres_track_commits import _parse_timestamp
 
         defaults = {
             "core_sha": "abc123",
@@ -246,7 +245,6 @@ class TestCommitPair:
         assert t[10] == "aarch64"  # architecture
 
     def test_to_insert_tuple_wraps_config_sets_as_json(self):
-        from psycopg2.extras import Json
 
         pair = self._make_pair()
         pair.priority = 2

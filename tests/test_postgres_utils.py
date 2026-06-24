@@ -7,6 +7,7 @@ Tests cover:
 
 from datetime import datetime
 
+from psycopg2.extras import Json
 
 from utils.postgres_track_commits import (
     _is_list_subset,
@@ -14,9 +15,11 @@ from utils.postgres_track_commits import (
     _is_config_array_subset,
 )
 from utils.push_to_postgres import (
-    detect_field_type,
+    CONFIG_NAME_MAX_LENGTH,
+    DESCRIPTION_MAX_LENGTH,
     analyze_metrics_schema,
     convert_metrics_to_rows,
+    detect_field_type,
     resolve_table_name,
 )
 
@@ -225,7 +228,6 @@ class TestAnalyzeMetricsSchema:
         assert schema["pipeline"] == "INTEGER"
 
     def test_group_description_uses_max_length(self):
-        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
 
         metrics = [
             {
@@ -238,7 +240,6 @@ class TestAnalyzeMetricsSchema:
         assert schema["group_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
 
     def test_scenario_description_uses_max_length(self):
-        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
 
         metrics = [
             {
@@ -251,7 +252,6 @@ class TestAnalyzeMetricsSchema:
         assert schema["scenario_description"] == f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
 
     def test_long_description_still_uses_max_length(self):
-        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
 
         metrics = [
             {
@@ -330,7 +330,6 @@ class TestConvertMetricsToRows:
         assert isinstance(rows[0][0], datetime)
 
     def test_descriptions_over_max_length_truncated(self):
-        from utils.push_to_postgres import DESCRIPTION_MAX_LENGTH
 
         metrics = [
             {
@@ -399,7 +398,6 @@ class TestModuleCommitSchema:
 
     def test_config_name_gets_varchar_max_length(self):
         """config_name should be hardcoded to VARCHAR(CONFIG_NAME_MAX_LENGTH)."""
-        from utils.push_to_postgres import CONFIG_NAME_MAX_LENGTH
 
         metrics = [
             {
@@ -451,7 +449,6 @@ class TestConfigSetJsonb:
     """Tests for config_set being stored as JSONB."""
 
     def test_config_set_stored_as_jsonb(self):
-        from psycopg2.extras import Json
 
         metrics = [
             {

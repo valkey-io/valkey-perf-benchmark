@@ -37,13 +37,16 @@ import psycopg2
 from psycopg2.extras import Json
 
 from utils.module_postgres_track_commits import (
+    CommitPair,
+    _assign_priority_in_memory,
     _create_module_table,
-    populate_module_commits,
+    _module_table_name,
+    _parse_timestamp,
+    check_incomplete_rows,
+    cleanup_module_commits,
     fetch_next_module_commits,
     mark_module_commits,
-    cleanup_module_commits,
-    check_incomplete_rows,
-    _module_table_name,
+    populate_module_commits,
 )
 
 # ---------------------------------------------------------------------------
@@ -115,12 +118,12 @@ def mock_git():
     """Mock git helpers so tests don't need real git repos.
 
     What patch() does:
-        patch("utils.module_postgres_track_commits._git_rev_list") temporarily replaces
-        the REAL _git_rev_list function (which runs `git rev-list` in a subprocess)
-        with a fake MagicMock object. During the test, any call to _git_rev_list()
+        patch("utils.module_postgres_track_commits.git_rev_list") temporarily replaces
+        the REAL git_rev_list function (which runs `git rev-list` in a subprocess)
+        with a fake MagicMock object. During the test, any call to git_rev_list()
         hits the fake instead of running actual git commands.
 
-        Same for _git_commit_time (which runs `git show --format=%cI`).
+        Same for git_commit_time (which runs `git show --format=%cI`).
 
     Why we mock these:
         Our functions need git SHAs and timestamps as input. In production, these
@@ -135,9 +138,9 @@ def mock_git():
         → Every call returns this timestamp regardless of which SHA is asked about
     """
     with (
-        patch("utils.module_postgres_track_commits._git_rev_list") as mock_rev_list,
+        patch("utils.module_postgres_track_commits.git_rev_list") as mock_rev_list,
         patch(
-            "utils.module_postgres_track_commits._git_commit_time"
+            "utils.module_postgres_track_commits.git_commit_time"
         ) as mock_commit_time,
     ):
         yield mock_rev_list, mock_commit_time
@@ -1588,7 +1591,7 @@ class TestLargeCartesianProduct:
         Expected: only 3×3 = 9 pairs inserted (not 100).
         """
         mock_rev_list, mock_commit_time = mock_git
-        # _git_rev_list will be called with max_count=3, so mock returns only 3
+        # git_rev_list will be called with max_count=3, so mock returns only 3
         mock_rev_list.side_effect = [
             [f"core{i:02d}" for i in range(3)],
             [f"mod{i:02d}" for i in range(3)],
@@ -2071,8 +2074,6 @@ class TestCheckIncompleteRows:
 
     def test_exits_when_null_priority_found(self, conn, mock_git):
         """Manually insert a row with NULL priority — check should exit with error."""
-        import pytest
-
         mock_rev_list, mock_commit_time = mock_git
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
@@ -2119,8 +2120,6 @@ class TestAssignPriorityInMemory:
 
     def _make_pair(self, core_ts, module_ts):
         """Helper to build a CommitPair with specific timestamps."""
-        from utils.module_postgres_track_commits import CommitPair, _parse_timestamp
-
         core_dt = _parse_timestamp(core_ts)
         module_dt = _parse_timestamp(module_ts)
         return CommitPair(
@@ -2137,7 +2136,6 @@ class TestAssignPriorityInMemory:
 
     def test_no_pointer_all_forward(self, conn, mock_git):
         """When no completed pairs exist, all get priority=1 (forward)."""
-        from utils.module_postgres_track_commits import _assign_priority_in_memory
 
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
@@ -2170,7 +2168,6 @@ class TestAssignPriorityInMemory:
             Ac, Ad, Ca, Da, Ba (wait — Ba is completed)
             Actually only: Ac, Ad, Ca, Da
         """
-        from utils.module_postgres_track_commits import _assign_priority_in_memory
 
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
@@ -2265,7 +2262,6 @@ class TestAssignPriorityInMemory:
 
     def test_skips_already_assigned_pairs(self, conn, mock_git):
         """Pairs with priority already set (e.g., subset=99) should not be changed."""
-        from utils.module_postgres_track_commits import _assign_priority_in_memory
 
         _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)

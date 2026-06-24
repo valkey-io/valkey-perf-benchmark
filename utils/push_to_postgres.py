@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Tuple, Set, Optional
 
 import psycopg2
 from psycopg2 import sql
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values, Json
 
 DESCRIPTION_MAX_LENGTH = 500
 CONFIG_NAME_MAX_LENGTH = 50
@@ -274,8 +274,6 @@ def convert_metrics_to_rows(
                     value = value[:DESCRIPTION_MAX_LENGTH]
                 row.append(value)
             elif column == "config_set":
-                from psycopg2.extras import Json
-
                 value = metric.get(column)
                 row.append(Json(value) if value is not None else None)
             elif column == "config_name":

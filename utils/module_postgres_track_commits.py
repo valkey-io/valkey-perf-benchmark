@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import List, Optional
 
 import psycopg2
-from psycopg2.extras import Json
+from psycopg2.extras import Json, execute_values
 
 from datetime import datetime
 
-from postgres_track_commits import _git_rev_list, _git_commit_time
+from git_utils import git_rev_list, git_commit_time
 
 
 def _parse_timestamp(ts) -> datetime:
@@ -376,10 +376,8 @@ def populate_module_commits(
     _create_module_table(conn, module_name)
 
     # Get commits from both git repos (newest first, limited if specified)
-    core_shas = _git_rev_list(repo, branch, max_count=max_core_commits)
-    module_shas = _git_rev_list(
-        module_repo, module_branch, max_count=max_module_commits
-    )
+    core_shas = git_rev_list(repo, branch, max_count=max_core_commits)
+    module_shas = git_rev_list(module_repo, module_branch, max_count=max_module_commits)
     print(
         f"Scanned {len(core_shas)} core commits "
         f"(limited to most recent {max_core_commits}), "
@@ -389,8 +387,8 @@ def populate_module_commits(
     )
 
     # Cache timestamps — fetch once per unique SHA (avoids redundant subprocess calls)
-    core_timestamps = {sha: _git_commit_time(repo, sha) for sha in core_shas}
-    module_timestamps = {sha: _git_commit_time(module_repo, sha) for sha in module_shas}
+    core_timestamps = {sha: git_commit_time(repo, sha) for sha in core_shas}
+    module_timestamps = {sha: git_commit_time(module_repo, sha) for sha in module_shas}
     print(
         f"Cached {len(core_timestamps)} core + {len(module_timestamps)} module timestamps",
         file=sys.stderr,
@@ -461,8 +459,6 @@ def populate_module_commits(
         )
 
     # Step 5: Batch insert — single transaction, all or nothing
-    from psycopg2.extras import execute_values
-
     insert_sql = f"""
         INSERT INTO {table} (sha, module_sha, core_timestamp,
                              module_timestamp, max_commit_timestamp,
