@@ -14,6 +14,7 @@ from benchmark import load_configs
 from valkey_benchmark import ClientRunner
 from process_metrics import MetricsProcessor
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
