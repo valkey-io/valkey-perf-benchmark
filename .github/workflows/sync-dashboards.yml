@@ -7,13 +7,11 @@ name: Sync Grafana Dashboards
 # On forks or before the secret is configured, the guard step skips the sync
 # so the run succeeds as a no-op instead of failing.
 #
-# NOTE on create vs update:
-#   - UPDATE of an existing dashboard (uid already in Grafana): works today.
-#   - CREATE of a brand-new dashboard (new uid): only works when the Grafana
-#     server has the `kubernetesDashboards` feature toggle enabled. Until then,
-#     gcx-created dashboards are not visible in the UI/search. To add a new
-#     dashboard before that toggle is on, create it in the Grafana UI first,
-#     then manage it as code here.
+# How it works: an idempotent upsert keyed on each dashboard's uid
+# (carried as metadata.name). If the uid already exists in Grafana the
+# dashboard is updated in place; otherwise it is created. Keep uids stable
+# so updates target the right dashboard. Requires GRAFANA_API_TOKEN to have
+# permission to manage dashboards.
 
 on:
   push:
@@ -56,9 +54,13 @@ jobs:
 
       - name: Install gcx
         if: steps.guard.outputs.run == 'true'
+        env:
+          GCX_VERSION: "0.3.0"   # pinned release; bump deliberately
         run: |
-          curl -fsSL https://raw.githubusercontent.com/grafana/gcx/main/scripts/install.sh \
-            | INSTALL_DIR=/usr/local/bin sh
+          url="https://github.com/grafana/gcx/releases/download/v${GCX_VERSION}/gcx_${GCX_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL "$url" -o /tmp/gcx.tar.gz
+          tar -xzf /tmp/gcx.tar.gz -C /tmp gcx
+          sudo install -m 0755 /tmp/gcx /usr/local/bin/gcx
           gcx --version
 
       - name: Configure gcx (on-prem org id) and verify connectivity
