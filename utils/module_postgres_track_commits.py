@@ -8,6 +8,7 @@ enabling 2D commit discovery across both valkey and module repositories.
 import argparse
 import json
 import platform
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,6 +106,8 @@ def get_config_name(config_file_path: str) -> str:
 
 def _module_table_name(module_name: str) -> str:
     """Return the tracking table name for a given module."""
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module_name):
+        raise ValueError(f"Invalid module_name: {module_name}")
     return f"benchmark_module_commits_{module_name}"
 
 

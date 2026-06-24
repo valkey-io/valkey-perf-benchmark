@@ -6,6 +6,8 @@ Mirrors the testing approach of test_postgres_utils.py.
 
 from pathlib import Path
 
+import pytest
+
 from utils.module_postgres_track_commits import (
     CommitPair,
     get_config_name,
@@ -59,6 +61,22 @@ class TestModuleTableName:
 
     def test_arbitrary_name(self):
         assert _module_table_name("my_module") == "benchmark_module_commits_my_module"
+
+    def test_sql_injection_drop_table(self):
+        with pytest.raises(ValueError):
+            _module_table_name("search; DROP TABLE benchmark_commits;")
+
+    def test_sql_injection_quotes(self):
+        with pytest.raises(ValueError):
+            _module_table_name("'; DROP TABLE x; --")
+
+    def test_rejects_uppercase(self):
+        with pytest.raises(ValueError):
+            _module_table_name("Search")
+
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValueError):
+            _module_table_name("")
 
 
 # ---------------------------------------------------------------------------
