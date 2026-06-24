@@ -115,6 +115,7 @@ datasources:
     apiVersion: 1
     datasources:
       - name: PostgreSQL-Valkey-Metrics
+        uid: PDA4518EDFA6642B8   # pin existing uid so it survives datasource recreation (no live change)
         type: postgres
         url: <RDS_ENDPOINT> # Will be replaced by deploy script
         user: $__env{GF_DATABASE_USER}
