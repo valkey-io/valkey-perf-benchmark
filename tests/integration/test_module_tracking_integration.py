@@ -2092,8 +2092,8 @@ class TestCheckIncompleteRows:
             )
         conn.commit()
 
-        # Should detect the NULL priority and exit
-        with pytest.raises(SystemExit):
+        # Should detect the NULL priority and raise
+        with pytest.raises(ValueError):
             check_incomplete_rows(
                 conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
             )

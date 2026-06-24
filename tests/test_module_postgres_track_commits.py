@@ -207,22 +207,16 @@ class TestCommitPair:
         assert pair.status == "pending"
         assert pair.priority is None
 
-    def test_exits_on_missing_core_sha(self):
-        import pytest
-
-        with pytest.raises(SystemExit):
+    def test_raises_on_missing_core_sha(self):
+        with pytest.raises(ValueError):
             self._make_pair(core_sha="")
 
-    def test_exits_on_missing_module_sha(self):
-        import pytest
-
-        with pytest.raises(SystemExit):
+    def test_raises_on_missing_module_sha(self):
+        with pytest.raises(ValueError):
             self._make_pair(module_sha=None)
 
-    def test_exits_on_missing_config_name(self):
-        import pytest
-
-        with pytest.raises(SystemExit):
+    def test_raises_on_missing_config_name(self):
+        with pytest.raises(ValueError):
             self._make_pair(config_name="")
 
     def test_is_ready_to_insert_false_without_priority(self):

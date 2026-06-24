@@ -63,12 +63,10 @@ class CommitPair:
         }
         missing = [k for k, v in required.items() if v is None or v == ""]
         if missing:
-            print(
-                f"FATAL: CommitPair missing required fields: {missing} "
-                f"(pair={self.core_sha}:{self.module_sha})",
-                file=sys.stderr,
+            raise ValueError(
+                f"CommitPair missing required fields: {missing} "
+                f"(pair={self.core_sha}:{self.module_sha})"
             )
-            sys.exit(1)
 
     def is_ready_to_insert(self) -> bool:
         """Check if all fields including status and priority are set."""
@@ -457,12 +455,10 @@ def populate_module_commits(
     # Step 4: Validate — all pairs must be ready before insert
     not_ready = [p for p in pairs if not p.is_ready_to_insert()]
     if not_ready:
-        print(
-            f"FATAL: {len(not_ready)} pairs not ready to insert "
-            f"(missing priority or status). Aborting.",
-            file=sys.stderr,
+        raise ValueError(
+            f"{len(not_ready)} pairs not ready to insert "
+            f"(missing priority or status). Aborting."
         )
-        sys.exit(1)
 
     # Step 5: Batch insert — single transaction, all or nothing
     from psycopg2.extras import execute_values
@@ -482,13 +478,11 @@ def populate_module_commits(
         conn.commit()
     except psycopg2.IntegrityError as e:
         conn.rollback()
-        print(
-            f"FATAL: Unexpected duplicate row during insert. "
+        raise ValueError(
+            f"Unexpected duplicate row during insert. "
             f"This should not happen — existing pairs were filtered beforehand. "
-            f"Error: {e}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+            f"Error: {e}"
+        ) from e
     print(
         f"Populated {table}: {len(pairs)} new pairs inserted "
         f"({len(core_shas)} core × {len(module_shas)} module commits)",
@@ -537,11 +531,7 @@ def check_incomplete_rows(
         count = cur.fetchone()[0]
 
     if count > 0:
-        print(
-            f"FATAL: {count} rows with NULL required fields found in {table}. Exiting.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        raise ValueError(f"{count} rows with NULL required fields found in {table}.")
 
     print(f"Integrity check passed: no incomplete rows in {table}", file=sys.stderr)
     return count
@@ -965,6 +955,9 @@ def main():
                 architecture=args.architecture,
             )
 
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     except psycopg2.IntegrityError as e:
         print(
             f"Database integrity error (likely NULL in NOT NULL field): {e}",
