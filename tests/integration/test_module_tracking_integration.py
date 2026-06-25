@@ -100,6 +100,7 @@ def clean_table(conn):
     with conn.cursor() as cur:
         cur.execute(f"DROP TABLE IF EXISTS {table}")
     conn.commit()
+    _create_module_table(conn, MODULE_NAME)
     yield
     with conn.cursor() as cur:
         cur.execute(f"DROP TABLE IF EXISTS {table}")

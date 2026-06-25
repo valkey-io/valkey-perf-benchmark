@@ -373,7 +373,6 @@ def populate_module_commits(
     Returns:
         Number of new rows inserted
     """
-    _create_module_table(conn, module_name)
 
     # Get commits and timestamps from both repos in one subprocess each
     core_timestamps = git_rev_list_with_timestamps(
@@ -511,7 +510,6 @@ def check_incomplete_rows(
     Returns:
         Number of incomplete rows found (0 if clean)
     """
-    _create_module_table(conn, module_name)
     table = _module_table_name(module_name)
 
     with conn.cursor() as cur:
@@ -566,7 +564,6 @@ def fetch_next_module_commits(
     Returns:
         List of 'core_sha:module_sha' strings marked as in_progress
     """
-    _create_module_table(conn, module_name)
     table = _module_table_name(module_name)
 
     with conn.cursor() as cur:
@@ -632,7 +629,6 @@ def mark_module_commits(
     Returns:
         Number of rows updated
     """
-    _create_module_table(conn, module_name)
     table = _module_table_name(module_name)
     updated = 0
 
@@ -682,9 +678,6 @@ def cleanup_module_commits(
     Returns:
         Number of entries reset
     """
-    # Ensure table exists (mirrors: create_tables in core cleanup)
-    _create_module_table(conn, module_name)
-
     table = _module_table_name(module_name)
     with conn.cursor() as cur:
         cur.execute(
@@ -828,6 +821,9 @@ def main():
     except Exception as err:
         print(f"Failed to connect to PostgreSQL: {err}", file=sys.stderr)
         sys.exit(1)
+
+    # Create table + indexes once, before dispatching to any operation
+    _create_module_table(conn, args.module_name)
 
     try:
         if args.operation == "populate":
