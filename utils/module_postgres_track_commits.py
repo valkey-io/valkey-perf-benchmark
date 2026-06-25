@@ -19,7 +19,7 @@ from psycopg2.extras import Json, execute_values
 
 from datetime import datetime
 
-from git_utils import git_rev_list, git_commit_time
+from git_utils import git_rev_list_with_timestamps
 
 
 def _parse_timestamp(ts) -> datetime:
@@ -375,9 +375,15 @@ def populate_module_commits(
     """
     _create_module_table(conn, module_name)
 
-    # Get commits from both git repos (newest first, limited if specified)
-    core_shas = git_rev_list(repo, branch, max_count=max_core_commits)
-    module_shas = git_rev_list(module_repo, module_branch, max_count=max_module_commits)
+    # Get commits and timestamps from both repos in one subprocess each
+    core_timestamps = git_rev_list_with_timestamps(
+        repo, branch, max_count=max_core_commits
+    )
+    module_timestamps = git_rev_list_with_timestamps(
+        module_repo, module_branch, max_count=max_module_commits
+    )
+    core_shas = list(core_timestamps.keys())
+    module_shas = list(module_timestamps.keys())
     print(
         f"Scanned {len(core_shas)} core commits "
         f"(limited to most recent {max_core_commits}), "
@@ -385,10 +391,6 @@ def populate_module_commits(
         f"(limited to most recent {max_module_commits})",
         file=sys.stderr,
     )
-
-    # Cache timestamps — fetch once per unique SHA (avoids redundant subprocess calls)
-    core_timestamps = {sha: git_commit_time(repo, sha) for sha in core_shas}
-    module_timestamps = {sha: git_commit_time(module_repo, sha) for sha in module_shas}
     print(
         f"Cached {len(core_timestamps)} core + {len(module_timestamps)} module timestamps",
         file=sys.stderr,

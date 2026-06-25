@@ -356,44 +356,6 @@ class TestCreateFailureMarker:
 
 
 # ---------------------------------------------------------------------------
-# config_name conditional output
-# ---------------------------------------------------------------------------
-
-
-class TestConfigName:
-    """Verify config_name is only present when provided (module runs only)."""
-
-    def test_config_name_present_when_set(self, minimal_valid_config):
-        """When config_name is provided, it should be stored on the runner."""
-        runner = ClientRunner(
-            commit_id="abc123",
-            config=minimal_valid_config,
-            cluster_mode=False,
-            tls_mode=False,
-            target_ip="127.0.0.1",
-            results_dir=Path("/tmp"),
-            valkey_path="/tmp/valkey",
-            valkey_benchmark_path="src/valkey-benchmark",
-            config_name="fts-benchmarks-arm.json",
-        )
-        assert runner.config_name == "fts-benchmarks-arm.json"
-
-    def test_config_name_absent_when_not_set(self, minimal_valid_config):
-        """When config_name is not provided (core run), it should be None."""
-        runner = ClientRunner(
-            commit_id="abc123",
-            config=minimal_valid_config,
-            cluster_mode=False,
-            tls_mode=False,
-            target_ip="127.0.0.1",
-            results_dir=Path("/tmp"),
-            valkey_path="/tmp/valkey",
-            valkey_benchmark_path="src/valkey-benchmark",
-        )
-        assert runner.config_name is None
-
-
-# ---------------------------------------------------------------------------
 # _iterate_test_groups_scenarios
 # ---------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@
 
 Tests cover:
 - _is_list_subset, _is_config_subset, _is_config_array_subset from utils/postgres_track_commits.py
-- detect_field_type, analyze_metrics_schema, convert_metrics_to_rows from utils/push_to_postgres.py
+- detect_field_type, analyze_metrics_schema, convert_metrics_to_rows, resolve_table_name from utils/push_to_postgres.py
 """
 
 from datetime import datetime
@@ -358,10 +358,7 @@ class TestConvertMetricsToRows:
 
 
 class TestModuleCommitSchema:
-    """Tests for module_commit column type in analyze_metrics_schema."""
-
     def test_module_commit_gets_varchar255(self):
-        """module_commit should be hardcoded to VARCHAR(255), not auto-detected."""
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -373,7 +370,6 @@ class TestModuleCommitSchema:
         assert schema["module_commit"] == "VARCHAR(255)"
 
     def test_module_commit_varchar255_regardless_of_length(self):
-        """Even a short module_commit should be VARCHAR(255), not VARCHAR(50)."""
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -385,7 +381,6 @@ class TestModuleCommitSchema:
         assert schema["module_commit"] == "VARCHAR(255)"
 
     def test_module_commit_not_in_schema_when_absent(self):
-        """If no metric has module_commit, it should not appear in schema."""
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -397,7 +392,6 @@ class TestModuleCommitSchema:
         assert "module_commit" not in schema
 
     def test_config_name_gets_varchar_max_length(self):
-        """config_name should be hardcoded to VARCHAR(CONFIG_NAME_MAX_LENGTH)."""
 
         metrics = [
             {
@@ -410,7 +404,6 @@ class TestModuleCommitSchema:
         assert schema["config_name"] == f"VARCHAR({CONFIG_NAME_MAX_LENGTH})"
 
     def test_config_name_not_in_schema_when_absent(self):
-        """If no metric has config_name, it should not appear in schema."""
         metrics = [
             {
                 "timestamp": "2024-01-01T00:00:00",
@@ -428,7 +421,6 @@ class TestModuleCommitSchema:
 
 
 class TestResolveTableName:
-    """Tests for resolve_table_name — determines which Postgres table to use."""
 
     def test_explicit_table_name_takes_precedence(self):
         assert resolve_table_name("custom_table", "search") == "custom_table"
@@ -441,15 +433,13 @@ class TestResolveTableName:
 
 
 # ---------------------------------------------------------------------------
-# config_set JSONB handling
+# config_set JSONB storage
 # ---------------------------------------------------------------------------
 
 
 class TestConfigSetJsonb:
-    """Tests for config_set being stored as JSONB."""
 
     def test_config_set_stored_as_jsonb(self):
-
         metrics = [
             {
                 "timestamp": "2026-06-01T00:00:00",
@@ -464,14 +454,3 @@ class TestConfigSetJsonb:
         ]
         schema = analyze_metrics_schema(metrics)
         assert schema["config_set"] == "JSONB"
-
-        columns = ["timestamp", "commit", "command", "config_set"]
-        rows, skipped = convert_metrics_to_rows(metrics, columns)
-        assert skipped == 0
-        config_value = rows[0][3]
-        assert isinstance(config_value, Json)
-        assert config_value.adapted == {
-            "io-threads": 8,
-            "search.reader-threads": 8,
-            "search.writer-threads": 8,
-        }

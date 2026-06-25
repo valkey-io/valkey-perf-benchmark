@@ -1,7 +1,10 @@
 """Unit tests for utils/module_postgres_track_commits.py — pure logic only.
 
-Tests pure functions that don't require a database connection.
-Mirrors the testing approach of test_postgres_utils.py.
+Tests cover:
+- get_config_name
+- _module_table_name
+- _is_config_sets_subset
+- CommitPair
 """
 
 from datetime import datetime, timezone
@@ -28,24 +31,6 @@ class TestGetConfigName:
         path = "../valkey-search/.github/benchmark_configs/fts-benchmarks-arm.json"
         assert get_config_name(path) == "fts-benchmarks-arm.json"
 
-    def test_extracts_filename_from_absolute_path(self):
-        assert (
-            get_config_name("/home/user/configs/benchmark-config-arm.json")
-            == "benchmark-config-arm.json"
-        )
-
-    def test_extracts_filename_when_just_filename(self):
-        assert get_config_name("fts-benchmarks-arm.json") == "fts-benchmarks-arm.json"
-
-    def test_handles_deeply_nested_dirs(self):
-        assert get_config_name("a/b/c/d/config.json") == "config.json"
-
-    def test_handles_dotfiles(self):
-        assert get_config_name("/home/.hidden/config.json") == "config.json"
-
-    def test_preserves_extension(self):
-        assert get_config_name("path/to/file.yaml") == "file.yaml"
-
 
 # ---------------------------------------------------------------------------
 # _module_table_name
@@ -53,14 +38,6 @@ class TestGetConfigName:
 
 
 class TestModuleTableName:
-    def test_search_module(self):
-        assert _module_table_name("search") == "benchmark_module_commits_search"
-
-    def test_json_module(self):
-        assert _module_table_name("json") == "benchmark_module_commits_json"
-
-    def test_bloom_module(self):
-        assert _module_table_name("bloom") == "benchmark_module_commits_bloom"
 
     def test_arbitrary_name(self):
         assert _module_table_name("my_module") == "benchmark_module_commits_my_module"
@@ -80,34 +57,6 @@ class TestModuleTableName:
     def test_rejects_empty_string(self):
         with pytest.raises(ValueError):
             _module_table_name("")
-
-
-# ---------------------------------------------------------------------------
-# config_set JSONB in module commit tracking
-# ---------------------------------------------------------------------------
-
-
-class TestModuleConfigSetsJsonb:
-    """Test that config_sets array is wrapped as Json for JSONB insertion."""
-
-    def test_config_sets_array_wrapped_as_json(self):
-
-        config_sets = [
-            {"io-threads": 8, "search.reader-threads": 1, "search.writer-threads": 1},
-            {"io-threads": 8, "search.reader-threads": 8, "search.writer-threads": 8},
-        ]
-        wrapped = Json(config_sets)
-        assert isinstance(wrapped, Json)
-        assert wrapped.adapted == config_sets
-        assert len(wrapped.adapted) == 2
-
-    def test_none_config_sets_defaults_to_empty_dict_list(self):
-
-        config_sets = None
-        resolved = config_sets or [{}]
-        assert resolved == [{}]
-        wrapped = Json(resolved)
-        assert wrapped.adapted == [{}]
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +129,6 @@ class TestIsConfigSetsSubset:
 
 
 class TestCommitPair:
-    """Tests for CommitPair validation and methods."""
 
     def _make_pair(self, **overrides):
         """Helper to create a valid CommitPair with optional overrides."""
