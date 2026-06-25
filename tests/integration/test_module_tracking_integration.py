@@ -107,30 +107,12 @@ def clean_table(conn):
     conn.commit()
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_git():
     with patch(
         "utils.module_postgres_track_commits.git_rev_list_with_timestamps"
     ) as mock_batch:
         yield mock_batch
-
-
-# ---------------------------------------------------------------------------
-# _create_module_table
-# ---------------------------------------------------------------------------
-
-
-class TestCreateModuleTable:
-    def test_creates_table(self, conn):
-        _create_module_table(conn, MODULE_NAME)
-
-        table = _module_table_name(MODULE_NAME)
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)",
-                (table,),
-            )
-            assert cur.fetchone()[0] is True
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +889,7 @@ class TestFetchOrderIntegration:
 
 
 class TestMultipleMarksIntegration:
+
     def test_mark_multiple_pairs_complete(self, conn, mock_git):
         mock_git.side_effect = [
             {
@@ -968,6 +951,7 @@ class TestMultipleMarksIntegration:
 
 
 class TestCleanupDoesNotAffectComplete:
+
     def test_complete_rows_unaffected_by_cleanup(self, conn, mock_git):
         mock_git.side_effect = [
             {
@@ -1030,6 +1014,7 @@ class TestCleanupDoesNotAffectComplete:
 
 
 class TestFullLifecycleIntegration:
+
     def test_populate_fetch_mark_populate_fetch(self, conn, mock_git):
         """Simulate two cron runs: first processes pairs, second picks up new ones.
 
@@ -1126,6 +1111,7 @@ class TestFullLifecycleIntegration:
 
 
 class TestLargeCartesianProduct:
+
     def test_10x10_cartesian(self, conn, mock_git):
         core_shas = [f"core{i:02d}" for i in range(10)]
         mod_shas = [f"mod{i:02d}" for i in range(10)]
@@ -1235,6 +1221,7 @@ class TestLargeCartesianProduct:
 
 
 class TestConcurrentConfigPopulations:
+
     def test_two_configs_independent_queues(self, conn, mock_git):
         # Populate config-A
         mock_git.side_effect = [
@@ -1660,6 +1647,7 @@ class TestSubsetDetectionIntegration:
 
 
 class TestCheckIncompleteRows:
+
     def test_passes_when_all_rows_complete(self, conn, mock_git):
         mock_git.side_effect = [
             {"core1": "2026-06-01T10:00:00+00:00"},
@@ -1686,7 +1674,6 @@ class TestCheckIncompleteRows:
         assert count == 0
 
     def test_exits_when_null_priority_found(self, conn):
-        _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
         # Insert a row with NULL priority (simulating corruption)
@@ -1711,7 +1698,6 @@ class TestCheckIncompleteRows:
             )
 
     def test_passes_on_empty_table(self, conn):
-        _create_module_table(conn, MODULE_NAME)
 
         count = check_incomplete_rows(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
@@ -1742,9 +1728,8 @@ class TestAssignPriorityInMemory:
             architecture=ARCHITECTURE,
         )
 
-    def test_no_pointer_all_forward(self, conn, mock_git):
+    def test_no_pointer_all_forward(self, conn):
 
-        _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
         pairs = [
@@ -1759,7 +1744,7 @@ class TestAssignPriorityInMemory:
         assert pairs[0].priority == 1
         assert pairs[1].priority == 1
 
-    def test_forward_and_fallback_classification(self, conn, mock_git):
+    def test_forward_and_fallback_classification(self, conn):
         """4x4 grid test mimicking the priority diagram.
 
         Core commits: A(oldest), B, C, D(newest)
@@ -1776,7 +1761,6 @@ class TestAssignPriorityInMemory:
             Actually only: Ac, Ad, Ca, Da
         """
 
-        _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
         core_times = {
@@ -1867,9 +1851,8 @@ class TestAssignPriorityInMemory:
                 result[pair] == 2
             ), f"{pair} should be fallback(2), got {result[pair]}"
 
-    def test_skips_already_assigned_pairs(self, conn, mock_git):
+    def test_skips_already_assigned_pairs(self, conn):
 
-        _create_module_table(conn, MODULE_NAME)
         table = _module_table_name(MODULE_NAME)
 
         pair = self._make_pair("2026-06-05T10:00:00+00:00", "2026-06-04T10:00:00+00:00")
