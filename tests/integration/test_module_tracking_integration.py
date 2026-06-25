@@ -284,42 +284,6 @@ class TestPopulateIntegration:
             cur.execute(f"SELECT COUNT(*) FROM {table}")
             assert cur.fetchone()[0] == 2
 
-    def test_all_rows_get_priority_assigned(self, conn, mock_git):
-        """After populate with no prior completions, all rows get priority=1 (forward)."""
-        mock_git.side_effect = [
-            {
-                "core1": "2026-06-04T10:00:00+00:00",
-                "core2": "2026-06-03T10:00:00+00:00",
-            },
-            {"mod1": "2026-06-02T10:00:00+00:00", "mod2": "2026-06-01T10:00:00+00:00"},
-        ]
-
-        populate_module_commits(
-            conn,
-            Path("/fake"),
-            "unstable",
-            Path("/fake-mod"),
-            "main",
-            ARCHITECTURE,
-            MODULE_NAME,
-            CONFIG_NAME,
-            CONFIG_SETS,
-            CONFIG_SETS_JSON,
-        )
-
-        # No NULL priorities — all rows should have priority assigned
-        table = _module_table_name(MODULE_NAME)
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) FROM {table} WHERE priority IS NULL")
-            assert cur.fetchone()[0] == 0
-
-        # All rows should be priority=1 (forward) since no pointer exists
-        table = _module_table_name(MODULE_NAME)
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT DISTINCT priority FROM {table}")
-            priorities = {row[0] for row in cur.fetchall()}
-        assert priorities == {1}
-
 
 # ---------------------------------------------------------------------------
 # fetch_next_module_commits

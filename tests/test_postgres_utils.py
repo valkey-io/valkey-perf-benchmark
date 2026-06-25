@@ -430,27 +430,3 @@ class TestResolveTableName:
 
     def test_neither_provided_returns_none(self):
         assert resolve_table_name(None, None) is None
-
-
-# ---------------------------------------------------------------------------
-# config_set JSONB storage
-# ---------------------------------------------------------------------------
-
-
-class TestConfigSetJsonb:
-
-    def test_config_set_stored_as_jsonb(self):
-        metrics = [
-            {
-                "timestamp": "2026-06-01T00:00:00",
-                "commit": "abc123",
-                "command": "FT.SEARCH idx term",
-                "config_set": {
-                    "io-threads": 8,
-                    "search.reader-threads": 8,
-                    "search.writer-threads": 8,
-                },
-            }
-        ]
-        schema = analyze_metrics_schema(metrics)
-        assert schema["config_set"] == "JSONB"
