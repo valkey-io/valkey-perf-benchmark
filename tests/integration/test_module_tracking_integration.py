@@ -31,7 +31,6 @@ from unittest.mock import patch
 from pathlib import Path
 
 import psycopg2
-
 from psycopg2.extras import Json
 
 from utils.module_postgres_track_commits import (
@@ -64,7 +63,6 @@ ARCHITECTURE = "aarch64"
 CONFIG_SETS = [
     {"io-threads": 8, "search.reader-threads": 1, "search.writer-threads": 1}
 ]
-CONFIG_SETS_JSON = Json(CONFIG_SETS)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +139,6 @@ class TestPopulateIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         assert result == 4
@@ -239,7 +236,6 @@ class TestPopulateIntegration:
             MODULE_NAME,
             "config-A.json",
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Same pair, different config — should insert a new row
@@ -257,7 +253,6 @@ class TestPopulateIntegration:
             MODULE_NAME,
             "config-B.json",
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         assert result == 1
@@ -291,14 +286,13 @@ class TestFetchNextIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
     def test_fetches_pending_pairs(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1"], ["mod1"])
 
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         assert pairs == ["core1:mod1"]
@@ -306,7 +300,7 @@ class TestFetchNextIntegration:
     def test_marks_fetched_as_in_progress(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1"], ["mod1"])
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -324,11 +318,11 @@ class TestFetchNextIntegration:
 
         # First fetch takes one pair
         first = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
         # Second fetch should return the OTHER pair
         second = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         assert len(second) == 1
@@ -337,11 +331,11 @@ class TestFetchNextIntegration:
     def test_returns_empty_when_all_in_progress(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1"], ["mod1"])
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         assert pairs == []
@@ -350,7 +344,7 @@ class TestFetchNextIntegration:
         self._populate(conn, mock_git, ["core1", "core2", "core3"], ["mod1"])
 
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=2
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=2
         )
 
         assert len(pairs) == 2
@@ -387,7 +381,6 @@ class TestFetchNextIntegration:
             MODULE_NAME,
             "config-A.json",
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Populate same SHAs with config-B
@@ -405,7 +398,6 @@ class TestFetchNextIntegration:
             MODULE_NAME,
             "config-B.json",
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Fetch for config-A — should get config-A's pair
@@ -413,7 +405,7 @@ class TestFetchNextIntegration:
             conn,
             MODULE_NAME,
             "config-A.json",
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
             max_pairs=1,
         )
@@ -464,10 +456,9 @@ class TestMarkModuleCommitsIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
     def test_marks_complete(self, conn, mock_git):
@@ -478,7 +469,7 @@ class TestMarkModuleCommitsIntegration:
             MODULE_NAME,
             ["core1:mod1"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
@@ -503,7 +494,7 @@ class TestMarkModuleCommitsIntegration:
             MODULE_NAME,
             ["core1:mod1"],
             "wrong-config.json",
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
@@ -521,7 +512,7 @@ class TestMarkModuleCommitsIntegration:
         self._setup_in_progress(conn, mock_git)
 
         result = mark_module_commits(
-            conn, MODULE_NAME, ["core1:mod1"], CONFIG_NAME, CONFIG_SETS_JSON, "x86_64"
+            conn, MODULE_NAME, ["core1:mod1"], CONFIG_NAME, CONFIG_SETS, "x86_64"
         )
 
         assert result == 0
@@ -541,12 +532,12 @@ class TestMarkModuleCommitsIntegration:
             MODULE_NAME,
             ["core1:mod1"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         assert pairs == []
@@ -575,14 +566,13 @@ class TestCleanupIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         result = cleanup_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
 
         assert result == 1
@@ -607,15 +597,14 @@ class TestCleanupIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         # Cleanup with DIFFERENT config — should not affect our row
         result = cleanup_module_commits(
-            conn, MODULE_NAME, "other-config.json", CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, "other-config.json", CONFIG_SETS, ARCHITECTURE
         )
 
         assert result == 0
@@ -640,18 +629,17 @@ class TestCleanupIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
         cleanup_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
 
         # Should be fetchable again
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
         assert pairs == ["core1:mod1"]
@@ -690,19 +678,18 @@ class TestPriorityIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Mark as complete — pointer is now at 2026-01-01
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
         mark_module_commits(
             conn,
             MODULE_NAME,
             ["core_old:mod_old"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
@@ -732,7 +719,6 @@ class TestPriorityIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -778,17 +764,16 @@ class TestFetchOrderIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=1
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
         mark_module_commits(
             conn,
             MODULE_NAME,
             ["core_old:mod_old"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
@@ -813,7 +798,6 @@ class TestFetchOrderIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Verify priority assignment before fetching
@@ -835,7 +819,7 @@ class TestFetchOrderIntegration:
 
         # Fetch all — forward should come first in results
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=10
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
 
         assert len(pairs) == 3
@@ -869,12 +853,11 @@ class TestFetchOrderIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Fetch all — should be ordered by max_commit_timestamp DESC
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=10
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
 
         assert len(pairs) == 3
@@ -910,12 +893,11 @@ class TestMultipleMarksIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Fetch all 3
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=3
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=3
         )
 
         # Mark all 3 complete
@@ -924,7 +906,7 @@ class TestMultipleMarksIntegration:
             MODULE_NAME,
             ["core1:mod1", "core2:mod1", "core3:mod1"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
@@ -971,12 +953,11 @@ class TestCleanupDoesNotAffectComplete:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Fetch both
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=2
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=2
         )
 
         # Mark only core1:mod1 as complete, leave core2:mod1 as in_progress
@@ -985,13 +966,13 @@ class TestCleanupDoesNotAffectComplete:
             MODULE_NAME,
             ["core1:mod1"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
         # Run cleanup
         cleanup_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
 
         # Verify: core1:mod1 still complete, core2:mod1 reset to pending
@@ -1038,11 +1019,10 @@ class TestFullLifecycleIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=10
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
         assert pairs == ["core1:mod1"]
 
@@ -1051,7 +1031,7 @@ class TestFullLifecycleIntegration:
             MODULE_NAME,
             ["core1:mod1"],
             CONFIG_NAME,
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
         )
 
@@ -1074,11 +1054,10 @@ class TestFullLifecycleIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE, max_pairs=10
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
 
         # Should get 3 new pairs (core1:mod1 already complete, not returned)
@@ -1130,7 +1109,6 @@ class TestLargeCartesianProduct:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         assert result == 100
@@ -1162,7 +1140,6 @@ class TestLargeCartesianProduct:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Second populate — same SHAs
@@ -1180,7 +1157,6 @@ class TestLargeCartesianProduct:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         assert result == 0
@@ -1202,7 +1178,6 @@ class TestLargeCartesianProduct:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
             max_core_commits=3,
             max_module_commits=3,
         )
@@ -1241,7 +1216,6 @@ class TestConcurrentConfigPopulations:
             MODULE_NAME,
             "config-A.json",
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Populate config-B (same SHAs, different config)
@@ -1262,7 +1236,6 @@ class TestConcurrentConfigPopulations:
             MODULE_NAME,
             "config-B.json",
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Table should have 4 rows total (2 per config)
@@ -1276,7 +1249,7 @@ class TestConcurrentConfigPopulations:
             conn,
             MODULE_NAME,
             "config-A.json",
-            CONFIG_SETS_JSON,
+            CONFIG_SETS,
             ARCHITECTURE,
             max_pairs=10,
         )
@@ -1292,7 +1265,7 @@ class TestConcurrentConfigPopulations:
 
         # Mark config-A pairs complete
         mark_module_commits(
-            conn, MODULE_NAME, pairs_a, "config-A.json", CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, pairs_a, "config-A.json", CONFIG_SETS, ARCHITECTURE
         )
 
         # Config-B should still be untouched (all pending)
@@ -1318,24 +1291,22 @@ class TestConcurrentConfigPopulations:
 
 
 CONFIG_SETS_SMALL = [{"io-threads": 8, "search.reader-threads": 1}]
-CONFIG_SETS_SMALL_JSON = Json(CONFIG_SETS_SMALL)
 
 CONFIG_SETS_LARGE = [
     {"io-threads": 8, "search.reader-threads": 1},
     {"io-threads": 8, "search.reader-threads": 8},
 ]
-CONFIG_SETS_LARGE_JSON = Json(CONFIG_SETS_LARGE)
 
 
 class TestSubsetDetectionIntegration:
     """Verify that subset config_sets get marked 'completed_as_subset' when a superset exists."""
 
-    def _populate_and_complete(self, conn, mock_git, config_sets, config_sets_json):
+    def _populate_and_complete(self, conn, mock_git, config_sets):
         """Helper: populate pairs with given config_sets and mark them completed."""
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1349,28 +1320,77 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             config_sets,
-            config_sets_json,
         )
         # Fetch and mark complete
         pairs = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, config_sets_json, ARCHITECTURE, max_pairs=10
+            conn, MODULE_NAME, CONFIG_NAME, config_sets, ARCHITECTURE, max_pairs=10
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs, CONFIG_NAME, config_sets_json, ARCHITECTURE
+            conn, MODULE_NAME, pairs, CONFIG_NAME, config_sets, ARCHITECTURE
         )
 
     def test_subset_marked_completed_as_subset(self, conn, mock_git):
+        """Two distinct supersets completed — subset pairs matched via IN() clause."""
+        superset_a = [
+            {"io-threads": 8, "search.reader-threads": 1},
+            {"io-threads": 8, "search.reader-threads": 8},
+        ]
+        superset_b = [
+            {"io-threads": 8, "search.reader-threads": 1},
+            {"io-threads": 4, "search.reader-threads": 4},
+        ]
 
-        # Step 1: Complete the superset
-        self._populate_and_complete(
-            conn, mock_git, CONFIG_SETS_LARGE, CONFIG_SETS_LARGE_JSON
+        # Step 1: Complete superset A for core1:mod1
+        mock_git.side_effect = [
+            {"core1": "2026-06-01T10:00:00+00:00"},
+            {"mod1": "2026-06-01T10:00:00+00:00"},
+        ]
+        populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            superset_a,
+        )
+        pairs_a = fetch_next_module_commits(
+            conn, MODULE_NAME, CONFIG_NAME, superset_a, ARCHITECTURE, max_pairs=10
+        )
+        mark_module_commits(
+            conn, MODULE_NAME, pairs_a, CONFIG_NAME, superset_a, ARCHITECTURE
         )
 
-        # Step 2: Populate with subset config_sets
+        # Step 2: Complete superset B for core2:mod1
+        mock_git.side_effect = [
+            {"core2": "2026-06-02T10:00:00+00:00"},
+            {"mod1": "2026-06-01T10:00:00+00:00"},
+        ]
+        populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            superset_b,
+        )
+        pairs_b = fetch_next_module_commits(
+            conn, MODULE_NAME, CONFIG_NAME, superset_b, ARCHITECTURE, max_pairs=10
+        )
+        mark_module_commits(
+            conn, MODULE_NAME, pairs_b, CONFIG_NAME, superset_b, ARCHITECTURE
+        )
+
+        # Step 3: Populate subset — both pairs should be completed_as_subset
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1384,15 +1404,14 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-            CONFIG_SETS_SMALL_JSON,
         )
 
-        # Step 3: Verify subset rows were marked
+        # Step 4: Verify both subset rows were marked
         table = _module_table_name(MODULE_NAME)
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT status FROM {table} " f"WHERE config_sets = %s ORDER BY sha",
-                (CONFIG_SETS_SMALL_JSON,),
+                (Json(CONFIG_SETS_SMALL),),
             )
             statuses = [row[0] for row in cur.fetchall()]
 
@@ -1400,15 +1419,13 @@ class TestSubsetDetectionIntegration:
         assert len(statuses) == 2
 
     def test_subset_not_fetched(self, conn, mock_git):
-        self._populate_and_complete(
-            conn, mock_git, CONFIG_SETS_LARGE, CONFIG_SETS_LARGE_JSON
-        )
+        self._populate_and_complete(conn, mock_git, CONFIG_SETS_LARGE)
 
         # Populate subset
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1422,7 +1439,6 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-            CONFIG_SETS_SMALL_JSON,
         )
 
         # Fetch for subset config — should be empty (all completed_as_subset)
@@ -1430,7 +1446,7 @@ class TestSubsetDetectionIntegration:
             conn,
             MODULE_NAME,
             CONFIG_NAME,
-            CONFIG_SETS_SMALL_JSON,
+            CONFIG_SETS_SMALL,
             ARCHITECTURE,
             max_pairs=10,
         )
@@ -1438,18 +1454,15 @@ class TestSubsetDetectionIntegration:
 
     def test_non_subset_still_pending(self, conn, mock_git):
         # Complete config with reader-threads=1 only
-        self._populate_and_complete(
-            conn, mock_git, CONFIG_SETS_SMALL, CONFIG_SETS_SMALL_JSON
-        )
+        self._populate_and_complete(conn, mock_git, CONFIG_SETS_SMALL)
 
         # Populate with a DIFFERENT config (reader-threads=8 only, not subset of small)
         different_config = [{"io-threads": 8, "search.reader-threads": 8}]
-        different_config_json = Json(different_config)
 
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1463,7 +1476,6 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             different_config,
-            different_config_json,
         )
 
         # Should be fetchable (not marked as subset)
@@ -1471,7 +1483,7 @@ class TestSubsetDetectionIntegration:
             conn,
             MODULE_NAME,
             CONFIG_NAME,
-            different_config_json,
+            different_config,
             ARCHITECTURE,
             max_pairs=10,
         )
@@ -1479,15 +1491,13 @@ class TestSubsetDetectionIntegration:
 
     def test_superset_not_marked_as_subset(self, conn, mock_git):
         # Complete the smaller config
-        self._populate_and_complete(
-            conn, mock_git, CONFIG_SETS_SMALL, CONFIG_SETS_SMALL_JSON
-        )
+        self._populate_and_complete(conn, mock_git, CONFIG_SETS_SMALL)
 
         # Populate with the larger config
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1501,7 +1511,6 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-            CONFIG_SETS_LARGE_JSON,
         )
 
         # LARGE should be fetchable (it's a superset, not a subset)
@@ -1509,22 +1518,20 @@ class TestSubsetDetectionIntegration:
             conn,
             MODULE_NAME,
             CONFIG_NAME,
-            CONFIG_SETS_LARGE_JSON,
+            CONFIG_SETS_LARGE,
             ARCHITECTURE,
             max_pairs=10,
         )
         assert len(pairs) == 2
 
     def test_exact_match_is_subset(self, conn, mock_git):
-        self._populate_and_complete(
-            conn, mock_git, CONFIG_SETS_LARGE, CONFIG_SETS_LARGE_JSON
-        )
+        self._populate_and_complete(conn, mock_git, CONFIG_SETS_LARGE)
 
         # Populate same config again
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1538,7 +1545,6 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-            CONFIG_SETS_LARGE_JSON,
         )
 
         # Should not be fetchable (all marked as subset since exact match was completed)
@@ -1546,7 +1552,7 @@ class TestSubsetDetectionIntegration:
             conn,
             MODULE_NAME,
             CONFIG_NAME,
-            CONFIG_SETS_LARGE_JSON,
+            CONFIG_SETS_LARGE,
             ARCHITECTURE,
             max_pairs=10,
         )
@@ -1564,7 +1570,7 @@ class TestSubsetDetectionIntegration:
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
         ]
@@ -1578,25 +1584,24 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-            CONFIG_SETS_LARGE_JSON,
         )
         pairs = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
-            CONFIG_SETS_LARGE_JSON,
+            CONFIG_SETS_LARGE,
             ARCHITECTURE,
             max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs, CONFIG_NAME, CONFIG_SETS_LARGE_JSON, ARCHITECTURE
+            conn, MODULE_NAME, pairs, CONFIG_NAME, CONFIG_SETS_LARGE, ARCHITECTURE
         )
 
         # Step 2: Populate subset with core1, core2, core3 (core3 is new)
         mock_git.side_effect = [
             {
                 "core1": "2026-06-01T10:00:00+00:00",
-                "core2": "2026-06-01T10:00:00+00:00",
+                "core2": "2026-06-02T10:00:00+00:00",
                 "core3": "2026-06-01T10:00:00+00:00",
             },
             {"mod1": "2026-06-01T10:00:00+00:00"},
@@ -1611,7 +1616,6 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-            CONFIG_SETS_SMALL_JSON,
         )
 
         # Step 3: Verify statuses
@@ -1620,7 +1624,7 @@ class TestSubsetDetectionIntegration:
             cur.execute(
                 f"SELECT sha, module_sha, status FROM {table} "
                 f"WHERE config_sets = %s ORDER BY sha",
-                (CONFIG_SETS_SMALL_JSON,),
+                (Json(CONFIG_SETS_SMALL),),
             )
             rows = cur.fetchall()
 
@@ -1634,7 +1638,7 @@ class TestSubsetDetectionIntegration:
             conn,
             MODULE_NAME,
             CONFIG_NAME,
-            CONFIG_SETS_SMALL_JSON,
+            CONFIG_SETS_SMALL,
             ARCHITECTURE,
             max_pairs=10,
         )
@@ -1664,12 +1668,11 @@ class TestCheckIncompleteRows:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS,
-            CONFIG_SETS_JSON,
         )
 
         # Should pass — all rows have priority and status
         count = check_incomplete_rows(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
         assert count == 0
 
@@ -1687,20 +1690,20 @@ class TestCheckIncompleteRows:
                         '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
                         'pending', %s, %s, %s)
             """,
-                (CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE),
+                (CONFIG_NAME, Json(CONFIG_SETS), ARCHITECTURE),
             )
         conn.commit()
 
         # Should detect the NULL priority and raise
         with pytest.raises(ValueError):
             check_incomplete_rows(
-                conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+                conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
             )
 
     def test_passes_on_empty_table(self, conn):
 
         count = check_incomplete_rows(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
         assert count == 0
 
@@ -1738,7 +1741,7 @@ class TestAssignPriorityInMemory:
         ]
 
         _assign_priority_in_memory(
-            conn, pairs, table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, pairs, table, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
 
         assert pairs[0].priority == 1
@@ -1797,7 +1800,7 @@ class TestAssignPriorityInMemory:
                         f"{max(core_t, mod_t)}T00:00:00+00:00",
                         f"{min(core_t, mod_t)}T00:00:00+00:00",
                         CONFIG_NAME,
-                        CONFIG_SETS_JSON,
+                        Json(CONFIG_SETS),
                         ARCHITECTURE,
                     ),
                 )
@@ -1819,7 +1822,7 @@ class TestAssignPriorityInMemory:
                 pairs[-1].module_sha = mod
 
         _assign_priority_in_memory(
-            conn, pairs, table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, pairs, table, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
 
         # Build lookup: (core, mod) -> priority
@@ -1860,7 +1863,7 @@ class TestAssignPriorityInMemory:
         pair.status = "completed_as_subset"
 
         _assign_priority_in_memory(
-            conn, [pair], table, CONFIG_NAME, CONFIG_SETS_JSON, ARCHITECTURE
+            conn, [pair], table, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
         )
 
         assert pair.priority == 99

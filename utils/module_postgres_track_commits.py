@@ -239,18 +239,16 @@ def _mark_subset_pairs_in_memory(
     # Get (sha, module_sha) pairs that are completed with a superset config
     completed_pairs = set()
     with conn.cursor() as cur:
-        for superset_cs in superset_list:
-            cur.execute(
-                f"""
-                SELECT sha, module_sha FROM {table}
-                WHERE status = 'completed'
-                  AND config_name = %s AND architecture = %s
-                  AND config_sets = %s
-            """,
-                (config_name, architecture, Json(superset_cs)),
-            )
-            for row in cur.fetchall():
-                completed_pairs.add((row[0], row[1]))
+        cur.execute(
+            f"""
+            SELECT sha, module_sha FROM {table}
+            WHERE status = 'completed'
+              AND config_name = %s AND architecture = %s
+              AND config_sets IN %s
+        """,
+            (config_name, architecture, tuple(Json(cs) for cs in superset_list)),
+        )
+        completed_pairs = {(row[0], row[1]) for row in cur.fetchall()}
 
     print(
         f"  Subset check: {len(completed_pairs)} completed pairs found from superset configs",
@@ -273,7 +271,7 @@ def _assign_priority_in_memory(
     pairs: List[CommitPair],
     table: str,
     config_name: str,
-    config_sets_json,
+    config_sets: List[dict],
     architecture: str,
 ) -> None:
     """Assign priority to pairs that are still pending (not subset-completed).
@@ -289,9 +287,10 @@ def _assign_priority_in_memory(
         pairs: List of CommitPair objects (modifies in-place)
         table: Table name
         config_name: Config file name
-        config_sets_json: Pre-wrapped Json for SQL
+        config_sets: List of module runtime configs
         architecture: Architecture
     """
+    config_sets_json = Json(config_sets)
     # Find pointer: max_commit_timestamp of the newest completed pair
     with conn.cursor() as cur:
         cur.execute(
@@ -349,7 +348,6 @@ def populate_module_commits(
     module_name: str,
     config_name: str,
     config_sets: List[dict],
-    config_sets_json,
     max_core_commits: Optional[int] = None,
     max_module_commits: Optional[int] = None,
 ) -> int:
@@ -397,6 +395,7 @@ def populate_module_commits(
 
     # Get existing (sha, module_sha) pairs for this config+arch to avoid redundant inserts
     table = _module_table_name(module_name)
+    config_sets_json = Json(config_sets)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -448,7 +447,7 @@ def populate_module_commits(
 
     # Step 3: Assign priority in memory (for pairs not marked as subset)
     _assign_priority_in_memory(
-        conn, pairs, table, config_name, config_sets_json, architecture
+        conn, pairs, table, config_name, config_sets, architecture
     )
 
     # Step 4: Validate — all pairs must be ready before insert
@@ -490,7 +489,7 @@ def populate_module_commits(
 
 
 def check_incomplete_rows(
-    conn, module_name: str, config_name: str, config_sets_json, architecture: str
+    conn, module_name: str, config_name: str, config_sets: List[dict], architecture: str
 ) -> int:
     """Check for rows with NULL values in required fields. Exit if found.
 
@@ -504,13 +503,14 @@ def check_incomplete_rows(
         conn: PostgreSQL connection
         module_name: Module name (determines table)
         config_name: Config file name to scope
-        config_sets_json: Pre-wrapped Json(config_sets) for SQL queries
+        config_sets: List of module runtime configs
         architecture: Architecture to scope
 
     Returns:
         Number of incomplete rows found (0 if clean)
     """
     table = _module_table_name(module_name)
+    config_sets_json = Json(config_sets)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -537,7 +537,7 @@ def fetch_next_module_commits(
     conn,
     module_name: str,
     config_name: str,
-    config_sets_json,
+    config_sets: List[dict],
     architecture: str,
     max_pairs: int = 1,
 ) -> List[str]:
@@ -557,7 +557,7 @@ def fetch_next_module_commits(
         conn: PostgreSQL connection
         module_name: Module name (determines table)
         config_name: Config file name to match
-        config_sets_json: Pre-wrapped Json(config_sets) for SQL queries
+        config_sets: List of module runtime configs
         architecture: Architecture to match
         max_pairs: Maximum number of pairs to fetch
 
@@ -565,6 +565,7 @@ def fetch_next_module_commits(
         List of 'core_sha:module_sha' strings marked as in_progress
     """
     table = _module_table_name(module_name)
+    config_sets_json = Json(config_sets)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -610,7 +611,7 @@ def mark_module_commits(
     module_name: str,
     pairs: List[str],
     config_name: str,
-    config_sets_json,
+    config_sets: List[dict],
     architecture: str,
 ) -> int:
     """Mark specific pairs as completed.
@@ -623,13 +624,14 @@ def mark_module_commits(
         module_name: Module name (determines table)
         pairs: List of 'core_sha:module_sha' strings to mark complete
         config_name: Config file name to match
-        config_sets_json: Pre-wrapped Json(config_sets) for SQL queries
+        config_sets: List of module runtime configs
         architecture: Architecture to match
 
     Returns:
         Number of rows updated
     """
     table = _module_table_name(module_name)
+    config_sets_json = Json(config_sets)
     updated = 0
 
     with conn.cursor() as cur:
@@ -666,7 +668,7 @@ def mark_module_commits(
 
 
 def cleanup_module_commits(
-    conn, module_name: str, config_name: str, config_sets_json, architecture: str
+    conn, module_name: str, config_name: str, config_sets: List[dict], architecture: str
 ) -> int:
     """Reset 'in_progress' entries back to 'pending' for a specific config+config_sets+arch.
 
@@ -679,6 +681,7 @@ def cleanup_module_commits(
         Number of entries reset
     """
     table = _module_table_name(module_name)
+    config_sets_json = Json(config_sets)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -803,7 +806,6 @@ def main():
     if not config_sets:
         print("Error: config_sets not found in config file", file=sys.stderr)
         sys.exit(1)
-    config_sets_json = Json(config_sets)
 
     # Connect to PostgreSQL
     try:
@@ -850,7 +852,6 @@ def main():
                 module_name=args.module_name,
                 config_name=config_name,
                 config_sets=config_sets,
-                config_sets_json=config_sets_json,
                 max_core_commits=args.max_core_commits,
                 max_module_commits=args.max_module_commits,
             )
@@ -872,7 +873,7 @@ def main():
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,
-                config_sets_json=config_sets_json,
+                config_sets=config_sets,
                 architecture=args.architecture,
                 max_pairs=args.max_pairs,
             )
@@ -910,7 +911,7 @@ def main():
                 module_name=args.module_name,
                 pairs=args.pairs,
                 config_name=config_name,
-                config_sets_json=config_sets_json,
+                config_sets=config_sets,
                 architecture=args.architecture,
             )
 
@@ -926,7 +927,7 @@ def main():
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,
-                config_sets_json=config_sets_json,
+                config_sets=config_sets,
                 architecture=args.architecture,
             )
 
@@ -945,7 +946,7 @@ def main():
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,
-                config_sets_json=config_sets_json,
+                config_sets=config_sets,
                 architecture=args.architecture,
             )
 
