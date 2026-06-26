@@ -488,51 +488,6 @@ def populate_module_commits(
     return len(pairs)
 
 
-def check_incomplete_rows(
-    conn, module_name: str, config_name: str, config_sets: List[dict], architecture: str
-) -> int:
-    """Check for rows with NULL values in required fields. Exit if found.
-
-    Required fields that must not be NULL: sha, module_sha, core_timestamp,
-    module_timestamp, max_commit_timestamp, min_commit_timestamp, status,
-    priority.
-
-    Called at start and end of workflow to catch any corrupt/incomplete state.
-
-    Args:
-        conn: PostgreSQL connection
-        module_name: Module name (determines table)
-        config_name: Config file name to scope
-        config_sets: List of module runtime configs
-        architecture: Architecture to scope
-
-    Returns:
-        Number of incomplete rows found (0 if clean)
-    """
-    table = _module_table_name(module_name)
-    config_sets_json = Json(config_sets)
-
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT COUNT(*) FROM {table}
-            WHERE config_name = %s AND config_sets = %s AND architecture = %s
-              AND (sha IS NULL OR module_sha IS NULL OR core_timestamp IS NULL
-                   OR module_timestamp IS NULL OR max_commit_timestamp IS NULL
-                   OR min_commit_timestamp IS NULL OR status IS NULL
-                   OR priority IS NULL)
-        """,
-            (config_name, config_sets_json, architecture),
-        )
-        count = cur.fetchone()[0]
-
-    if count > 0:
-        raise ValueError(f"{count} rows with NULL required fields found in {table}.")
-
-    print(f"Integrity check passed: no incomplete rows in {table}", file=sys.stderr)
-    return count
-
-
 def fetch_next_module_commits(
     conn,
     module_name: str,
@@ -717,7 +672,6 @@ def main():
             "fetch-next",
             "mark-complete",
             "cleanup",
-            "check-incomplete",
         ],
         help="Operation to perform",
     )
@@ -924,25 +878,6 @@ def main():
                 sys.exit(1)
 
             cleanup_module_commits(
-                conn=conn,
-                module_name=args.module_name,
-                config_name=config_name,
-                config_sets=config_sets,
-                architecture=args.architecture,
-            )
-
-        elif args.operation == "check-incomplete":
-            if not config_name:
-                print(
-                    "Error: --config-file is required for check-incomplete",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            if not args.architecture:
-                print("Error: architecture could not be determined", file=sys.stderr)
-                sys.exit(1)
-
-            check_incomplete_rows(
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,

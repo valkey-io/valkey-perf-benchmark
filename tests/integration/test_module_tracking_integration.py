@@ -17,7 +17,6 @@ What's tested:
     - fetch_next_module_commits
     - mark_module_commits
     - cleanup_module_commits
-    - check_incomplete_rows
     - _assign_priority_in_memory
     - Subset detection (_mark_subset_pairs_in_memory)
     - Full lifecycle (populate → fetch → mark → re-populate)
@@ -39,7 +38,6 @@ from utils.module_postgres_track_commits import (
     _create_module_table,
     _module_table_name,
     _parse_timestamp,
-    check_incomplete_rows,
     cleanup_module_commits,
     fetch_next_module_commits,
     mark_module_commits,
@@ -1643,69 +1641,6 @@ class TestSubsetDetectionIntegration:
             max_pairs=10,
         )
         assert pairs == ["core3:mod1"]
-
-
-# ---------------------------------------------------------------------------
-# check_incomplete_rows
-# ---------------------------------------------------------------------------
-
-
-class TestCheckIncompleteRows:
-
-    def test_passes_when_all_rows_complete(self, conn, mock_git):
-        mock_git.side_effect = [
-            {"core1": "2026-06-01T10:00:00+00:00"},
-            {"mod1": "2026-06-01T10:00:00+00:00"},
-        ]
-
-        populate_module_commits(
-            conn,
-            Path("/fake"),
-            "unstable",
-            Path("/fake-mod"),
-            "main",
-            ARCHITECTURE,
-            MODULE_NAME,
-            CONFIG_NAME,
-            CONFIG_SETS,
-        )
-
-        # Should pass — all rows have priority and status
-        count = check_incomplete_rows(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
-        )
-        assert count == 0
-
-    def test_exits_when_null_priority_found(self, conn):
-        table = _module_table_name(MODULE_NAME)
-
-        # Insert a row with NULL priority (simulating corruption)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {table} (sha, module_sha, core_timestamp, module_timestamp,
-                                     max_commit_timestamp, min_commit_timestamp,
-                                     status, config_name, config_sets, architecture)
-                VALUES ('bad1', 'mod1', '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        '2026-06-01T10:00:00+00:00', '2026-06-01T10:00:00+00:00',
-                        'pending', %s, %s, %s)
-            """,
-                (CONFIG_NAME, Json(CONFIG_SETS), ARCHITECTURE),
-            )
-        conn.commit()
-
-        # Should detect the NULL priority and raise
-        with pytest.raises(ValueError):
-            check_incomplete_rows(
-                conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
-            )
-
-    def test_passes_on_empty_table(self, conn):
-
-        count = check_incomplete_rows(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE
-        )
-        assert count == 0
 
 
 # ---------------------------------------------------------------------------
