@@ -1,6 +1,7 @@
 """Unit tests for utils/module_postgres_track_commits.py — pure logic only.
 
 Tests cover:
+- _parse_timestamp
 - get_config_name
 - _module_table_name
 - _is_config_sets_subset
@@ -20,6 +21,64 @@ from utils.module_postgres_track_commits import (
     _is_config_sets_subset,
     _parse_timestamp,
 )
+
+# ---------------------------------------------------------------------------
+# _parse_timestamp
+# ---------------------------------------------------------------------------
+
+
+class TestParseTimestamp:
+    def test_iso_with_utc_offset(self):
+        result = _parse_timestamp("2026-06-01T10:00:00+00:00")
+        assert result == datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    def test_iso_with_z_suffix(self):
+        result = _parse_timestamp("2026-06-01T10:00:00Z")
+        assert result == datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    def test_passthrough_datetime_object(self):
+        dt = datetime(2026, 6, 1, 10, 0, 0, tzinfo=timezone.utc)
+        result = _parse_timestamp(dt)
+        assert result is dt
+
+    def test_naive_timestamp_no_timezone(self):
+        with pytest.raises(ValueError, match="missing timezone"):
+            _parse_timestamp("2026-06-01T10:00:00")
+
+    def test_naive_datetime_object_raises(self):
+        dt = datetime(2026, 6, 1, 10, 0, 0)
+        with pytest.raises(ValueError, match="missing timezone"):
+            _parse_timestamp(dt)
+
+    def test_non_utc_offset(self):
+        result = _parse_timestamp("2026-06-01T10:00:00-05:00")
+        assert result.utcoffset().total_seconds() == -5 * 3600
+
+    def test_cross_timezone_comparison(self):
+        """Timestamps with different offsets compare correctly by absolute time."""
+        # 10:00 UTC = 15:00 +05:00 — same instant, different representation
+        utc = _parse_timestamp("2026-06-01T10:00:00+00:00")
+        plus5 = _parse_timestamp("2026-06-01T15:00:00+05:00")
+        assert utc == plus5
+
+        # 11:00 UTC > 10:00 UTC regardless of offset representation
+        later_utc = _parse_timestamp("2026-06-01T11:00:00+00:00")
+        earlier_minus5 = _parse_timestamp("2026-06-01T05:00:00-05:00")  # = 10:00 UTC
+        assert later_utc > earlier_minus5
+        assert max(later_utc, earlier_minus5) == later_utc
+
+    def test_malformed_string_raises(self):
+        with pytest.raises(ValueError):
+            _parse_timestamp("not-a-timestamp")
+
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError):
+            _parse_timestamp("")
+
+    def test_none_raises(self):
+        with pytest.raises(ValueError):
+            _parse_timestamp(None)
+
 
 # ---------------------------------------------------------------------------
 # get_config_name

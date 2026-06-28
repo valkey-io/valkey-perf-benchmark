@@ -23,10 +23,20 @@ from git_utils import git_rev_list_with_timestamps
 
 
 def _parse_timestamp(ts) -> datetime:
-    """Convert a timestamp (string or datetime) to a datetime object for comparison."""
+    """Convert a timestamp (string or datetime) to a timezone-aware datetime.
+
+    Raises ValueError if the result has no timezone info or input is malformed.
+    """
     if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            raise ValueError(f"Naive datetime not allowed (missing timezone): {ts}")
         return ts
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if not isinstance(ts, str) or not ts.strip():
+        raise ValueError(f"Invalid timestamp: {ts!r}")
+    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        raise ValueError(f"Timestamp missing timezone: {ts!r}")
+    return dt
 
 
 @dataclass
@@ -517,7 +527,9 @@ def fetch_next_module_commits(
         max_pairs: Maximum number of pairs to fetch
 
     Returns:
-        List of 'core_sha:module_sha' strings marked as in_progress
+        Tuple of (pairs, max_timestamps) where:
+            pairs: List of 'core_sha:module_sha' strings marked as in_progress
+            max_timestamps: List of max_commit_timestamp ISO strings (same order)
     """
     table = _module_table_name(module_name)
     config_sets_json = Json(config_sets)
@@ -525,7 +537,7 @@ def fetch_next_module_commits(
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, sha, module_sha FROM {table}
+            SELECT id, sha, module_sha, max_commit_timestamp FROM {table}
             WHERE status = 'pending'
               AND config_name = %s AND config_sets = %s AND architecture = %s
             ORDER BY created_at DESC, priority ASC,
@@ -538,10 +550,11 @@ def fetch_next_module_commits(
 
         if not rows:
             print("No pending pairs to fetch", file=sys.stderr)
-            return []
+            return [], []
 
         ids = [row[0] for row in rows]
         pairs = [f"{row[1]}:{row[2]}" for row in rows]
+        max_timestamps = [row[3].isoformat() for row in rows]
 
         # Mark selected pairs as in_progress
         cur.execute(
@@ -558,7 +571,7 @@ def fetch_next_module_commits(
         f"Fetched {len(pairs)} pairs from {table}: {' '.join(pairs)}",
         file=sys.stderr,
     )
-    return pairs
+    return pairs, max_timestamps
 
 
 def mark_module_commits(
@@ -823,7 +836,7 @@ def main():
                 print("Error: architecture could not be determined", file=sys.stderr)
                 sys.exit(1)
 
-            pairs = fetch_next_module_commits(
+            pairs, max_timestamps = fetch_next_module_commits(
                 conn=conn,
                 module_name=args.module_name,
                 config_name=config_name,
@@ -831,8 +844,9 @@ def main():
                 architecture=args.architecture,
                 max_pairs=args.max_pairs,
             )
-            # Output pairs to stdout for workflow to capture
+            # Output pairs and timestamps on separate lines for workflow
             print(" ".join(pairs))
+            print(" ".join(max_timestamps))
 
         elif args.operation == "mark-complete":
             if not args.pairs:

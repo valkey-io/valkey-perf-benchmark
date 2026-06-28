@@ -289,7 +289,7 @@ class TestFetchNextIntegration:
     def test_fetches_pending_pairs(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1"], ["mod1"])
 
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
@@ -315,11 +315,11 @@ class TestFetchNextIntegration:
         self._populate(conn, mock_git, ["core1", "core2"], ["mod1"])
 
         # First fetch takes one pair
-        first = fetch_next_module_commits(
+        first, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
         # Second fetch should return the OTHER pair
-        second = fetch_next_module_commits(
+        second, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
@@ -332,7 +332,7 @@ class TestFetchNextIntegration:
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
@@ -341,7 +341,7 @@ class TestFetchNextIntegration:
     def test_respects_max_pairs(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1", "core2", "core3"], ["mod1"])
 
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=2
         )
 
@@ -399,7 +399,7 @@ class TestFetchNextIntegration:
         )
 
         # Fetch for config-A — should get config-A's pair
-        pairs_a = fetch_next_module_commits(
+        pairs_a, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             "config-A.json",
@@ -534,7 +534,7 @@ class TestMarkModuleCommitsIntegration:
             ARCHITECTURE,
         )
 
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
@@ -636,7 +636,7 @@ class TestCleanupIntegration:
         )
 
         # Should be fetchable again
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=1
         )
 
@@ -816,7 +816,7 @@ class TestFetchOrderIntegration:
         assert pending_rows[2][2] == 2  # fallback
 
         # Fetch all — forward should come first in results
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
 
@@ -854,7 +854,7 @@ class TestFetchOrderIntegration:
         )
 
         # Fetch all — should be ordered by max_commit_timestamp DESC
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
 
@@ -1019,7 +1019,7 @@ class TestFullLifecycleIntegration:
             CONFIG_SETS,
         )
 
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
         assert pairs == ["core1:mod1"]
@@ -1054,7 +1054,7 @@ class TestFullLifecycleIntegration:
             CONFIG_SETS,
         )
 
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, max_pairs=10
         )
 
@@ -1243,7 +1243,7 @@ class TestConcurrentConfigPopulations:
             assert cur.fetchone()[0] == 4
 
         # Fetch for config-A — should get 2 pairs
-        pairs_a = fetch_next_module_commits(
+        pairs_a, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             "config-A.json",
@@ -1320,7 +1320,7 @@ class TestSubsetDetectionIntegration:
             config_sets,
         )
         # Fetch and mark complete
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, config_sets, ARCHITECTURE, max_pairs=10
         )
         mark_module_commits(
@@ -1354,7 +1354,7 @@ class TestSubsetDetectionIntegration:
             CONFIG_NAME,
             superset_a,
         )
-        pairs_a = fetch_next_module_commits(
+        pairs_a, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, superset_a, ARCHITECTURE, max_pairs=10
         )
         mark_module_commits(
@@ -1377,7 +1377,7 @@ class TestSubsetDetectionIntegration:
             CONFIG_NAME,
             superset_b,
         )
-        pairs_b = fetch_next_module_commits(
+        pairs_b, _ = fetch_next_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, superset_b, ARCHITECTURE, max_pairs=10
         )
         mark_module_commits(
@@ -1440,7 +1440,7 @@ class TestSubsetDetectionIntegration:
         )
 
         # Fetch for subset config — should be empty (all completed_as_subset)
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
@@ -1477,7 +1477,7 @@ class TestSubsetDetectionIntegration:
         )
 
         # Should be fetchable (not marked as subset)
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
@@ -1512,7 +1512,7 @@ class TestSubsetDetectionIntegration:
         )
 
         # LARGE should be fetchable (it's a superset, not a subset)
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
@@ -1546,7 +1546,7 @@ class TestSubsetDetectionIntegration:
         )
 
         # Should not be fetchable (all marked as subset since exact match was completed)
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
@@ -1583,7 +1583,7 @@ class TestSubsetDetectionIntegration:
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
         )
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
@@ -1632,7 +1632,7 @@ class TestSubsetDetectionIntegration:
         assert statuses[("core3", "mod1")] == "pending"
 
         # Only core3:mod1 should be fetchable
-        pairs = fetch_next_module_commits(
+        pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
