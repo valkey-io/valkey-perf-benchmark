@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import logging
+import random
 import subprocess
 import sys
 import urllib.request
@@ -12,6 +13,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Constants for query generation
+ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+
 STOP_WORDS = {
     "a",
     "is",
@@ -47,6 +50,35 @@ STOP_WORDS = {
     "will",
     "with",
 }
+
+
+def _generate_random_word(rng: random.Random, min_length: int, max_length: int) -> str:
+    """Generate deterministic random word using local RNG instance."""
+    word_length = rng.randint(min_length, max_length)
+    return "".join(rng.choices(ALPHABET, k=word_length))
+
+
+def _apply_fuzzy_edit(word: str, edit_type: str, rng: random.Random) -> str:
+    """Apply single Levenshtein edit operation using local RNG instance."""
+    if len(word) < 2:
+        return word
+
+    if edit_type == "insert":
+        pos = rng.randint(0, len(word))
+        return word[:pos] + rng.choice(ALPHABET) + word[pos:]
+    elif edit_type == "delete":
+        pos = rng.randint(0, len(word) - 1)
+        return word[:pos] + word[pos + 1 :]
+    elif edit_type == "substitute":
+        # Retry until we get a different character (avoid no-op)
+        pos = rng.randint(0, len(word) - 1)
+        original_char = word[pos]
+        new_char = rng.choice(ALPHABET)
+        while new_char == original_char and len(ALPHABET) > 1:
+            new_char = rng.choice(ALPHABET)
+        return word[:pos] + new_char + word[pos + 1 :]
+
+    return word
 
 
 def download_wikipedia(output_dir: Path) -> Path:
@@ -208,18 +240,51 @@ def apply_transforms(
             # Both patterns: term001_a a_term001 (space-separated in same field)
             content = f"{padded_term_id}_{expansion} {expansion}_{padded_term_id}"
 
+        elif ttype == "fuzzy":
+            # Generate fuzzy match variants: multiple misspellings per term
+            # Same structure as expansion: variant_count × docs_per_variant × term_count
+            variant_count = t.get("variant_count", 5)  # Misspelling variants
+            docs_per_variant = t.get("docs_per_variant", 20)  # Copies per variant
+            term_count = t.get("term_count", 100)  # Base terms
+            min_word_length = t.get("min_word_length", 5)
+            max_word_length = t.get("max_word_length", 6)
+            target_distance = t.get("target_distance", 1)  # Edit distance for variants
+
+            # Calculate position in dataset structure
+            docs_per_term = variant_count * docs_per_variant
+            term_id = ((doc_num - 1) // docs_per_term) + 1
+            within_term = (doc_num - 1) % docs_per_term
+            variant_id = within_term // docs_per_variant
+
+            # Generate base word using isolated RNG
+            term_rng = random.Random(term_id)
+            base_word = _generate_random_word(
+                term_rng, min_word_length, max_word_length
+            )
+
+            # Generate variant (misspelling)
+            if variant_id == 0:
+                variant = base_word  # First variant is correct spelling
+            else:
+                # Use tuple hash for collision-free seed
+                variant_rng = random.Random(hash((term_id, variant_id)))
+                variant = base_word
+                # Apply target_distance edits
+                for _ in range(target_distance):
+                    edit_type = variant_rng.choice(["insert", "delete", "substitute"])
+                    variant = _apply_fuzzy_edit(variant, edit_type, variant_rng)
+
+            # Store just the variant (no term prefix)
+            content = variant
+
         elif ttype == "numeric_range":
             # Generate random numeric values in range
-            import random
-
             min_val = t.get("min", 0)
             max_val = t.get("max", 100)
             content = str(random.uniform(min_val, max_val))
 
         elif ttype == "tag_list":
             # Generate tag combinations
-            import random
-
             tags = t.get("tags", ["tag1", "tag2", "tag3"])
             # Select 1-2 random tags and join with pipe
             num_tags = random.randint(1, min(2, len(tags)))
@@ -456,6 +521,18 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
             writer.writerow(["term"])
             for term_id in range(1, num_queries + 1):
                 writer.writerow([f"term{term_id:03d}"])
+
+        elif query_type == "fuzzy":
+            # Generate fuzzy query terms (base words without misspellings)
+            min_length = config.get("min_word_length", 5)
+            max_length = config.get("max_word_length", 6)
+
+            writer.writerow(["term"])
+            for term_id in range(1, num_queries + 1):
+                # Use isolated RNG for reproducibility
+                term_rng = random.Random(term_id)
+                base_word = _generate_random_word(term_rng, min_length, max_length)
+                writer.writerow([base_word])
 
     logging.info(f"Complete: {filename} ({num_queries} queries)")
     return output
