@@ -21,6 +21,8 @@ from datetime import datetime
 
 from git_utils import git_rev_list_with_timestamps
 
+SKIP_CONFIG_SETS_SENTINEL = [{"config": "default"}]
+
 
 def _parse_timestamp(ts) -> datetime:
     """Convert a timestamp (string or datetime) to a timezone-aware datetime.
@@ -809,6 +811,12 @@ def main():
         default=None,
         help="Cluster mode (true/false). Overwrites cluster_mode from config file.",
     )
+    parser.add_argument(
+        "--skip-config-set",
+        action="store_true",
+        help="Skip config_sets from config file and use [{'default': true}] instead. "
+        "Use when benchmarking with server defaults (no CONFIG SET commands).",
+    )
 
     args, remaining_args = parser.parse_known_args()
 
@@ -835,7 +843,11 @@ def main():
             cfg_data = cfg_data[0]
         config_sets = cfg_data.get("config_sets")
         raw_cluster_mode = cfg_data.get("cluster_mode")
-    if not config_sets:
+
+    # --skip-config-set overrides config_sets with a sentinel value
+    if args.skip_config_set:
+        config_sets = SKIP_CONFIG_SETS_SENTINEL
+    elif not config_sets:
         print("Error: config_sets not found in config file", file=sys.stderr)
         sys.exit(1)
 
