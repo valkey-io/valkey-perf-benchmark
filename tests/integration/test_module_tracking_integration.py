@@ -2194,3 +2194,184 @@ class TestAssignPriorityInMemory:
         )
 
         assert pair.priority == 99
+
+
+# ---------------------------------------------------------------------------
+# Retroactive subset marking (mark-complete triggers subset cleanup)
+# ---------------------------------------------------------------------------
+
+
+class TestRetroactiveSubsetDetection:
+    """Verify that completing a superset retroactively marks pending subset rows."""
+
+    def test_retroactive_subset_marking_full_scenario(self, conn, mock_git):
+        """Comprehensive test covering all retroactive subset behaviors in one flow.
+        Verify:
+             - 2 pending subset rows → completed_as_subset (priority 99)
+             - 1 in_progress subset row → unchanged (still in_progress)
+             - 3 non-subset rows → unchanged (still pending)
+             - fetch-next for subset returns nothing (no pending left)
+        """
+        subset_config = CONFIG_SETS_SMALL
+        superset_config = CONFIG_SETS_LARGE
+        non_subset_config = [{"io-threads": 4, "search.reader-threads": 4}]
+        subset_cluster = [True]
+        superset_cluster = [True, False]
+
+        commits = {
+            "core1": "2026-06-01T10:00:00+00:00",
+            "core2": "2026-06-02T10:00:00+00:00",
+            "core3": "2026-06-03T10:00:00+00:00",
+        }
+        mods = {"mod1": "2026-06-01T10:00:00+00:00"}
+
+        table = _module_table_name(MODULE_NAME)
+
+        # --- Step 1: Populate subset config with subset cluster_mode ---
+        mock_git.side_effect = [commits.copy(), mods.copy()]
+        populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            subset_config,
+            subset_cluster,
+        )
+
+        # Verify all 3 subset rows are pending
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {table} "
+                f"WHERE config_sets = %s AND cluster_mode = %s AND status = 'pending'",
+                (Json(subset_config), Json(subset_cluster)),
+            )
+            assert cur.fetchone()[0] == 3
+
+        # --- Step 2: Populate non-subset config (should be unaffected later) ---
+        mock_git.side_effect = [commits.copy(), mods.copy()]
+        populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            non_subset_config,
+            subset_cluster,
+        )
+
+        # --- Step 3: Fetch 1 subset pair → in_progress ---
+        fetch_next_module_commits(
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            subset_config,
+            ARCHITECTURE,
+            subset_cluster,
+            max_pairs=1,
+        )
+
+        # Now: 1 in_progress + 2 pending for subset config
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {table} "
+                f"WHERE config_sets = %s AND cluster_mode = %s AND status = 'in_progress'",
+                (Json(subset_config), Json(subset_cluster)),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                f"SELECT COUNT(*) FROM {table} "
+                f"WHERE config_sets = %s AND cluster_mode = %s AND status = 'pending'",
+                (Json(subset_config), Json(subset_cluster)),
+            )
+            assert cur.fetchone()[0] == 2
+
+        # --- Step 4: Populate and complete superset for all 3 pairs ---
+        mock_git.side_effect = [commits.copy(), mods.copy()]
+        populate_module_commits(
+            conn,
+            Path("/fake"),
+            "unstable",
+            Path("/fake-mod"),
+            "main",
+            ARCHITECTURE,
+            MODULE_NAME,
+            CONFIG_NAME,
+            superset_config,
+            superset_cluster,
+        )
+        pairs, _ = fetch_next_module_commits(
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            superset_config,
+            ARCHITECTURE,
+            superset_cluster,
+            max_pairs=10,
+        )
+        assert len(pairs) == 3
+
+        mark_module_commits(
+            conn,
+            MODULE_NAME,
+            pairs,
+            CONFIG_NAME,
+            superset_config,
+            ARCHITECTURE,
+            superset_cluster,
+        )
+
+        # --- Step 5: Verify all behaviors ---
+
+        # 5a: 2 pending subset rows → completed_as_subset with priority 99
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT sha, status, priority FROM {table} "
+                f"WHERE config_sets = %s AND cluster_mode = %s AND status = 'completed_as_subset' "
+                f"ORDER BY sha",
+                (Json(subset_config), Json(subset_cluster)),
+            )
+            subset_completed = cur.fetchall()
+        assert len(subset_completed) == 2
+        for _, status, priority in subset_completed:
+            assert status == "completed_as_subset"
+            assert priority == 99
+
+        # 5b: 1 in_progress subset row → unchanged (still has original priority=1)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT priority FROM {table} "
+                f"WHERE config_sets = %s AND cluster_mode = %s AND status = 'in_progress'",
+                (Json(subset_config), Json(subset_cluster)),
+            )
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] == 1
+
+        # 5c: Non-subset config rows → all still pending
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT status FROM {table} WHERE config_sets = %s",
+                (Json(non_subset_config),),
+            )
+            non_subset_statuses = [row[0] for row in cur.fetchall()]
+        assert len(non_subset_statuses) == 3
+        assert all(s == "pending" for s in non_subset_statuses)
+
+        # 5d: fetch-next for subset returns nothing (no pending rows left)
+        pairs, _ = fetch_next_module_commits(
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            subset_config,
+            ARCHITECTURE,
+            subset_cluster,
+            max_pairs=10,
+        )
+        assert pairs == []

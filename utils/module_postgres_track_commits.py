@@ -626,6 +626,99 @@ def fetch_next_module_commits(
     return pairs, max_timestamps
 
 
+def _retroactively_mark_subsets(
+    conn,
+    table: str,
+    pairs: List[str],
+    config_name: str,
+    config_sets: List[dict],
+    architecture: str,
+    cluster_mode: List[bool],
+) -> int:
+    """Retroactively mark pending subset rows as completed_as_subset.
+
+    When a superset config completes a (sha, module_sha) pair, any pending rows
+    for the same pair with a subset config_sets AND subset cluster_mode can be
+    skipped. This prevents redundant benchmark runs when the superset already
+    covers the subset's work.
+
+    Called after marking pairs as completed. For each just-completed pair,
+    finds pending rows in the same table where:
+      - Same (sha, module_sha, config_name, architecture)
+      - config_sets is a subset of the just-completed config_sets
+      - cluster_mode is a subset of the just-completed cluster_mode
+
+    Args:
+        conn: PostgreSQL connection
+        table: Table name
+        pairs: List of 'core_sha:module_sha' strings just marked completed
+        config_name: Config file name of the completed config
+        config_sets: config_sets of the completed config (the superset)
+        architecture: Architecture
+        cluster_mode: cluster_mode of the completed config (the superset)
+
+    Returns:
+        Number of rows retroactively marked as completed_as_subset
+    """
+    if not pairs:
+        return 0
+
+    # Build list of (core_sha, module_sha) tuples
+    sha_pairs = []
+    for pair in pairs:
+        core_sha, module_sha = pair.split(":")
+        sha_pairs.append((core_sha, module_sha))
+
+    # Find all pending rows for these (sha, module_sha) combos with other config_sets/cluster_mode
+    # that might be subsets of what we just completed
+    total_marked = 0
+
+    with conn.cursor() as cur:
+        for core_sha, module_sha in sha_pairs:
+            cur.execute(
+                f"""
+                SELECT id, config_sets, cluster_mode FROM {table}
+                WHERE sha = %s AND module_sha = %s
+                  AND config_name = %s AND architecture = %s
+                  AND status = 'pending'
+            """,
+                (core_sha, module_sha, config_name, architecture),
+            )
+            candidate_rows = cur.fetchall()
+
+            if not candidate_rows:
+                continue
+
+            # Filter to rows whose config_sets AND cluster_mode are subsets of ours
+            ids_to_mark = []
+            for row_id, row_config_sets, row_cluster_mode in candidate_rows:
+                if _is_config_sets_subset(
+                    row_config_sets, config_sets
+                ) and _is_config_sets_subset(row_cluster_mode, cluster_mode):
+                    ids_to_mark.append(row_id)
+
+            if ids_to_mark:
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                    SET status = 'completed_as_subset', priority = 99, updated_at = NOW()
+                    WHERE id = ANY(%s)
+                """,
+                    (ids_to_mark,),
+                )
+                total_marked += cur.rowcount
+
+    if total_marked > 0:
+        conn.commit()
+        print(
+            f"Retroactive subset: marked {total_marked} pending subset rows as "
+            f"completed_as_subset in {table}",
+            file=sys.stderr,
+        )
+
+    return total_marked
+
+
 def mark_module_commits(
     conn,
     module_name: str,
@@ -640,6 +733,10 @@ def mark_module_commits(
     Updates status from 'in_progress' to 'completed' for the given pairs.
     Only matches rows with the same config_name, config_sets, architecture,
     and cluster_mode.
+
+    After marking complete, retroactively marks any pending subset rows
+    (same sha/module_sha but with subset config_sets/cluster_mode) as
+    completed_as_subset to avoid redundant benchmark runs.
 
     Args:
         conn: PostgreSQL connection
@@ -696,6 +793,13 @@ def mark_module_commits(
         f"mark_module_commits: {updated} pairs marked complete in {table}",
         file=sys.stderr,
     )
+
+    # Retroactively mark pending subset rows as completed_as_subset
+    if updated > 0:
+        _retroactively_mark_subsets(
+            conn, table, pairs, config_name, config_sets, architecture, cluster_mode
+        )
+
     return updated
 
 
