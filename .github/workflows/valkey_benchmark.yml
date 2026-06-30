@@ -246,6 +246,106 @@ jobs:
             --config-file "$CONFIG_FILE" \
             $COMMIT_IDS
 
+      - name: Detect performance regression
+        id: detect_regression
+        working-directory: valkey-perf-benchmark
+        env:
+          REGRESSION_THRESHOLD: ${{ vars.REGRESSION_THRESHOLD_PCT || '5' }}
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          set +e
+          report=$(python -m utils.detect_regression \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
+            --table-name "benchmark_metrics" \
+            --threshold "$REGRESSION_THRESHOLD")
+          exit_code=$?
+          set -e
+          if [ -z "$report" ]; then
+            echo "has_regression=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Regression detection produced no output (exit code $exit_code)"
+            exit 0
+          fi
+          report=$(echo "$report" | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)))")
+          echo "report=$report" >> "$GITHUB_OUTPUT"
+          echo "has_regression=$(echo "$report" | python -c "import sys,json; print(str(json.load(sys.stdin)['has_regression']).lower())")" >> "$GITHUB_OUTPUT"
+          echo "new_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['new_commit'][:8])")" >> "$GITHUB_OUTPUT"
+          echo "baseline_commit=$(echo "$report" | python -c "import sys,json; print(json.load(sys.stdin)['baseline_commit'][:8])")" >> "$GITHUB_OUTPUT"
+
+      - name: Generate bot token
+        id: bot-token
+        if: steps.detect_regression.outputs.has_regression == 'true' && github.repository_owner == 'valkey-io'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
+          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
+          owner: valkey-io
+          repositories: valkey
+
+      - name: Open GitHub issue for regression
+        if: steps.detect_regression.outputs.has_regression == 'true' && github.repository_owner == 'valkey-io'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ steps.bot-token.outputs.token }}
+          script: |
+            const report = JSON.parse(process.env.REPORT);
+            const newCommitShort = report.new_commit.slice(0, 8);
+            const baselineCommitShort = report.baseline_commit.slice(0, 8);
+            const title = `[PERF-REGRESSION] ${newCommitShort} vs ${baselineCommitShort}`;
+            const label = 'performance-regression';
+            const targetOwner = 'valkey-io';
+            const targetRepo = 'valkey';
+
+            // Check for duplicate issues with the same title
+            const existingIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: targetOwner,
+                repo: targetRepo,
+                labels: label,
+                state: 'open',
+              },
+              (response) => response.data
+            );
+            const duplicate = existingIssues.find(i => i.title === title);
+            if (duplicate) {
+              core.info(`Issue already exists: #${duplicate.number} — skipping.`);
+              return;
+            }
+
+            const lines = report.regressions.map(r => `- ${r.change} ${r.test}`);
+            const body = [
+              `## Performance Regression Detected`,
+              ``,
+              `**New commit:** [\`${report.new_commit}\`](https://github.com/valkey-io/valkey/commit/${report.new_commit})`,
+              `**Baseline commit:** [\`${report.baseline_commit}\`](https://github.com/valkey-io/valkey/commit/${report.baseline_commit})`,
+              `**Threshold:** ${report.threshold_pct}%`,
+              ``,
+              `### Regressions`,
+              ...lines,
+              ``,
+              `[View on Grafana Dashboard](https://perf-dashboard.valkey.io/public-dashboards/3e45bf8ded3043edaa941331cd1a94e2?from=now-7d&to=now&timezone=UTC)`,
+              ``,
+              `---`,
+              `_Detected automatically by the [continuous benchmark workflow](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})._`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: targetOwner,
+              repo: targetRepo,
+              title,
+              body,
+              labels: [label],
+            });
+        env:
+          REPORT: ${{ steps.detect_regression.outputs.report }}
+
       - name: Cleanup any running valkey processes and files
         if: always()
         continue-on-error: true

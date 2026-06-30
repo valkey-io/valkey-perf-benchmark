@@ -39,11 +39,15 @@ adminPassword: "ChangeThisPassword123!"
 envFromSecret: grafana-postgres-secret
 
 env:
-  GF_SERVER_ROOT_URL: "https://your-cloudfront-domain.cloudfront.net" # Update with your CloudFront domain
+  GF_SERVER_ROOT_URL: "https://perf-dashboard.valkey.io"
   GF_SERVER_SERVE_FROM_SUB_PATH: "false"
 
-  # Enable shared/public dashboards
-  GF_FEATURE_TOGGLES_ENABLE: "publicDashboards"
+  # Enable shared/public dashboards + unified-storage dashboards API.
+  # kubernetesDashboards makes the app-platform dashboard API the source of
+  # truth so dashboards-as-code (gcx) can CREATE new dashboards, not just
+  # update existing ones. NOTE: enabling this migrates dashboards/folders to
+  # unified storage on next startup (auto-migration applies below ~10 items).
+  GF_FEATURE_TOGGLES_ENABLE: "publicDashboards kubernetesDashboards"
   GF_DASHBOARDS_PUBLIC_ENABLED: "true"
 
   # Security settings
@@ -57,7 +61,7 @@ env:
 # Grafana.ini configuration
 grafana.ini:
   server:
-    root_url: "https://your-cloudfront-domain.cloudfront.net" # Update with your CloudFront domain
+    root_url: "https://perf-dashboard.valkey.io"
     enable_gzip: true
 
   database:
@@ -68,7 +72,8 @@ grafana.ini:
     ssl_mode: require
     max_idle_conn: 2
     max_open_conn: 10
-    conn_max_lifetime: 14400
+    conn_max_lifetime: 300        # 5 minutes — match datasource connMaxLifetime;
+                                  # shorter than 350s NAT/ALB idle timeout to avoid stale backend conns
 
   remote_cache:
     type: database
@@ -96,7 +101,7 @@ grafana.ini:
     min_refresh_interval: 5s
 
   feature_toggles:
-    enable: publicDashboards
+    enable: publicDashboards kubernetesDashboards
 
 # Plugins to install
 plugins:
@@ -110,17 +115,19 @@ datasources:
     apiVersion: 1
     datasources:
       - name: PostgreSQL-Valkey-Metrics
+        uid: PDA4518EDFA6642B8   # pin existing uid so it survives datasource recreation (no live change)
         type: postgres
         url: <RDS_ENDPOINT> # Will be replaced by deploy script
-        database: postgres
         user: $__env{GF_DATABASE_USER}
         secureJsonData:
           password: $__env{GF_DATABASE_PASSWORD}
         jsonData:
+          database: postgres          # Grafana v12+ ignores top-level `database`; must be in jsonData
           sslmode: require
           maxOpenConns: 10
           maxIdleConns: 2
-          connMaxLifetime: 14400
+          connMaxLifetime: 300        # 5 minutes — shorter than 350s NAT/ALB idle timeout
+                                      # Prevents stale connections in the pool ("Data not available" symptom)
         editable: true
         isDefault: true
 
