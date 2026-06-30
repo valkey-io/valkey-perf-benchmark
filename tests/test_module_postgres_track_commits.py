@@ -190,8 +190,7 @@ class TestIsConfigSetsSubset:
 
 
 class TestClusterModeSubset:
-    """Test subset detection for cluster_mode boolean lists.
-    """
+    """Test subset detection for cluster_mode boolean lists."""
 
     def test_false_is_subset_of_false_true(self):
         assert _is_config_sets_subset([False], [False, True]) is True
@@ -207,6 +206,7 @@ class TestClusterModeSubset:
 
     def test_identical_single_false(self):
         assert _is_config_sets_subset([False], [False]) is True
+
 
 # ---------------------------------------------------------------------------
 # CommitPair dataclass
@@ -283,7 +283,6 @@ class TestCommitPair:
         assert t[11].adapted == [False, True]
 
 
-
 # ---------------------------------------------------------------------------
 # resolve_cluster_modes
 # ---------------------------------------------------------------------------
@@ -315,5 +314,3 @@ class TestResolveClusterModes:
 
     def test_cli_true_when_config_is_none(self):
         assert resolve_cluster_modes(None, "true") == [True]
-
-

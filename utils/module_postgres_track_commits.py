@@ -104,7 +104,9 @@ class CommitPair:
         )
 
 
-def resolve_cluster_modes(raw_cluster_mode, cli_cluster_mode: Optional[str] = None) -> Optional[List[bool]]:
+def resolve_cluster_modes(
+    raw_cluster_mode, cli_cluster_mode: Optional[str] = None
+) -> Optional[List[bool]]:
     """Resolve cluster_modes from config file value and optional CLI override.
 
     Args:
@@ -667,7 +669,14 @@ def mark_module_commits(
                   AND config_name = %s AND config_sets = %s AND architecture = %s
                   AND cluster_mode = %s
             """,
-                (core_sha, module_sha, config_name, config_sets_json, architecture, cluster_mode_json),
+                (
+                    core_sha,
+                    module_sha,
+                    config_name,
+                    config_sets_json,
+                    architecture,
+                    cluster_mode_json,
+                ),
             )
             if cur.rowcount == 0:
                 print(
@@ -691,7 +700,11 @@ def mark_module_commits(
 
 
 def cleanup_module_commits(
-    conn, module_name: str, config_name: str, config_sets: List[dict], architecture: str,
+    conn,
+    module_name: str,
+    config_name: str,
+    config_sets: List[dict],
+    architecture: str,
     cluster_mode: List[bool],
 ) -> int:
     """Reset 'in_progress' entries back to 'pending' for a specific config+config_sets+arch+cluster_mode.
@@ -855,7 +868,10 @@ def main():
     cluster_modes = resolve_cluster_modes(raw_cluster_mode, args.cluster_mode)
 
     if not cluster_modes:
-        print("Error: cluster_mode not found in config file and --cluster-mode not provided", file=sys.stderr)
+        print(
+            "Error: cluster_mode not found in config file and --cluster-mode not provided",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Connect to PostgreSQL

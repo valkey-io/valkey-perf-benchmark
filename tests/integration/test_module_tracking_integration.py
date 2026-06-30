@@ -295,7 +295,13 @@ class TestFetchNextIntegration:
         self._populate(conn, mock_git, ["core1"], ["mod1"])
 
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         assert pairs == ["core1:mod1"]
@@ -303,7 +309,13 @@ class TestFetchNextIntegration:
     def test_marks_fetched_as_in_progress(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1"], ["mod1"])
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         table = _module_table_name(MODULE_NAME)
@@ -321,11 +333,23 @@ class TestFetchNextIntegration:
 
         # First fetch takes one pair
         first, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
         # Second fetch should return the OTHER pair
         second, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         assert len(second) == 1
@@ -334,11 +358,23 @@ class TestFetchNextIntegration:
     def test_returns_empty_when_all_in_progress(self, conn, mock_git):
         self._populate(conn, mock_git, ["core1"], ["mod1"])
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         assert pairs == []
@@ -347,7 +383,13 @@ class TestFetchNextIntegration:
         self._populate(conn, mock_git, ["core1", "core2", "core3"], ["mod1"])
 
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=2
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=2,
         )
 
         assert len(pairs) == 2
@@ -411,7 +453,8 @@ class TestFetchNextIntegration:
             MODULE_NAME,
             "config-A.json",
             CONFIG_SETS,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=1,
         )
         assert pairs_a == ["core1:mod1"]
@@ -464,7 +507,13 @@ class TestMarkModuleCommitsIntegration:
             CLUSTER_MODE,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
     def test_marks_complete(self, conn, mock_git):
@@ -477,7 +526,7 @@ class TestMarkModuleCommitsIntegration:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         assert result == 1
@@ -503,7 +552,7 @@ class TestMarkModuleCommitsIntegration:
             "wrong-config.json",
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         assert result == 0
@@ -520,7 +569,13 @@ class TestMarkModuleCommitsIntegration:
         self._setup_in_progress(conn, mock_git)
 
         result = mark_module_commits(
-            conn, MODULE_NAME, ["core1:mod1"], CONFIG_NAME, CONFIG_SETS, "x86_64", CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            ["core1:mod1"],
+            CONFIG_NAME,
+            CONFIG_SETS,
+            "x86_64",
+            CLUSTER_MODE,
         )
 
         assert result == 0
@@ -542,11 +597,17 @@ class TestMarkModuleCommitsIntegration:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         assert pairs == []
@@ -578,7 +639,13 @@ class TestCleanupIntegration:
             CLUSTER_MODE,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         result = cleanup_module_commits(
@@ -610,12 +677,23 @@ class TestCleanupIntegration:
             CLUSTER_MODE,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         # Cleanup with DIFFERENT config — should not affect our row
         result = cleanup_module_commits(
-            conn, MODULE_NAME, "other-config.json", CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            "other-config.json",
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
         )
 
         assert result == 0
@@ -643,7 +721,13 @@ class TestCleanupIntegration:
             CLUSTER_MODE,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
         cleanup_module_commits(
             conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE
@@ -651,7 +735,13 @@ class TestCleanupIntegration:
 
         # Should be fetchable again
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
 
         assert pairs == ["core1:mod1"]
@@ -695,7 +785,13 @@ class TestPriorityIntegration:
 
         # Mark as complete — pointer is now at 2026-01-01
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
         mark_module_commits(
             conn,
@@ -704,7 +800,7 @@ class TestPriorityIntegration:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Populate new SHAs with mixed timestamps
@@ -782,7 +878,13 @@ class TestFetchOrderIntegration:
             CLUSTER_MODE,
         )
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=1
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=1,
         )
         mark_module_commits(
             conn,
@@ -791,7 +893,7 @@ class TestFetchOrderIntegration:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Now populate with mixed timestamps
@@ -837,7 +939,13 @@ class TestFetchOrderIntegration:
 
         # Fetch all — forward should come first in results
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
 
         assert len(pairs) == 3
@@ -876,7 +984,13 @@ class TestFetchOrderIntegration:
 
         # Fetch all — should be ordered by max_commit_timestamp DESC
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
 
         assert len(pairs) == 3
@@ -917,7 +1031,13 @@ class TestMultipleMarksIntegration:
 
         # Fetch all 3
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=3
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=3,
         )
 
         # Mark all 3 complete
@@ -928,7 +1048,7 @@ class TestMultipleMarksIntegration:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         assert result == 3
@@ -979,7 +1099,13 @@ class TestCleanupDoesNotAffectComplete:
 
         # Fetch both
         fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=2
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=2,
         )
 
         # Mark only core1:mod1 as complete, leave core2:mod1 as in_progress
@@ -990,7 +1116,7 @@ class TestCleanupDoesNotAffectComplete:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Run cleanup
@@ -1046,7 +1172,13 @@ class TestFullLifecycleIntegration:
         )
 
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
         assert pairs == ["core1:mod1"]
 
@@ -1057,7 +1189,7 @@ class TestFullLifecycleIntegration:
             CONFIG_NAME,
             CONFIG_SETS,
             ARCHITECTURE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # === Run 2 (new commits on both repos) ===
@@ -1083,7 +1215,13 @@ class TestFullLifecycleIntegration:
         )
 
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
 
         # Should get 3 new pairs (core1:mod1 already complete, not returned)
@@ -1282,7 +1420,8 @@ class TestConcurrentConfigPopulations:
             MODULE_NAME,
             "config-A.json",
             CONFIG_SETS,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         assert len(pairs_a) == 2
@@ -1297,7 +1436,13 @@ class TestConcurrentConfigPopulations:
 
         # Mark config-A pairs complete
         mark_module_commits(
-            conn, MODULE_NAME, pairs_a, "config-A.json", CONFIG_SETS, ARCHITECTURE, CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            pairs_a,
+            "config-A.json",
+            CONFIG_SETS,
+            ARCHITECTURE,
+            CLUSTER_MODE,
         )
 
         # Config-B should still be untouched (all pending)
@@ -1352,14 +1497,26 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             config_sets,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
         # Fetch and mark complete
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, config_sets, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            config_sets,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs, CONFIG_NAME, config_sets, ARCHITECTURE, CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            pairs,
+            CONFIG_NAME,
+            config_sets,
+            ARCHITECTURE,
+            CLUSTER_MODE,
         )
 
     def test_subset_marked_completed_as_subset(self, conn, mock_git):
@@ -1388,13 +1545,25 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             superset_a,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
         pairs_a, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, superset_a, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            superset_a,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs_a, CONFIG_NAME, superset_a, ARCHITECTURE, CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            pairs_a,
+            CONFIG_NAME,
+            superset_a,
+            ARCHITECTURE,
+            CLUSTER_MODE,
         )
 
         # Step 2: Complete superset B for core2:mod1
@@ -1412,13 +1581,25 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             superset_b,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
         pairs_b, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, superset_b, ARCHITECTURE, CLUSTER_MODE, max_pairs=10
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            superset_b,
+            ARCHITECTURE,
+            CLUSTER_MODE,
+            max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs_b, CONFIG_NAME, superset_b, ARCHITECTURE, CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            pairs_b,
+            CONFIG_NAME,
+            superset_b,
+            ARCHITECTURE,
+            CLUSTER_MODE,
         )
 
         # Step 3: Populate subset — both pairs should be completed_as_subset
@@ -1439,7 +1620,7 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Step 4: Verify both subset rows were marked
@@ -1475,7 +1656,7 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Fetch for subset config — should be empty (all completed_as_subset)
@@ -1484,7 +1665,8 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         assert pairs == []
@@ -1513,7 +1695,7 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             different_config,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Should be fetchable (not marked as subset)
@@ -1522,7 +1704,8 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             different_config,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         assert len(pairs) == 2
@@ -1549,7 +1732,7 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # LARGE should be fetchable (it's a superset, not a subset)
@@ -1558,7 +1741,8 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         assert len(pairs) == 2
@@ -1584,7 +1768,7 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Should not be fetchable (all marked as subset since exact match was completed)
@@ -1593,7 +1777,8 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         assert pairs == []
@@ -1624,18 +1809,25 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
         pairs, _ = fetch_next_module_commits(
             conn,
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_LARGE,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs, CONFIG_NAME, CONFIG_SETS_LARGE, ARCHITECTURE, CLUSTER_MODE
+            conn,
+            MODULE_NAME,
+            pairs,
+            CONFIG_NAME,
+            CONFIG_SETS_LARGE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
         )
 
         # Step 2: Populate subset with core1, core2, core3 (core3 is new)
@@ -1657,7 +1849,7 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-        CLUSTER_MODE,
+            CLUSTER_MODE,
         )
 
         # Step 3: Verify statuses
@@ -1681,7 +1873,8 @@ class TestSubsetDetectionIntegration:
             MODULE_NAME,
             CONFIG_NAME,
             CONFIG_SETS_SMALL,
-            ARCHITECTURE, CLUSTER_MODE,
+            ARCHITECTURE,
+            CLUSTER_MODE,
             max_pairs=10,
         )
         assert pairs == ["core3:mod1"]
@@ -1709,11 +1902,21 @@ class TestSubsetDetectionIntegration:
             superset_cluster_mode,
         )
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE,
-            superset_cluster_mode, max_pairs=10,
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            superset_cluster_mode,
+            max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE,
+            conn,
+            MODULE_NAME,
+            pairs,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
             superset_cluster_mode,
         )
 
@@ -1748,8 +1951,13 @@ class TestSubsetDetectionIntegration:
 
         # Should not be fetchable
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE,
-            subset_cluster_mode, max_pairs=10,
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            subset_cluster_mode,
+            max_pairs=10,
         )
         assert pairs == []
 
@@ -1776,11 +1984,21 @@ class TestSubsetDetectionIntegration:
             small_cluster_mode,
         )
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE,
-            small_cluster_mode, max_pairs=10,
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            small_cluster_mode,
+            max_pairs=10,
         )
         mark_module_commits(
-            conn, MODULE_NAME, pairs, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE,
+            conn,
+            MODULE_NAME,
+            pairs,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
             small_cluster_mode,
         )
 
@@ -1804,8 +2022,13 @@ class TestSubsetDetectionIntegration:
 
         # Step 3: The superset should still be pending (fetchable)
         pairs, _ = fetch_next_module_commits(
-            conn, MODULE_NAME, CONFIG_NAME, CONFIG_SETS, ARCHITECTURE,
-            large_cluster_mode, max_pairs=10,
+            conn,
+            MODULE_NAME,
+            CONFIG_NAME,
+            CONFIG_SETS,
+            ARCHITECTURE,
+            large_cluster_mode,
+            max_pairs=10,
         )
         assert len(pairs) == 1
 
@@ -1971,5 +2194,3 @@ class TestAssignPriorityInMemory:
         )
 
         assert pair.priority == 99
-
-
