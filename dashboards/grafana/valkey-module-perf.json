@@ -26,7 +26,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT DISTINCT timestamp AS time, 'core: ' || LEFT(commit, 7) || ' | module: ' || COALESCE(LEFT(module_commit, 7), 'N/A') AS text FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT DISTINCT timestamp AS time, 'core: ' || LEFT(commit, 7) || ' | module: ' || COALESCE(LEFT(module_commit, 7), 'N/A') AS text FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "Anno"
         }
       }
@@ -119,7 +119,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(rps) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
           "refId": "A"
         },
         {
@@ -130,7 +130,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "B"
         }
       ],
@@ -227,7 +227,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, AVG(p99_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(p99_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
           "refId": "A"
         },
         {
@@ -238,7 +238,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "B"
         }
       ],
@@ -335,7 +335,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, AVG(p95_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(p95_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
           "refId": "A"
         },
         {
@@ -346,7 +346,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "B"
         }
       ],
@@ -443,7 +443,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, AVG(p50_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(p50_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
           "refId": "A"
         },
         {
@@ -454,7 +454,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "B"
         }
       ],
@@ -551,7 +551,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, AVG(min_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(min_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
           "refId": "A"
         },
         {
@@ -562,7 +562,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "B"
         }
       ],
@@ -659,7 +659,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, AVG(max_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, AVG(max_latency_ms) AS value, scenario || ' (' || test_phase || ', cluster=' || COALESCE(cluster_mode::text, 'N/A') || ')' AS metric FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) GROUP BY timestamp, scenario, test_phase, cluster_mode ORDER BY timestamp",
           "refId": "A"
         },
         {
@@ -670,7 +670,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) ORDER BY timestamp",
+          "rawSql": "SELECT timestamp AS time, commit AS commit_hash, module_commit AS module_commit_hash FROM ${table_name} WHERE $__timeFilter(timestamp) AND config_name = '$config_name' AND architecture = '$architecture' AND group_description = '$group_description' AND config_set::text = '${config_set}' AND scenario IN (${scenario:sqlstring}) AND cluster_mode::text IN (${cluster_mode:sqlstring}) ORDER BY timestamp",
           "refId": "B"
         }
       ],
