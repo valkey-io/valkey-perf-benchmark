@@ -85,6 +85,7 @@ class ClientRunner:
         architecture: Optional[str] = None,
         uses_test_groups: bool = False,
         repository: Optional[str] = None,
+        config_name: Optional[str] = None,
     ) -> None:
         self.commit_id = commit_id
         self.config = config
@@ -102,6 +103,7 @@ class ClientRunner:
         self.architecture = architecture
         self.uses_test_groups = uses_test_groups
         self.repository = repository
+        self.config_name = config_name
         self.current_profiling_set = {"enabled": False}
         self.current_config_set = {}
         self.config_suffix = "default"
@@ -956,6 +958,8 @@ class ClientRunner:
                     if scenario.get("description"):
                         metrics["scenario_description"] = scenario["description"]
                     metrics["config_set"] = config_set
+                    if self.config_name:
+                        metrics["config_name"] = self.config_name
                     if scenario.get("dataset"):
                         metrics["dataset"] = scenario["dataset"]
                     return metrics

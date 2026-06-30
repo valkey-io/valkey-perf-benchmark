@@ -12,6 +12,8 @@ from typing import List, Dict, Optional
 import psycopg2
 from psycopg2.extras import Json
 
+from git_utils import git_rev_list, git_commit_time
+
 
 def create_tables(conn):
     """Create benchmark tracking tables if they don't exist."""
@@ -44,30 +46,6 @@ def create_tables(conn):
     print("Created/verified benchmark_commits table", file=sys.stderr)
 
 
-def _git_rev_list(repo: Path, branch: str) -> List[str]:
-    """Get list of commit SHAs from git."""
-    proc = subprocess.run(
-        ["git", "rev-list", branch],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return proc.stdout.strip().splitlines()
-
-
-def _git_commit_time(repo: Path, sha: str) -> str:
-    """Get commit timestamp."""
-    proc = subprocess.run(
-        ["git", "show", "-s", "--format=%cI", sha],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return proc.stdout.strip()
-
-
 def mark_commits(
     conn,
     repo: Path,
@@ -97,7 +75,7 @@ def mark_commits(
                     ["git", "rev-parse", "HEAD"], cwd=repo, text=True
                 ).strip()
 
-            ts = _git_commit_time(repo, sha)
+            ts = git_commit_time(repo, sha)
 
             # Insert or update
             cur.execute(
@@ -296,7 +274,7 @@ def determine_commits_to_benchmark(
     cleanup_incomplete_commits(conn)
 
     # Get all commits from git
-    all_shas = _git_rev_list(repo, branch)
+    all_shas = git_rev_list(repo, branch)
 
     # Get completed commits for exact config match
     with conn.cursor() as cur:

@@ -3,7 +3,58 @@
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+
+
+def git_rev_list(repo: Path, branch: str, max_count: Optional[int] = None) -> List[str]:
+    """Get list of commit SHAs from git."""
+    cmd = ["git", "rev-list", branch]
+    if max_count:
+        cmd.extend(["--max-count", str(max_count)])
+    proc = subprocess.run(
+        cmd,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout.strip().splitlines()
+
+
+def git_commit_time(repo: Path, sha: str) -> str:
+    """Get commit timestamp."""
+    proc = subprocess.run(
+        ["git", "show", "-s", "--format=%cI", sha],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+def git_rev_list_with_timestamps(
+    repo: Path, branch: str, max_count: Optional[int] = None
+) -> dict:
+    """Get commit SHAs and their timestamps in a single subprocess call.
+
+    Returns a dict mapping SHA -> ISO8601 timestamp string, ordered newest first.
+    """
+    cmd = ["git", "log", "--format=%H %cI", branch]
+    if max_count:
+        cmd.extend(["--max-count", str(max_count)])
+    proc = subprocess.run(
+        cmd,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    result = {}
+    for line in proc.stdout.strip().splitlines():
+        sha, timestamp = line.split(" ", 1)
+        result[sha] = timestamp
+    return result
 
 
 def resolve_ref(ref: str, repo_path: Path) -> str:

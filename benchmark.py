@@ -470,6 +470,7 @@ def run_benchmark_matrix(
     args: argparse.Namespace,
     module_path: Optional[str] = None,
     uses_test_groups: bool = False,
+    config_name: Optional[str] = None,
 ) -> None:
     """Orchestrate benchmark execution for all configurations."""
     if args.module:
@@ -521,6 +522,7 @@ def run_benchmark_matrix(
             uses_test_groups,
             architecture,
             client_cpu_ranges,
+            config_name,
         )
 
     # Cleanup
@@ -592,6 +594,7 @@ def _execute_benchmark_run(
     uses_test_groups,
     architecture,
     client_cpu_ranges,
+    config_name=None,
 ):
     """Execute a single benchmark run with specific configuration."""
     cfg = exec_config["cfg"]
@@ -659,6 +662,7 @@ def _execute_benchmark_run(
             architecture=architecture,
             uses_test_groups=uses_test_groups,
             repository=args.repository,
+            config_name=config_name,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]
@@ -815,6 +819,7 @@ def main() -> None:
                 args=args,
                 module_path=module_path,
                 uses_test_groups=uses_test_groups,
+                config_name=Path(args.config).name if args.module else None,
             )
 
 
