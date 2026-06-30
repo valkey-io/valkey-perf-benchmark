@@ -56,6 +56,7 @@ class CommitPair:
     config_name: str
     config_sets: List[dict]
     architecture: str
+    cluster_mode: List[bool]
     status: str = "pending"
     priority: Optional[int] = None
 
@@ -70,6 +71,7 @@ class CommitPair:
             "config_name": self.config_name,
             "config_sets": self.config_sets,
             "architecture": self.architecture,
+            "cluster_mode": self.cluster_mode,
         }
         missing = [k for k, v in required.items() if v is None or v == ""]
         if missing:
@@ -83,7 +85,7 @@ class CommitPair:
         return self.priority is not None and self.status is not None
 
     def to_insert_tuple(self) -> tuple:
-        """Return tuple for SQL INSERT. Wraps config_sets as Json() at insert time."""
+        """Return tuple for SQL INSERT. Wraps config_sets and cluster_mode as Json() at insert time."""
         return (
             self.core_sha,
             self.module_sha,
@@ -96,7 +98,32 @@ class CommitPair:
             self.config_name,
             Json(self.config_sets),
             self.architecture,
+            Json(self.cluster_mode),
         )
+
+
+def resolve_cluster_modes(raw_cluster_mode, cli_cluster_mode: Optional[str] = None) -> Optional[List[bool]]:
+    """Resolve cluster_modes from config file value and optional CLI override.
+
+    Args:
+        raw_cluster_mode: Value from config JSON's "cluster_mode" key (bool, list, or None).
+        cli_cluster_mode: Optional CLI argument string ("true" or "false").
+            If provided, overrides the config value with a single-element list.
+
+    Returns:
+        List of booleans (e.g., [False], [True], [False, True]), or None if
+        neither source provides a value.
+    """
+    # CLI override takes precedence (only accepts "true" or "false")
+    if cli_cluster_mode is not None:
+        return [cli_cluster_mode == "true"]
+
+    # Fall back to config file value
+    if isinstance(raw_cluster_mode, bool):
+        return [raw_cluster_mode]
+    elif isinstance(raw_cluster_mode, list):
+        return [bool(v) for v in raw_cluster_mode]
+    return None
 
 
 def get_config_name(config_file_path: str) -> str:
@@ -166,11 +193,12 @@ def _create_module_table(conn, module_name: str) -> None:
                 config_name VARCHAR(255) NOT NULL,
                 config_sets JSONB NOT NULL,
                 architecture VARCHAR(50),
+                cluster_mode JSONB NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
 
                 CONSTRAINT unique_{table}_sha_module_config_arch
-                    UNIQUE(sha, module_sha, config_name, config_sets, architecture)
+                    UNIQUE(sha, module_sha, config_name, config_sets, architecture, cluster_mode)
             );
 
             CREATE INDEX IF NOT EXISTS idx_{table}_sha ON {table}(sha);
@@ -197,11 +225,13 @@ def _mark_subset_pairs_in_memory(
     config_name: str,
     config_sets: List[dict],
     architecture: str,
+    cluster_mode: List[bool],
 ) -> int:
-    """Mark pairs as completed_as_subset if a superset config_sets already exists.
+    """Mark pairs as completed_as_subset if a superset config already exists.
 
-    Checks if any completed config_sets in the DB is a superset of the current
-    config_sets. If yes, marks matching (sha, module_sha) pairs as completed_as_subset.
+    Checks if any completed row in the DB has both config_sets and cluster_mode
+    that are supersets of the current values. If yes, marks matching
+    (sha, module_sha) pairs as completed_as_subset.
 
     Args:
         conn: PostgreSQL connection
@@ -210,53 +240,56 @@ def _mark_subset_pairs_in_memory(
         config_name: Config file name
         config_sets: Current config_sets (raw list for subset comparison)
         architecture: Architecture
+        cluster_mode: Current cluster_mode list (e.g., [false] or [false, true])
 
     Returns:
         Number of pairs marked as completed_as_subset
     """
     with conn.cursor() as cur:
-        # Find all distinct completed config_sets for this (config_name, arch)
+        # Find all distinct completed (config_sets, cluster_mode) combos
         cur.execute(
             f"""
-            SELECT DISTINCT config_sets FROM {table}
+            SELECT DISTINCT config_sets, cluster_mode FROM {table}
             WHERE status IN ('completed', 'completed_as_subset')
               AND config_name = %s AND architecture = %s
         """,
             (config_name, architecture),
         )
-        completed_config_sets_list = [row[0] for row in cur.fetchall()]
+        completed_combos = [(row[0], row[1]) for row in cur.fetchall()]
 
     print(
-        f"  Subset check: found {len(completed_config_sets_list)} distinct completed config_sets in DB",
+        f"  Subset check: found {len(completed_combos)} distinct completed (config_sets, cluster_mode) combos in DB",
         file=sys.stderr,
     )
 
-    # Find supersets of our config_sets
-    superset_list = [
-        cs
-        for cs in completed_config_sets_list
+    # Find combos where BOTH config_sets and cluster_mode are supersets of ours
+    superset_combos = [
+        (cs, cm)
+        for cs, cm in completed_combos
         if _is_config_sets_subset(config_sets, cs)
+        and _is_config_sets_subset(cluster_mode, cm)
     ]
 
     print(
-        f"  Subset check: {len(superset_list)} of those are supersets of current config_sets",
+        f"  Subset check: {len(superset_combos)} of those are supersets of current config",
         file=sys.stderr,
     )
 
-    if not superset_list:
+    if not superset_combos:
         return 0
 
-    # Get (sha, module_sha) pairs that are completed with a superset config
+    # Get (sha, module_sha) pairs that are completed with a superset combo
     completed_pairs = set()
     with conn.cursor() as cur:
+        combo_tuples = tuple((Json(cs), Json(cm)) for cs, cm in superset_combos)
         cur.execute(
             f"""
             SELECT sha, module_sha FROM {table}
             WHERE status = 'completed'
               AND config_name = %s AND architecture = %s
-              AND config_sets IN %s
+              AND (config_sets, cluster_mode) IN %s
         """,
-            (config_name, architecture, tuple(Json(cs) for cs in superset_list)),
+            (config_name, architecture, combo_tuples),
         )
         completed_pairs = {(row[0], row[1]) for row in cur.fetchall()}
 
@@ -283,10 +316,11 @@ def _assign_priority_in_memory(
     config_name: str,
     config_sets: List[dict],
     architecture: str,
+    cluster_mode: List[bool],
 ) -> None:
     """Assign priority to pairs that are still pending (not subset-completed).
 
-    Derives pointer from the newest completed pair for this config+arch.
+    Derives pointer from the newest completed pair for this config+arch+cluster_mode.
     - Forward (priority=1): both timestamps >= pointer (includes pointer row & column)
     - Fallback (priority=2): at least one timestamp < pointer (old core × new module, or new core × old module)
     - No pointer (first run): all get priority=1
@@ -299,8 +333,10 @@ def _assign_priority_in_memory(
         config_name: Config file name
         config_sets: List of module runtime configs
         architecture: Architecture
+        cluster_mode: List of cluster mode booleans
     """
     config_sets_json = Json(config_sets)
+    cluster_mode_json = Json(cluster_mode)
     # Find pointer: max_commit_timestamp of the newest completed pair
     with conn.cursor() as cur:
         cur.execute(
@@ -308,11 +344,12 @@ def _assign_priority_in_memory(
             SELECT core_timestamp, module_timestamp FROM {table}
             WHERE status IN ('completed', 'completed_as_subset')
               AND config_name = %s AND config_sets = %s AND architecture = %s
+              AND cluster_mode = %s
             ORDER BY created_at DESC, priority ASC,
                      max_commit_timestamp DESC, min_commit_timestamp DESC
             LIMIT 1
         """,
-            (config_name, config_sets_json, architecture),
+            (config_name, config_sets_json, architecture, cluster_mode_json),
         )
         pointer_row = cur.fetchone()
 
@@ -358,6 +395,7 @@ def populate_module_commits(
     module_name: str,
     config_name: str,
     config_sets: List[dict],
+    cluster_mode: List[bool],
     max_core_commits: Optional[int] = None,
     max_module_commits: Optional[int] = None,
 ) -> int:
@@ -377,6 +415,7 @@ def populate_module_commits(
         module_name: Module name (determines table)
         config_name: Config file name (e.g., 'fts-benchmarks-arm.json')
         config_sets: List of module runtime configs to track individually
+        cluster_mode: List of cluster mode booleans (e.g., [false] or [false, true])
 
     Returns:
         Number of new rows inserted
@@ -403,16 +442,18 @@ def populate_module_commits(
         file=sys.stderr,
     )
 
-    # Get existing (sha, module_sha) pairs for this config+arch to avoid redundant inserts
+    # Get existing (sha, module_sha) pairs for this config+arch+cluster_mode to avoid redundant inserts
     table = _module_table_name(module_name)
     config_sets_json = Json(config_sets)
+    cluster_mode_json = Json(cluster_mode)
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT DISTINCT sha, module_sha FROM {table}
             WHERE config_name = %s AND config_sets = %s AND architecture = %s
+              AND cluster_mode = %s
         """,
-            (config_name, config_sets_json, architecture),
+            (config_name, config_sets_json, architecture, cluster_mode_json),
         )
         existing = {(row[0], row[1]) for row in cur.fetchall()}
     print(f"Found {len(existing)} existing pairs in {table}", file=sys.stderr)
@@ -438,6 +479,7 @@ def populate_module_commits(
                     config_name=config_name,
                     config_sets=config_sets,
                     architecture=architecture,
+                    cluster_mode=cluster_mode,
                 )
             )
     print(f"Built {len(pairs)} new CommitPair objects", file=sys.stderr)
@@ -446,9 +488,9 @@ def populate_module_commits(
         print("No new pairs to insert", file=sys.stderr)
         return 0
 
-    # Step 2: Check for subset — find completed superset config_sets
+    # Step 2: Check for subset — find completed superset config_sets and cluster_mode
     completed_as_subset = _mark_subset_pairs_in_memory(
-        conn, pairs, table, config_name, config_sets, architecture
+        conn, pairs, table, config_name, config_sets, architecture, cluster_mode
     )
     print(
         f"Subset detection: {completed_as_subset} pairs marked as completed_as_subset",
@@ -457,7 +499,7 @@ def populate_module_commits(
 
     # Step 3: Assign priority in memory (for pairs not marked as subset)
     _assign_priority_in_memory(
-        conn, pairs, table, config_name, config_sets, architecture
+        conn, pairs, table, config_name, config_sets, architecture, cluster_mode
     )
 
     # Step 4: Validate — all pairs must be ready before insert
@@ -473,7 +515,8 @@ def populate_module_commits(
         INSERT INTO {table} (sha, module_sha, core_timestamp,
                              module_timestamp, max_commit_timestamp,
                              min_commit_timestamp, status, priority,
-                             config_name, config_sets, architecture)
+                             config_name, config_sets, architecture,
+                             cluster_mode)
         VALUES %s
     """
     data = [pair.to_insert_tuple() for pair in pairs]
@@ -504,11 +547,13 @@ def fetch_next_module_commits(
     config_name: str,
     config_sets: List[dict],
     architecture: str,
+    cluster_mode: List[bool],
     max_pairs: int = 1,
 ) -> List[str]:
     """Fetch the next batch of pending pairs and mark them as in_progress.
 
-    Only fetches pairs matching the given config_name, config_sets, and architecture.
+    Only fetches pairs matching the given config_name, config_sets, architecture,
+    and cluster_mode.
 
     Selects pending pairs sorted by:
       1. created_at DESC (newest inserts first)
@@ -524,6 +569,7 @@ def fetch_next_module_commits(
         config_name: Config file name to match
         config_sets: List of module runtime configs
         architecture: Architecture to match
+        cluster_mode: List of cluster mode booleans to match
         max_pairs: Maximum number of pairs to fetch
 
     Returns:
@@ -533,6 +579,7 @@ def fetch_next_module_commits(
     """
     table = _module_table_name(module_name)
     config_sets_json = Json(config_sets)
+    cluster_mode_json = Json(cluster_mode)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -540,11 +587,12 @@ def fetch_next_module_commits(
             SELECT id, sha, module_sha, max_commit_timestamp FROM {table}
             WHERE status = 'pending'
               AND config_name = %s AND config_sets = %s AND architecture = %s
+              AND cluster_mode = %s
             ORDER BY created_at DESC, priority ASC,
                      max_commit_timestamp DESC, min_commit_timestamp DESC
             LIMIT %s
         """,
-            (config_name, config_sets_json, architecture, max_pairs),
+            (config_name, config_sets_json, architecture, cluster_mode_json, max_pairs),
         )
         rows = cur.fetchall()
 
@@ -581,11 +629,13 @@ def mark_module_commits(
     config_name: str,
     config_sets: List[dict],
     architecture: str,
+    cluster_mode: List[bool],
 ) -> int:
     """Mark specific pairs as completed.
 
     Updates status from 'in_progress' to 'completed' for the given pairs.
-    Only matches rows with the same config_name, config_sets, and architecture.
+    Only matches rows with the same config_name, config_sets, architecture,
+    and cluster_mode.
 
     Args:
         conn: PostgreSQL connection
@@ -594,12 +644,14 @@ def mark_module_commits(
         config_name: Config file name to match
         config_sets: List of module runtime configs
         architecture: Architecture to match
+        cluster_mode: List of cluster mode booleans to match
 
     Returns:
         Number of rows updated
     """
     table = _module_table_name(module_name)
     config_sets_json = Json(config_sets)
+    cluster_mode_json = Json(cluster_mode)
     updated = 0
 
     with conn.cursor() as cur:
@@ -611,8 +663,9 @@ def mark_module_commits(
                 SET status = 'completed', updated_at = NOW()
                 WHERE sha = %s AND module_sha = %s
                   AND config_name = %s AND config_sets = %s AND architecture = %s
+                  AND cluster_mode = %s
             """,
-                (core_sha, module_sha, config_name, config_sets_json, architecture),
+                (core_sha, module_sha, config_name, config_sets_json, architecture, cluster_mode_json),
             )
             if cur.rowcount == 0:
                 print(
@@ -636,20 +689,22 @@ def mark_module_commits(
 
 
 def cleanup_module_commits(
-    conn, module_name: str, config_name: str, config_sets: List[dict], architecture: str
+    conn, module_name: str, config_name: str, config_sets: List[dict], architecture: str,
+    cluster_mode: List[bool],
 ) -> int:
-    """Reset 'in_progress' entries back to 'pending' for a specific config+config_sets+arch.
+    """Reset 'in_progress' entries back to 'pending' for a specific config+config_sets+arch+cluster_mode.
 
     Called at the start of each run to retry pairs from previous
     failed runs. Unlike core (which deletes all), we reset to pending
     so the pair stays in the queue and gets retried. Scoped to the
-    current config+config_sets+arch to avoid affecting other configs.
+    current config+config_sets+arch+cluster_mode to avoid affecting other configs.
 
     Returns:
         Number of entries reset
     """
     table = _module_table_name(module_name)
     config_sets_json = Json(config_sets)
+    cluster_mode_json = Json(cluster_mode)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -657,8 +712,9 @@ def cleanup_module_commits(
             SET status = 'pending', updated_at = NOW()
             WHERE status = 'in_progress'
               AND config_name = %s AND config_sets = %s AND architecture = %s
+              AND cluster_mode = %s
         """,
-            (config_name, config_sets_json, architecture),
+            (config_name, config_sets_json, architecture, cluster_mode_json),
         )
         count = cur.rowcount
 
@@ -746,6 +802,13 @@ def main():
         default=60000,
         help="Idle-in-transaction timeout in ms (default: 60000)",
     )
+    parser.add_argument(
+        "--cluster-mode",
+        type=str,
+        choices=["true", "false"],
+        default=None,
+        help="Cluster mode (true/false). Overwrites cluster_mode from config file.",
+    )
 
     args, remaining_args = parser.parse_known_args()
 
@@ -764,14 +827,23 @@ def main():
     # Extract config name from path and load config_sets if present
     config_name = get_config_name(args.config_file) if args.config_file else ""
     config_sets = None
+    raw_cluster_mode = None
     if args.config_file and Path(args.config_file).exists():
         with open(args.config_file) as f:
             cfg_data = json.load(f)
         if isinstance(cfg_data, list) and cfg_data:
             cfg_data = cfg_data[0]
         config_sets = cfg_data.get("config_sets")
+        raw_cluster_mode = cfg_data.get("cluster_mode")
     if not config_sets:
         print("Error: config_sets not found in config file", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve cluster_modes: CLI overrides config file
+    cluster_modes = resolve_cluster_modes(raw_cluster_mode, args.cluster_mode)
+
+    if not cluster_modes:
+        print("Error: cluster_mode not found in config file and --cluster-mode not provided", file=sys.stderr)
         sys.exit(1)
 
     # Connect to PostgreSQL
@@ -819,6 +891,7 @@ def main():
                 module_name=args.module_name,
                 config_name=config_name,
                 config_sets=config_sets,
+                cluster_mode=cluster_modes,
                 max_core_commits=args.max_core_commits,
                 max_module_commits=args.max_module_commits,
             )
@@ -842,6 +915,7 @@ def main():
                 config_name=config_name,
                 config_sets=config_sets,
                 architecture=args.architecture,
+                cluster_mode=cluster_modes,
                 max_pairs=args.max_pairs,
             )
             # Output pairs and timestamps on separate lines for workflow
@@ -881,6 +955,7 @@ def main():
                 config_name=config_name,
                 config_sets=config_sets,
                 architecture=args.architecture,
+                cluster_mode=cluster_modes,
             )
 
         elif args.operation == "cleanup":
@@ -897,6 +972,7 @@ def main():
                 config_name=config_name,
                 config_sets=config_sets,
                 architecture=args.architecture,
+                cluster_mode=cluster_modes,
             )
 
     except ValueError as e:

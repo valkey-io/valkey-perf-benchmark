@@ -5,6 +5,7 @@ Tests cover:
 - get_config_name
 - _module_table_name
 - _is_config_sets_subset
+- resolve_cluster_modes
 - CommitPair
 """
 
@@ -20,6 +21,7 @@ from utils.module_postgres_track_commits import (
     _module_table_name,
     _is_config_sets_subset,
     _parse_timestamp,
+    resolve_cluster_modes,
 )
 
 # ---------------------------------------------------------------------------
@@ -183,6 +185,30 @@ class TestIsConfigSetsSubset:
 
 
 # ---------------------------------------------------------------------------
+# cluster_mode subset detection (reuses _is_config_sets_subset with bool lists)
+# ---------------------------------------------------------------------------
+
+
+class TestClusterModeSubset:
+    """Test subset detection for cluster_mode boolean lists.
+    """
+
+    def test_false_is_subset_of_false_true(self):
+        assert _is_config_sets_subset([False], [False, True]) is True
+
+    def test_true_false_is_subset_of_false_true(self):
+        assert _is_config_sets_subset([True, False], [False, True]) is True
+
+    def test_false_true_is_not_subset_of_false(self):
+        assert _is_config_sets_subset([False, True], [False]) is False
+
+    def test_non_empty_is_not_subset_of_empty(self):
+        assert _is_config_sets_subset([False], []) is False
+
+    def test_identical_single_false(self):
+        assert _is_config_sets_subset([False], [False]) is True
+
+# ---------------------------------------------------------------------------
 # CommitPair dataclass
 # ---------------------------------------------------------------------------
 
@@ -202,6 +228,7 @@ class TestCommitPair:
             "config_name": "fts-benchmarks-arm.json",
             "config_sets": [{"io-threads": 8}],
             "architecture": "aarch64",
+            "cluster_mode": [False, True],
         }
         defaults.update(overrides)
         return CommitPair(**defaults)
@@ -249,12 +276,44 @@ class TestCommitPair:
         assert t[6] == "pending"  # status
         assert t[7] == 1  # priority
         assert t[8] == "fts-benchmarks-arm.json"  # config_name
-        assert t[10] == "aarch64"  # architecture
-
-    def test_to_insert_tuple_wraps_config_sets_as_json(self):
-
-        pair = self._make_pair()
-        pair.priority = 2
-        t = pair.to_insert_tuple()
-        assert isinstance(t[9], Json)
+        assert isinstance(t[9], Json)  # config_sets wrapped as Json
         assert t[9].adapted == [{"io-threads": 8}]
+        assert t[10] == "aarch64"  # architecture
+        assert isinstance(t[11], Json)  # cluster_mode wrapped as Json
+        assert t[11].adapted == [False, True]
+
+
+
+# ---------------------------------------------------------------------------
+# resolve_cluster_modes
+# ---------------------------------------------------------------------------
+
+
+class TestResolveClusterModes:
+    """Test cluster_mode resolution from config file and CLI override."""
+
+    def test_config_bool_false(self):
+        assert resolve_cluster_modes(False) == [False]
+
+    def test_config_list_single(self):
+        assert resolve_cluster_modes([False]) == [False]
+
+    def test_config_list_multiple(self):
+        assert resolve_cluster_modes([False, True]) == [False, True]
+
+    def test_config_none_returns_none(self):
+        assert resolve_cluster_modes(None) is None
+
+    def test_config_missing_returns_none(self):
+        assert resolve_cluster_modes(None, None) is None
+
+    def test_cli_true_overrides_config(self):
+        assert resolve_cluster_modes([False], "true") == [True]
+
+    def test_cli_false_overrides_config(self):
+        assert resolve_cluster_modes([True, False], "false") == [False]
+
+    def test_cli_true_when_config_is_none(self):
+        assert resolve_cluster_modes(None, "true") == [True]
+
+
