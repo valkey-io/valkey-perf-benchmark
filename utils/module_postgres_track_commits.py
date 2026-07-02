@@ -532,9 +532,11 @@ def populate_module_commits(
     except psycopg2.IntegrityError as e:
         conn.rollback()
         raise ValueError(
-            f"Unexpected duplicate row during insert. "
-            f"This should not happen — existing pairs were filtered beforehand. "
-            f"Error: {e}"
+            f"Conflict on UNIQUE(sha, module_sha, config_name, config_sets, "
+            f"architecture, cluster_mode) during batch insert. "
+            f"This indicates two workflows with the same config are running "
+            f"simultaneously, which is not expected. "
+            f"Entire batch rolled back — no rows inserted. Error: {e}"
         ) from e
     print(
         f"Populated {table}: {len(pairs)} new pairs inserted "
@@ -553,7 +555,7 @@ def fetch_next_module_commits(
     architecture: str,
     cluster_mode: List[bool],
     max_pairs: int = 1,
-) -> List[str]:
+) -> tuple[List[str], List[str]]:
     """Fetch the next batch of pending pairs and mark them as in_progress.
 
     Only fetches pairs matching the given config_name, config_sets, architecture,
@@ -709,7 +711,6 @@ def _retroactively_mark_subsets(
                 total_marked += cur.rowcount
 
     if total_marked > 0:
-        conn.commit()
         print(
             f"Retroactive subset: marked {total_marked} pending subset rows as "
             f"completed_as_subset in {table}",
@@ -788,17 +789,27 @@ def mark_module_commits(
                     file=sys.stderr,
                 )
 
-    conn.commit()
+    # Retroactively mark pending subset rows as completed_as_subset
+    try:
+        if updated > 0:
+            _retroactively_mark_subsets(
+                conn, table, pairs, config_name, config_sets, architecture, cluster_mode
+            )
+
+        # Single commit for both mark-complete and retroactive subset marking
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise ValueError(
+            f"Error during mark-complete transaction. "
+            f"Rolled back both mark-complete and retroactive subset updates. "
+            f"Error: {e}"
+        ) from e
+
     print(
         f"mark_module_commits: {updated} pairs marked complete in {table}",
         file=sys.stderr,
     )
-
-    # Retroactively mark pending subset rows as completed_as_subset
-    if updated > 0:
-        _retroactively_mark_subsets(
-            conn, table, pairs, config_name, config_sets, architecture, cluster_mode
-        )
 
     return updated
 
