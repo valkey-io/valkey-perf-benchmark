@@ -18,10 +18,12 @@ from utils.compare_benchmark_results import (
     create_config_signature,
     create_config_sort_key,
     summarize_benchmark_results,
+    create_comparison_table_data,
     _format_with_sig_figs,
     _format_stats_only,
     _format_percent_change,
     _extract_common_and_unique_config,
+    _get_significance_indicator,
     CONFIDENCE_PERCENT,
 )
 
@@ -426,10 +428,10 @@ class TestSummarizeBenchmarkResults:
         result = summarize_benchmark_results([])
         assert result == {
             "rps": 0.0,
-            "latency_avg_ms": 0.0,
-            "latency_p50_ms": 0.0,
-            "latency_p95_ms": 0.0,
-            "latency_p99_ms": 0.0,
+            "avg_latency_ms": 0.0,
+            "p50_latency_ms": 0.0,
+            "p95_latency_ms": 0.0,
+            "p99_latency_ms": 0.0,
         }
 
     def test_single_item_returns_its_values(self):
@@ -442,10 +444,10 @@ class TestSummarizeBenchmarkResults:
         }
         result = summarize_benchmark_results([item])
         assert result["rps"] == 100000.0
-        assert result["latency_avg_ms"] == 1.0
-        assert result["latency_p50_ms"] == 0.8
-        assert result["latency_p95_ms"] == 1.5
-        assert result["latency_p99_ms"] == 2.0
+        assert result["avg_latency_ms"] == 1.0
+        assert result["p50_latency_ms"] == 0.8
+        assert result["p95_latency_ms"] == 1.5
+        assert result["p99_latency_ms"] == 2.0
 
     def test_multiple_items_returns_means(self):
         items = [
@@ -466,25 +468,10 @@ class TestSummarizeBenchmarkResults:
         ]
         result = summarize_benchmark_results(items)
         assert result["rps"] == pytest.approx(150000.0)
-        assert result["latency_avg_ms"] == pytest.approx(0.75)
-        assert result["latency_p50_ms"] == pytest.approx(0.6)
-        assert result["latency_p95_ms"] == pytest.approx(1.15)
-        assert result["latency_p99_ms"] == pytest.approx(1.5)
-
-    def test_new_field_naming_convention(self):
-        item = {
-            "rps": 100000.0,
-            "latency_avg_ms": 1.0,
-            "latency_p50_ms": 0.8,
-            "latency_p95_ms": 1.5,
-            "latency_p99_ms": 2.0,
-        }
-        result = summarize_benchmark_results([item])
-        assert result["rps"] == 100000.0
-        assert result["latency_avg_ms"] == 1.0
-        assert result["latency_p50_ms"] == 0.8
-        assert result["latency_p95_ms"] == 1.5
-        assert result["latency_p99_ms"] == 2.0
+        assert result["avg_latency_ms"] == pytest.approx(0.75)
+        assert result["p50_latency_ms"] == pytest.approx(0.6)
+        assert result["p95_latency_ms"] == pytest.approx(1.15)
+        assert result["p99_latency_ms"] == pytest.approx(1.5)
 
 
 # --- _format_with_sig_figs ---
@@ -730,3 +717,106 @@ class TestExtractCommonAndUniqueConfig:
         assert common == {}
         assert groups[0]["unique_config"] == {"data_size": 16}
         assert groups[1]["unique_config"] == {"data_size": 64}
+
+
+# --- TestComparisonPipeline ---
+
+
+class TestComparisonPipeline:
+    """End-to-end tests for the comparison pipeline."""
+
+    def _make_run(
+        self,
+        rps,
+        avg,
+        p50,
+        p95,
+        p99,
+        command="GET",
+        pipeline=1,
+        io_threads=1,
+        commit="abc123",
+    ):
+        return {
+            "command": command,
+            "pipeline": pipeline,
+            "io_threads": io_threads,
+            "data_size": 32,
+            "clients": 50,
+            "rps": rps,
+            "avg_latency_ms": avg,
+            "p50_latency_ms": p50,
+            "p95_latency_ms": p95,
+            "p99_latency_ms": p99,
+            "commit": commit,
+        }
+
+    def test_end_to_end_percentage_change(self):
+        baseline_data = [
+            self._make_run(98000, 1.02, 0.81, 1.48, 1.95, commit="base111"),
+            self._make_run(102000, 0.98, 0.79, 1.52, 2.05, commit="base111"),
+            self._make_run(100000, 1.00, 0.80, 1.50, 2.00, commit="base111"),
+        ]
+        new_data = [
+            self._make_run(118000, 0.82, 0.61, 1.18, 1.58, commit="new2222"),
+            self._make_run(122000, 0.78, 0.59, 1.22, 1.62, commit="new2222"),
+            self._make_run(120000, 0.80, 0.60, 1.20, 1.60, commit="new2222"),
+        ]
+
+        baseline_averaged = average_multiple_runs(baseline_data)
+        new_averaged = average_multiple_runs(new_data)
+
+        config_groups, baseline_ver, new_ver, _, _ = create_comparison_table_data(
+            baseline_averaged, new_averaged
+        )
+
+        assert len(config_groups) == 1
+        rows = config_groups[0]["table_rows"]
+
+        # RPS: mean 100000 -> 120000 = +20%
+        rps_row = next(r for r in rows if r["metric"] == "rps")
+        assert rps_row["baseline_value"] == pytest.approx(100000.0)
+        assert rps_row["new_value"] == pytest.approx(120000.0)
+        assert rps_row["change"] == pytest.approx(20.0)
+
+        # avg latency: mean 1.0 -> 0.8 = -20%
+        avg_row = next(r for r in rows if r["metric"] == "avg_latency")
+        assert avg_row["baseline_value"] == pytest.approx(1.0)
+        assert avg_row["new_value"] == pytest.approx(0.8)
+        assert avg_row["change"] == pytest.approx(-20.0)
+
+        # p99 latency: mean 2.0 -> 1.6 = -20%
+        p99_row = next(r for r in rows if r["metric"] == "p99_latency")
+        assert p99_row["baseline_value"] == pytest.approx(2.0)
+        assert p99_row["new_value"] == pytest.approx(1.6)
+        assert p99_row["change"] == pytest.approx(-20.0)
+
+        # Verify version extraction worked
+        assert baseline_ver == "base111"
+        assert new_ver == "new2222"
+
+    def test_significance_direction_by_metric_type(self):
+        # Latency decrease = improvement
+        assert (
+            _get_significance_indicator(5, 5, 1.8, 2.2, 1.0, 1.4, -30.0, "avg_latency")
+            == "✅"
+        )
+        # Latency increase = regression
+        assert (
+            _get_significance_indicator(5, 5, 1.0, 1.4, 1.8, 2.2, 50.0, "p99_latency")
+            == "❌"
+        )
+        # RPS increase = improvement
+        assert (
+            _get_significance_indicator(
+                5, 5, 90000.0, 100000.0, 110000.0, 120000.0, 20.0, "rps"
+            )
+            == "✅"
+        )
+        # RPS decrease = regression
+        assert (
+            _get_significance_indicator(
+                5, 5, 110000.0, 120000.0, 90000.0, 100000.0, -15.0, "rps"
+            )
+            == "❌"
+        )

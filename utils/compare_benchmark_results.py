@@ -231,10 +231,6 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
         "p95_latency_ms",
         "p99_latency_ms",
         "max_latency_ms",
-        "latency_avg_ms",
-        "latency_p50_ms",
-        "latency_p95_ms",
-        "latency_p99_ms",
         # Standard deviation fields
         "rps_stdev",
         "avg_latency_ms_stdev",
@@ -308,49 +304,28 @@ def group_by_command(items: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, An
 
 
 def summarize_benchmark_results(data_items: List[Dict[str, Any]]) -> Dict[str, float]:
-    """
-    Calculate summary statistics for a group of benchmark results.
-
-    Handles both old and new field naming conventions for latency metrics.
-    """
+    """Calculate summary statistics for a group of benchmark results."""
     if not data_items:
         return {
             "rps": 0.0,
-            "latency_avg_ms": 0.0,
-            "latency_p50_ms": 0.0,
-            "latency_p95_ms": 0.0,
-            "latency_p99_ms": 0.0,
+            "avg_latency_ms": 0.0,
+            "p50_latency_ms": 0.0,
+            "p95_latency_ms": 0.0,
+            "p99_latency_ms": 0.0,
         }
 
-    # Extract values with fallback for different field names
     rps_values = [item.get("rps", 0.0) for item in data_items]
-
-    avg_latency_values = [
-        item.get("avg_latency_ms", item.get("latency_avg_ms", 0.0))
-        for item in data_items
-    ]
-
-    p50_latency_values = [
-        item.get("p50_latency_ms", item.get("latency_p50_ms", 0.0))
-        for item in data_items
-    ]
-
-    p95_latency_values = [
-        item.get("p95_latency_ms", item.get("latency_p95_ms", 0.0))
-        for item in data_items
-    ]
-
-    p99_latency_values = [
-        item.get("p99_latency_ms", item.get("latency_p99_ms", 0.0))
-        for item in data_items
-    ]
+    avg_latency_values = [item.get("avg_latency_ms", 0.0) for item in data_items]
+    p50_latency_values = [item.get("p50_latency_ms", 0.0) for item in data_items]
+    p95_latency_values = [item.get("p95_latency_ms", 0.0) for item in data_items]
+    p99_latency_values = [item.get("p99_latency_ms", 0.0) for item in data_items]
 
     return {
         "rps": calculate_mean(rps_values),
-        "latency_avg_ms": calculate_mean(avg_latency_values),
-        "latency_p50_ms": calculate_mean(p50_latency_values),
-        "latency_p95_ms": calculate_mean(p95_latency_values),
-        "latency_p99_ms": calculate_mean(p99_latency_values),
+        "avg_latency_ms": calculate_mean(avg_latency_values),
+        "p50_latency_ms": calculate_mean(p50_latency_values),
+        "p95_latency_ms": calculate_mean(p95_latency_values),
+        "p99_latency_ms": calculate_mean(p99_latency_values),
     }
 
 
@@ -404,22 +379,10 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # Multiple runs: calculate averages and standard deviations
             metric_values = {
                 "rps": [run.get("rps", 0.0) for run in runs],
-                "avg_latency_ms": [
-                    run.get("avg_latency_ms", run.get("latency_avg_ms", 0.0))
-                    for run in runs
-                ],
-                "p50_latency_ms": [
-                    run.get("p50_latency_ms", run.get("latency_p50_ms", 0.0))
-                    for run in runs
-                ],
-                "p95_latency_ms": [
-                    run.get("p95_latency_ms", run.get("latency_p95_ms", 0.0))
-                    for run in runs
-                ],
-                "p99_latency_ms": [
-                    run.get("p99_latency_ms", run.get("latency_p99_ms", 0.0))
-                    for run in runs
-                ],
+                "avg_latency_ms": [run.get("avg_latency_ms", 0.0) for run in runs],
+                "p50_latency_ms": [run.get("p50_latency_ms", 0.0) for run in runs],
+                "p95_latency_ms": [run.get("p95_latency_ms", 0.0) for run in runs],
+                "p99_latency_ms": [run.get("p99_latency_ms", 0.0) for run in runs],
             }
 
             # Calculate means, standard deviations, coefficient of variation, and confidence intervals
@@ -611,10 +574,10 @@ def create_comparison_table_data(
     # Define available metrics with their display names
     available_metrics = [
         ("rps", "rps"),
-        ("latency_avg_ms", "avg_latency"),
-        ("latency_p50_ms", "p50_latency"),
-        ("latency_p95_ms", "p95_latency"),
-        ("latency_p99_ms", "p99_latency"),
+        ("avg_latency_ms", "avg_latency"),
+        ("p50_latency_ms", "p50_latency"),
+        ("p95_latency_ms", "p95_latency"),
+        ("p99_latency_ms", "p99_latency"),
     ]
 
     # Select metrics based on filter
@@ -622,10 +585,10 @@ def create_comparison_table_data(
         selected_metrics = [("rps", "rps")]
     elif metrics_filter == "latency":
         selected_metrics = [
-            ("latency_avg_ms", "avg_latency"),
-            ("latency_p50_ms", "p50_latency"),
-            ("latency_p95_ms", "p95_latency"),
-            ("latency_p99_ms", "p99_latency"),
+            ("avg_latency_ms", "avg_latency"),
+            ("p50_latency_ms", "p50_latency"),
+            ("p95_latency_ms", "p95_latency"),
+            ("p99_latency_ms", "p99_latency"),
         ]
     else:  # "all" or any other value
         selected_metrics = available_metrics
@@ -961,6 +924,7 @@ def _generate_summary(
                 row.get("new_ci_lower", 0.0),
                 row.get("new_ci_upper", 0.0),
                 row["change"],
+                row.get("metric", ""),
             )
 
             test_label = f"{row['command']} {row['metric']} pipe={row['pipeline']} threads={row['io_threads']}"
@@ -1122,6 +1086,7 @@ def format_comparison_report(
                 row.get("new_ci_lower", 0.0),
                 row.get("new_ci_upper", 0.0),
                 row["change"],
+                row.get("metric", ""),
             )
 
             # Format % change with uncertainty
@@ -1204,6 +1169,7 @@ def _get_significance_indicator(
     new_ci_lower: float,
     new_ci_upper: float,
     change_percent: float,
+    metric: str = "",
 ) -> str:
     """
     Determine significance indicator based on CI overlap.
@@ -1218,13 +1184,16 @@ def _get_significance_indicator(
     if baseline_run_count <= 1 or new_run_count <= 1:
         return "❔"
 
-    # Check CI overlap
-    # No overlap if new's lower bound > baseline's upper bound (improvement)
-    # or new's upper bound < baseline's lower bound (regression)
+    # For latency metrics, lower values are better (less delay)
+    # For throughput metrics (rps), higher values are better
+    lower_is_better = "latency" in metric
+
+    # No overlap: new's lower bound > baseline's upper bound means new value increased
     if new_ci_lower > baseline_ci_upper:
-        return "✅"  # Significant improvement
+        return "❌" if lower_is_better else "✅"
+    # No overlap: new's upper bound < baseline's lower bound means new value decreased
     elif new_ci_upper < baseline_ci_lower:
-        return "❌"  # Significant regression
+        return "✅" if lower_is_better else "❌"
     else:
         return "➖"  # CIs overlap, not significant
 
@@ -1575,16 +1544,10 @@ def _generate_single_variance_graph(
             new_values = []
 
             for run in baseline_runs:
-                value = run.get(
-                    metric, run.get(f'latency_{metric.split("_")[-1]}', 0.0)
-                )
-                baseline_values.append(value)
+                baseline_values.append(run.get(metric, 0.0))
 
             for run in new_runs:
-                value = run.get(
-                    metric, run.get(f'latency_{metric.split("_")[-1]}', 0.0)
-                )
-                new_values.append(value)
+                new_values.append(run.get(metric, 0.0))
 
             # Plot baseline runs
             if baseline_values:
