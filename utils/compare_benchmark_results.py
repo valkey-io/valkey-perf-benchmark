@@ -924,7 +924,7 @@ def _generate_summary(
                 row.get("new_ci_lower", 0.0),
                 row.get("new_ci_upper", 0.0),
                 row["change"],
-                row.get("metric", ""),
+                row["metric"],
             )
 
             test_label = f"{row['command']} {row['metric']} pipe={row['pipeline']} threads={row['io_threads']}"
@@ -1086,7 +1086,7 @@ def format_comparison_report(
                 row.get("new_ci_lower", 0.0),
                 row.get("new_ci_upper", 0.0),
                 row["change"],
-                row.get("metric", ""),
+                row["metric"],
             )
 
             # Format % change with uncertainty
@@ -1169,7 +1169,7 @@ def _get_significance_indicator(
     new_ci_lower: float,
     new_ci_upper: float,
     change_percent: float,
-    metric: str = "",
+    metric: str,
 ) -> str:
     """
     Determine significance indicator based on CI overlap.
