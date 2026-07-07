@@ -685,8 +685,12 @@ class TestRunMixedWorkload:
         self, mixed_runner, mixed_scenario
     ):
         """Every produced metric must be attributable to its sub-scenario id."""
+        # Use side_effect (not return_value) so each call returns a *fresh*
+        # dict. _create_mixed_metric mutates the dict returned by
+        # create_metrics; a shared return_value would cause every metric to
+        # end up as the same dict with the last-written test_id.
         metrics_processor = MagicMock()
-        metrics_processor.create_metrics.return_value = {"rps": 1000.0}
+        metrics_processor.create_metrics.side_effect = lambda *a, **kw: {"rps": 1000.0}
 
         with patch("valkey_benchmark.subprocess.Popen") as mock_popen:
             mock_popen.side_effect = [_popen_mock(_MIXED_CSV) for _ in range(3)]
@@ -734,8 +738,9 @@ class TestRunMixedWorkload:
         self, mixed_runner, mixed_scenario
     ):
         """Non-zero exit for one process must not poison metrics for others."""
+        # side_effect returns a fresh dict per call (see other test for why).
         metrics_processor = MagicMock()
-        metrics_processor.create_metrics.return_value = {"rps": 1000.0}
+        metrics_processor.create_metrics.side_effect = lambda *a, **kw: {"rps": 1000.0}
 
         with patch("valkey_benchmark.subprocess.Popen") as mock_popen:
             mock_popen.side_effect = [
