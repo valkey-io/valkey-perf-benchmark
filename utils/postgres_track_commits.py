@@ -13,12 +13,45 @@ import psycopg2
 from psycopg2.extras import Json
 
 
-def create_tables(conn):
-    """Create benchmark tracking tables if they don't exist."""
+CORE_TABLE_NAME = "benchmark_commits"
+
+
+def _resolve_module_table_name(module_name: Optional[str]) -> str:
+    """Resolve tracking table name from module name.
+
+    Args:
+        module_name: Module identifier (e.g., 'search'), or None for core.
+
+    Returns:
+        Table name: 'benchmark_module_commits_search' for module,
+        or CORE_TABLE_NAME ('benchmark_commits') if None.
+
+    Raises:
+        ValueError: If module_name is empty string (likely accidental omission).
+    """
+    if module_name is None:
+        return CORE_TABLE_NAME
+    if not module_name.strip():
+        raise ValueError("Module name cannot be empty.")
+    return f"benchmark_module_commits_{module_name}"
+
+
+def create_tables(conn, table_name: str = CORE_TABLE_NAME):
+    """Create benchmark tracking table if it doesn't exist.
+
+    Args:
+        conn: PostgreSQL connection.
+        table_name: Table name to create. Defaults to core 'benchmark_commits'.
+    """
+    if table_name == CORE_TABLE_NAME:
+        prefix = "_"
+    else:
+        prefix = f"_{table_name}_"
+
     with conn.cursor() as cur:
         cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS benchmark_commits (
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 id SERIAL PRIMARY KEY,
                 sha VARCHAR(40) NOT NULL,
                 timestamp TIMESTAMPTZ NOT NULL,
@@ -27,21 +60,20 @@ def create_tables(conn):
                 architecture VARCHAR(50),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
-                
-                -- Unique constraint: same commit + config + architecture can only exist once
-                CONSTRAINT unique_sha_config_arch UNIQUE(sha, config, architecture)
+
+                -- Unique constraint: same commit + config + architecture can only exist once                
+                CONSTRAINT unique{prefix}sha_config_arch UNIQUE(sha, config, architecture)
             );
             
-            -- Indexes for fast lookups
-            CREATE INDEX IF NOT EXISTS idx_commits_sha ON benchmark_commits(sha);
-            CREATE INDEX IF NOT EXISTS idx_commits_status ON benchmark_commits(status);
-            CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON benchmark_commits(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_commits_config ON benchmark_commits USING GIN(config);
-            CREATE INDEX IF NOT EXISTS idx_commits_sha_status ON benchmark_commits(sha, status);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_sha ON {table_name}(sha);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_status ON {table_name}(status);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_timestamp ON {table_name}(timestamp);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_config ON {table_name} USING GIN(config);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_sha_status ON {table_name}(sha, status);
         """
         )
     conn.commit()
-    print("Created/verified benchmark_commits table", file=sys.stderr)
+    print(f"Created/verified {table_name} table", file=sys.stderr)
 
 
 def _git_rev_list(repo: Path, branch: str) -> List[str]:
@@ -75,6 +107,7 @@ def mark_commits(
     status: str,
     architecture: str,
     config: Optional[dict] = None,
+    table_name: str = CORE_TABLE_NAME,
 ) -> None:
     """Mark commits with status, architecture, and config.
 
@@ -85,9 +118,10 @@ def mark_commits(
         status: Status to set ('in_progress', 'complete')
         architecture: Architecture (e.g., 'x86_64', 'arm64')
         config: Config content (dict/list) to track
+        table_name: Target table name. Defaults to core table.
     """
     # Ensure tables exist
-    create_tables(conn)
+    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         for sha in shas:
@@ -101,8 +135,8 @@ def mark_commits(
 
             # Insert or update
             cur.execute(
-                """
-                INSERT INTO benchmark_commits (sha, status, config, timestamp, architecture)
+                f"""
+                INSERT INTO {table_name} (sha, status, config, timestamp, architecture)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (sha, config, architecture) 
                 DO UPDATE SET 
@@ -127,19 +161,23 @@ def mark_commits(
     conn.commit()
 
 
-def cleanup_incomplete_commits(conn) -> int:
+def cleanup_incomplete_commits(conn, table_name: str = CORE_TABLE_NAME) -> int:
     """Remove all 'in_progress' entries.
+
+    Args:
+        conn: PostgreSQL connection
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         Number of entries cleaned up
     """
     # Ensure tables exist
-    create_tables(conn)
+    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         cur.execute(
-            """
-            DELETE FROM benchmark_commits 
+            f"""
+            DELETE FROM {table_name} 
             WHERE status = 'in_progress'
             RETURNING id
         """
@@ -149,7 +187,9 @@ def cleanup_incomplete_commits(conn) -> int:
     conn.commit()
 
     if count > 0:
-        print(f"Cleaned up {count} incomplete commits", file=sys.stderr)
+        print(
+            f"Cleaned up {count} incomplete commits from {table_name}", file=sys.stderr
+        )
 
     return count
 
@@ -229,7 +269,11 @@ def _is_config_array_subset(
 
 
 def _find_superset_configs(
-    conn, sha: str, target_config: dict, architecture: str
+    conn,
+    sha: str,
+    target_config: dict,
+    architecture: str,
+    table_name: str = CORE_TABLE_NAME,
 ) -> List[dict]:
     """Find completed configs for a commit that are supersets of target_config.
 
@@ -238,14 +282,15 @@ def _find_superset_configs(
         sha: Commit SHA to check
         target_config: Config to find supersets for
         architecture: Architecture to filter by
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of superset configs found
     """
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT config FROM benchmark_commits
+            f"""
+            SELECT config FROM {table_name}
             WHERE sha = %s AND status = 'complete' AND architecture = %s
         """,
             (sha, architecture),
@@ -274,6 +319,7 @@ def determine_commits_to_benchmark(
     architecture: str,
     config: Optional[dict] = None,
     enable_subset_detection: bool = True,
+    table_name: str = CORE_TABLE_NAME,
 ) -> List[str]:
     """Return up to max_commits SHAs not benchmarked with the given config and architecture.
 
@@ -285,15 +331,16 @@ def determine_commits_to_benchmark(
         architecture: Architecture to filter by
         config: Config content to check against
         enable_subset_detection: If True, skip commits that have superset configs completed
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of commit SHAs that need benchmarking
     """
     # Ensure tables exist
-    create_tables(conn)
+    create_tables(conn, table_name)
 
     # Clean up incomplete commits first
-    cleanup_incomplete_commits(conn)
+    cleanup_incomplete_commits(conn, table_name)
 
     # Get all commits from git
     all_shas = _git_rev_list(repo, branch)
@@ -302,16 +349,16 @@ def determine_commits_to_benchmark(
     with conn.cursor() as cur:
         if config:
             cur.execute(
-                """
-                SELECT DISTINCT sha FROM benchmark_commits
+                f"""
+                SELECT DISTINCT sha FROM {table_name}
                 WHERE status = 'complete' AND config = %s AND architecture = %s
             """,
                 (Json(config), architecture),
             )
         else:
             cur.execute(
-                """
-                SELECT DISTINCT sha FROM benchmark_commits
+                f"""
+                SELECT DISTINCT sha FROM {table_name}
                 WHERE status = 'complete' AND architecture = %s
             """,
                 (architecture,),
@@ -330,7 +377,9 @@ def determine_commits_to_benchmark(
 
         # Check for subset detection if enabled and config is provided
         if enable_subset_detection and config:
-            superset_configs = _find_superset_configs(conn, sha, config, architecture)
+            superset_configs = _find_superset_configs(
+                conn, sha, config, architecture, table_name
+            )
             if superset_configs:
                 subset_skipped += 1
                 # Format superset info for display
@@ -371,7 +420,10 @@ def determine_commits_to_benchmark(
 
 
 def get_commits_by_config(
-    conn, architecture: str, config: Optional[dict] = None
+    conn,
+    architecture: str,
+    config: Optional[dict] = None,
+    table_name: str = CORE_TABLE_NAME,
 ) -> List[Dict]:
     """Get commits filtered by architecture and config.
 
@@ -379,19 +431,20 @@ def get_commits_by_config(
         conn: PostgreSQL connection
         architecture: Architecture to filter by
         config: Config to filter by (None returns all for the architecture)
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of commit entries
     """
     # Ensure tables exist
-    create_tables(conn)
+    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         if config:
             cur.execute(
-                """
+                f"""
                 SELECT sha, timestamp, status, config, architecture
-                FROM benchmark_commits
+                FROM {table_name}
                 WHERE config = %s AND architecture = %s
                 ORDER BY timestamp DESC
             """,
@@ -399,9 +452,9 @@ def get_commits_by_config(
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT sha, timestamp, status, config, architecture
-                FROM benchmark_commits
+                FROM {table_name}
                 WHERE architecture = %s
                 ORDER BY timestamp DESC
             """,
@@ -423,23 +476,24 @@ def get_commits_by_config(
         return results
 
 
-def get_unique_configs(conn) -> List[dict]:
+def get_unique_configs(conn, table_name: str = CORE_TABLE_NAME) -> List[dict]:
     """Get list of unique config objects used.
 
     Args:
         conn: PostgreSQL connection
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of unique configs
     """
     # Ensure tables exist
-    create_tables(conn)
+    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT DISTINCT config
-            FROM benchmark_commits
+            FROM {table_name}
         """
         )
         return [row[0] for row in cur.fetchall()]
@@ -490,6 +544,15 @@ def main():
         help="Architecture (e.g., x86_64, arm64). Auto-detected if not provided.",
     )
 
+    # Module argument (optional — when provided, uses module-specific table)
+    parser.add_argument(
+        "--module-name",
+        type=str,
+        default=None,
+        help="Module name (e.g., 'search'). When provided, operations target "
+        "'benchmark_module_commits_{module_name}' table instead of core.",
+    )
+
     # Arguments for mark operation
     parser.add_argument(
         "--status", choices=["in_progress", "complete"], help="Status to set (for mark)"
@@ -517,6 +580,11 @@ def main():
     if not args.architecture:
         args.architecture = platform.machine()
         print(f"Auto-detected architecture: {args.architecture}", file=sys.stderr)
+
+    # Resolve module table name (None means core table)
+    module_name = args.module_name
+    table_name = _resolve_module_table_name(module_name)
+    print(f"Using table: {table_name}", file=sys.stderr)
 
     # Connect to PostgreSQL
     try:
@@ -556,6 +624,7 @@ def main():
                 architecture=args.architecture,
                 config=config,
                 enable_subset_detection=enable_subset_detection,
+                table_name=table_name,
             )
             print(" ".join(commits))
 
@@ -585,6 +654,7 @@ def main():
                 status=args.status,
                 architecture=args.architecture,
                 config=config,
+                table_name=table_name,
             )
 
         elif args.operation == "query":
@@ -594,7 +664,7 @@ def main():
                     config = json.load(f)
 
             if args.list_configs:
-                configs = get_unique_configs(conn)
+                configs = get_unique_configs(conn, table_name)
                 print(f"Unique configs used: {len(configs)}", file=sys.stderr)
                 for i, cfg in enumerate(configs, 1):
                     summary = ""
@@ -603,7 +673,9 @@ def main():
                         summary = f"(io-threads={first.get('io-threads', 'N/A')}, cluster={first.get('cluster_mode', 'N/A')}, tls={first.get('tls_mode', 'N/A')})"
                     print(f"  Config {i}: {summary}", file=sys.stderr)
             else:
-                commits = get_commits_by_config(conn, args.architecture, config)
+                commits = get_commits_by_config(
+                    conn, args.architecture, config, table_name
+                )
                 count = len(commits)
                 if config:
                     summary = ""
@@ -620,7 +692,7 @@ def main():
                     )
 
         elif args.operation == "cleanup":
-            cleanup_incomplete_commits(conn)
+            cleanup_incomplete_commits(conn, table_name)
 
     finally:
         conn.close()

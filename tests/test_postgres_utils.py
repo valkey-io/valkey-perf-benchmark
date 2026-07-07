@@ -9,10 +9,14 @@ from datetime import datetime
 
 from psycopg2.extras import Json
 
+import pytest
+
 from utils.postgres_track_commits import (
     _is_list_subset,
     _is_config_subset,
     _is_config_array_subset,
+    _resolve_module_table_name,
+    CORE_TABLE_NAME,
 )
 from utils.push_to_postgres import (
     CONFIG_NAME_MAX_LENGTH,
@@ -430,3 +434,20 @@ class TestResolveTableName:
 
     def test_neither_provided_returns_none(self):
         assert resolve_table_name(None, None) is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_module_table_name (postgres_track_commits)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveModuleTableName:
+    def test_module_name_generates_table(self):
+        assert _resolve_module_table_name("search") == "benchmark_module_commits_search"
+
+    def test_none_returns_core_table_name(self):
+        assert _resolve_module_table_name(None) == CORE_TABLE_NAME
+
+    def test_whitespace_only_raises_value_error(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            _resolve_module_table_name("   ")
