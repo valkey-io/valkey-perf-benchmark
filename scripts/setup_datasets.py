@@ -5,11 +5,15 @@ import argparse
 import csv
 import json
 import logging
+import random
 import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+# Alphabet used for deterministic random-word generation (fuzzy datasets)
+ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
 # Constants for query generation
 STOP_WORDS = {
@@ -47,6 +51,42 @@ STOP_WORDS = {
     "will",
     "with",
 }
+
+
+def _generate_random_word(rng: random.Random, min_length: int, max_length: int) -> str:
+    """Generate a deterministic random word using the supplied local RNG.
+
+    A local RNG (not the global one) is used so that fuzzy dataset generation
+    remains reproducible regardless of other transforms.
+    """
+    word_length = rng.randint(min_length, max_length)
+    return "".join(rng.choices(ALPHABET, k=word_length))
+
+
+def _apply_fuzzy_edit(word: str, edit_type: str, rng: random.Random) -> str:
+    """Apply a single Levenshtein edit (insert/delete/substitute) to ``word``.
+
+    Uses the supplied local RNG for reproducibility. Substitute retries until a
+    different character is produced to avoid no-op edits.
+    """
+    if len(word) < 2:
+        return word
+
+    if edit_type == "insert":
+        pos = rng.randint(0, len(word))
+        return word[:pos] + rng.choice(ALPHABET) + word[pos:]
+    if edit_type == "delete":
+        pos = rng.randint(0, len(word) - 1)
+        return word[:pos] + word[pos + 1 :]
+    if edit_type == "substitute":
+        pos = rng.randint(0, len(word) - 1)
+        original_char = word[pos]
+        new_char = rng.choice(ALPHABET)
+        while new_char == original_char and len(ALPHABET) > 1:
+            new_char = rng.choice(ALPHABET)
+        return word[:pos] + new_char + word[pos + 1 :]
+
+    return word
 
 
 def download_wikipedia(output_dir: Path) -> Path:
@@ -183,6 +223,48 @@ def apply_transforms(
                 parts.extend(terms)
                 content = " ".join(parts)
 
+        elif ttype == "fuzzy":
+            # Generate fuzzy-match dataset: multiple misspelling variants per base term.
+            # Structure mirrors "expansion": variant_count × docs_per_variant × term_count.
+            # Variant 0 is the correctly-spelled base word; other variants apply
+            # ``target_distance`` Levenshtein edits (insert/delete/substitute).
+            variant_count = t.get("variant_count", 5)
+            docs_per_variant = t.get("docs_per_variant", 20)
+            term_count = t.get("term_count", 100)
+            min_word_length = t.get("min_word_length", 5)
+            max_word_length = t.get("max_word_length", 6)
+            target_distance = t.get("target_distance", 1)
+
+            # Determine which term / variant this document belongs to
+            docs_per_term = variant_count * docs_per_variant
+            term_id = ((doc_num - 1) // docs_per_term) + 1
+            within_term = (doc_num - 1) % docs_per_term
+            variant_id = within_term // docs_per_variant
+
+            # Deterministic base word seeded by term_id
+            term_rng = random.Random(term_id)
+            base_word = _generate_random_word(
+                term_rng, min_word_length, max_word_length
+            )
+
+            if variant_id == 0:
+                # First variant is the correctly-spelled base word (matches queries)
+                variant = base_word
+            else:
+                # Deterministic per-(term_id, variant_id) seed. We combine the two
+                # into a single integer (safe for variant_count up to 1_000_000)
+                # so the RNG is stable across Python versions - hash() of tuples
+                # is deterministic within one process but its algorithm is an
+                # implementation detail.
+                variant_seed = term_id * 1_000_000 + variant_id
+                variant_rng = random.Random(variant_seed)
+                variant = base_word
+                for _ in range(target_distance):
+                    edit_type = variant_rng.choice(["insert", "delete", "substitute"])
+                    variant = _apply_fuzzy_edit(variant, edit_type, variant_rng)
+
+            content = variant
+
         elif ttype == "expansion":
             # Generate expansion variants: prefix_a suffix_a, prefix_aa suffix_aa, etc.
             # Tests wildcard expansion with multiple documents per variant
@@ -210,16 +292,12 @@ def apply_transforms(
 
         elif ttype == "numeric_range":
             # Generate random numeric values in range
-            import random
-
             min_val = t.get("min", 0)
             max_val = t.get("max", 100)
             content = str(random.uniform(min_val, max_val))
 
         elif ttype == "tag_list":
             # Generate tag combinations
-            import random
-
             tags = t.get("tags", ["tag1", "tag2", "tag3"])
             # Select 1-2 random tags and join with pipe
             num_tags = random.randint(1, min(2, len(tags)))
@@ -456,6 +534,33 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
             writer.writerow(["term"])
             for term_id in range(1, num_queries + 1):
                 writer.writerow([f"term{term_id:03d}"])
+
+        elif query_type == "fuzzy":
+            # Generate the correctly-spelled base words for fuzzy datasets.
+            # Uses the same term_id → base_word mapping as the fuzzy transform,
+            # so each query is guaranteed to have matching variants in the dataset.
+            min_length = config.get("min_word_length", 5)
+            max_length = config.get("max_word_length", 6)
+
+            writer.writerow(["term"])
+            for term_id in range(1, num_queries + 1):
+                term_rng = random.Random(term_id)
+                base_word = _generate_random_word(term_rng, min_length, max_length)
+                writer.writerow([base_word])
+
+        elif query_type == "tag_only":
+            # Generate tag-only queries for composed TAG filter tests.
+            # Rotates through the provided tag list to produce ``doc_count`` queries.
+            tags = config.get(
+                "tags", ["electronics", "books", "clothing", "food", "sports"]
+            )
+            if not tags:
+                logging.error(f"tag_only query {filename} needs non-empty 'tags' list")
+                return output
+
+            writer.writerow(["category"])
+            for i in range(num_queries):
+                writer.writerow([tags[i % len(tags)]])
 
     logging.info(f"Complete: {filename} ({num_queries} queries)")
     return output
