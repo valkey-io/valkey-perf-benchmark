@@ -14,6 +14,8 @@ from psycopg2.extras import Json
 
 
 CORE_TABLE_NAME = "benchmark_commits"
+DEFAULT_CONFIG_SETS = [{}]
+DEFAULT_PROFILING_SETS = [{"enabled": False}]
 
 
 def _resolve_module_table_name(module_name: Optional[str]) -> str:
@@ -50,14 +52,55 @@ def _extract_config_name(config_file: Optional[str]) -> Optional[str]:
     return Path(config_file).name
 
 
+def _apply_config_overrides(
+    cfg: dict,
+    cluster_mode: Optional[str] = None,
+    skip_config_set: bool = False,
+    skip_profiling: bool = False,
+) -> dict:
+    """Apply runtime overrides to a config dict.
+
+    Args:
+        cfg: Config dictionary to modify.
+        cluster_mode: If provided, overwrites 'cluster_mode' field ('true' or 'false').
+        skip_config_set: If True, sets 'config_sets' to default [{}].
+        skip_profiling: If True, sets 'profiling_sets' to default [{"enabled": False}].
+
+    Returns:
+        Modified config dict.
+    """
+    if cluster_mode is not None:
+        if cluster_mode.lower() == "true":
+            cfg["cluster_mode"] = True
+        elif cluster_mode.lower() == "false":
+            cfg["cluster_mode"] = False
+    if skip_config_set:
+        cfg["config_sets"] = DEFAULT_CONFIG_SETS
+    if skip_profiling:
+        if "profiling_sets" not in cfg:
+            print(
+                "Warning: --skip-profiling passed but no 'profiling_sets' in config",
+                file=sys.stderr,
+            )
+        cfg["profiling_sets"] = DEFAULT_PROFILING_SETS
+    return cfg
+
+
 def _load_config(
-    config_file: Optional[str], module_name: Optional[str] = None
+    config_file: Optional[str],
+    module_name: Optional[str] = None,
+    cluster_mode: Optional[str] = None,
+    skip_config_set: bool = False,
+    skip_profiling: bool = False,
 ) -> Optional[dict]:
-    """Load config from file and optionally inject config_name for module tracking.
+    """Load config from file, apply runtime overrides, and optionally transform for module.
 
     Args:
         config_file: Path to config JSON file, or None.
-        module_name: If provided, injects config_name into the config set.
+        module_name: If provided, strips large keys and injects config_name.
+        cluster_mode: If provided, overwrites 'cluster_mode' field in config dicts.
+        skip_config_set: If True, sets 'config_sets' to default [{}].
+        skip_profiling: If True, sets 'profiling_sets' to default [{"enabled": False}].
 
     Returns:
         Loaded config (dict or list), or None if no config_file.
@@ -68,8 +111,20 @@ def _load_config(
     with open(config_file, "r") as f:
         config = json.load(f)
 
+    # Apply runtime overrides to config dicts (both core and module)
+    if isinstance(config, dict):
+        config = _apply_config_overrides(
+            config, cluster_mode, skip_config_set, skip_profiling
+        )
+    elif isinstance(config, list):
+        config = [
+            _apply_config_overrides(cfg, cluster_mode, skip_config_set, skip_profiling)
+            for cfg in config
+            if isinstance(cfg, dict)
+        ]
+
     # For module tracking, strip large keys and add config_name
-    if module_name and config is not None:
+    if module_name:
         config_name = _extract_config_name(config_file)
         skip_keys = {"test_groups", "dataset_generation", "query_generation"}
 
@@ -609,6 +664,29 @@ def main():
         "'benchmark_module_commits_{module_name}' table instead of core.",
     )
 
+    # Runtime config overrides (applied to stored config for accurate tracking)
+    parser.add_argument(
+        "--cluster-mode-filter",
+        choices=["false", "true"],
+        default=None,
+        help="Filter which cluster_mode to run. "
+        "'false' runs only non-cluster tests, 'true' runs only cluster tests. "
+        "If not specified, runs all modes in config. "
+        "Used with configs that have cluster_mode as array (e.g., [false, true]).",
+    )
+    parser.add_argument(
+        "--skip-config-set",
+        action="store_true",
+        help="Remove config_sets from stored config (when benchmarking without config sets).",
+    )
+    parser.add_argument(
+        "--skip-profiling",
+        action="store_true",
+        help="Skip profiling and run single test pass only. "
+        "Overrides profiling_sets from config file. "
+        "Use for quick benchmarks or when profiling overhead is unwanted.",
+    )
+
     # Arguments for mark operation
     parser.add_argument(
         "--status", choices=["in_progress", "complete"], help="Status to set (for mark)"
@@ -666,7 +744,13 @@ def main():
                 )
                 sys.exit(1)
 
-            config = _load_config(args.config_file, module_name)
+            config = _load_config(
+                args.config_file,
+                module_name,
+                args.cluster_mode_filter,
+                args.skip_config_set,
+                args.skip_profiling,
+            )
 
             enable_subset_detection = not args.disable_subset_detection
             commits = determine_commits_to_benchmark(
@@ -695,7 +779,13 @@ def main():
                 )
                 sys.exit(1)
 
-            config = _load_config(args.config_file, module_name)
+            config = _load_config(
+                args.config_file,
+                module_name,
+                args.cluster_mode_filter,
+                args.skip_config_set,
+                args.skip_profiling,
+            )
 
             mark_commits(
                 conn=conn,
@@ -708,7 +798,13 @@ def main():
             )
 
         elif args.operation == "query":
-            config = _load_config(args.config_file, module_name)
+            config = _load_config(
+                args.config_file,
+                module_name,
+                args.cluster_mode_filter,
+                args.skip_config_set,
+                args.skip_profiling,
+            )
 
             if args.list_configs:
                 configs = get_unique_configs(conn, table_name)
