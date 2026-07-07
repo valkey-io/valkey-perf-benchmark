@@ -554,3 +554,50 @@ class TestLoadConfig:
         assert "dataset_generation" not in result[2]
         assert result[1]["test_name"] == "A"
         assert result[2]["test_name"] == "B"
+
+    def test_cluster_mode_override_true(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text('[{"cluster_mode": [false, true], "port": 6379}]')
+        result = _load_config(str(config_file), cluster_mode="true")
+        assert result[0]["cluster_mode"] is True
+        assert result[0]["port"] == 6379
+
+    def test_cluster_mode_filter_none_keeps_original(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text('[{"cluster_mode": [false, true], "port": 6379}]')
+        result = _load_config(str(config_file), cluster_mode=None)
+        assert result[0]["cluster_mode"] == [False, True]
+
+    def test_skip_config_set_overwrites_with_default(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text('[{"config_sets": [{"threads": 1}], "port": 6379}]')
+        result = _load_config(str(config_file), skip_config_set=True)
+        assert result[0]["config_sets"] == [{}]
+        assert result[0]["port"] == 6379
+
+    def test_skip_config_set_false_keeps_field(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text('[{"config_sets": [{"threads": 1}], "port": 6379}]')
+        result = _load_config(str(config_file), skip_config_set=False)
+        assert "config_sets" in result[0]
+
+    def test_skip_profiling_overwrites_with_default(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text(
+            '[{"profiling_sets": [{"enabled": false}, '
+            '{"enabled": true, "mode": "wall-time", "sampling_freq": 999}], '
+            '"port": 6379}]'
+        )
+        result = _load_config(str(config_file), skip_profiling=True)
+        assert result[0]["profiling_sets"] == [{"enabled": False}]
+        assert result[0]["port"] == 6379
+
+    def test_skip_profiling_false_keeps_original(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text(
+            '[{"profiling_sets": [{"enabled": false}, '
+            '{"enabled": true, "mode": "wall-time"}], "port": 6379}]'
+        )
+        result = _load_config(str(config_file), skip_profiling=False)
+        assert len(result[0]["profiling_sets"]) == 2
+        assert result[0]["profiling_sets"][1]["enabled"] is True
