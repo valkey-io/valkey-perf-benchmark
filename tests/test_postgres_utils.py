@@ -16,6 +16,8 @@ from utils.postgres_track_commits import (
     _is_config_subset,
     _is_config_array_subset,
     _resolve_module_table_name,
+    _extract_config_name,
+    _load_config,
     CORE_TABLE_NAME,
 )
 from utils.push_to_postgres import (
@@ -451,3 +453,104 @@ class TestResolveModuleTableName:
     def test_whitespace_only_raises_value_error(self):
         with pytest.raises(ValueError, match="cannot be empty"):
             _resolve_module_table_name("   ")
+
+
+# ---------------------------------------------------------------------------
+# _extract_config_name (postgres_track_commits)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractConfigName:
+    def test_extracts_name_from_path(self):
+        assert (
+            _extract_config_name("configs/fts-benchmarks-arm.json")
+            == "fts-benchmarks-arm.json"
+        )
+
+    def test_extracts_name_from_filename_only(self):
+        assert _extract_config_name("my-config.json") == "my-config.json"
+
+    def test_none_returns_none(self):
+        assert _extract_config_name(None) is None
+
+
+# ---------------------------------------------------------------------------
+# _load_config (postgres_track_commits)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadConfig:
+    def test_no_config_file_returns_none(self):
+        assert _load_config(None) is None
+
+    def test_no_config_file_with_module_returns_none(self):
+        assert _load_config(None, module_name="search") is None
+
+    def test_loads_list_config_without_module(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text(
+            '[{"test_name": "FTS", "test_groups": [1, 2], "port": 6379}]'
+        )
+        result = _load_config(str(config_file), None)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "test_groups" in result[0]
+        assert "config_name" not in result[0]
+
+    def test_loads_dict_config_without_module(self, tmp_path):
+        config_file = tmp_path / "test.json"
+        config_file.write_text('{"test_name": "FTS", "test_groups": [1, 2]}')
+        result = _load_config(str(config_file), None)
+        assert isinstance(result, dict)
+        assert "test_groups" in result
+        assert "config_name" not in result
+
+    def test_module_list_strips_keys_and_adds_config_name(self, tmp_path):
+        config_file = tmp_path / "fts-benchmarks-arm.json"
+        config_file.write_text(
+            '[{"test_name": "FTS", "test_groups": [1], '
+            '"dataset_generation": {"x": 1}, "query_generation": {"y": 2}, '
+            '"port": 6379}]'
+        )
+        result = _load_config(str(config_file), module_name="search")
+        assert isinstance(result, list)
+        # config_name dict prepended
+        assert result[0] == {"config_name": "fts-benchmarks-arm.json"}
+        # original dict stripped of large keys
+        assert "test_groups" not in result[1]
+        assert "dataset_generation" not in result[1]
+        assert "query_generation" not in result[1]
+        # keeps other keys
+        assert result[1]["test_name"] == "FTS"
+        assert result[1]["port"] == 6379
+
+    def test_module_dict_strips_keys_and_adds_config_name(self, tmp_path):
+        config_file = tmp_path / "my-config.json"
+        config_file.write_text(
+            '{"test_name": "FTS", "test_groups": [1], '
+            '"dataset_generation": {"x": 1}, "query_generation": {"y": 2}, '
+            '"port": 6379}'
+        )
+        result = _load_config(str(config_file), module_name="search")
+        assert isinstance(result, dict)
+        assert result["config_name"] == "my-config.json"
+        assert "test_groups" not in result
+        assert "dataset_generation" not in result
+        assert "query_generation" not in result
+        assert result["test_name"] == "FTS"
+        assert result["port"] == 6379
+
+    def test_module_list_multiple_dicts_all_stripped(self, tmp_path):
+        config_file = tmp_path / "multi.json"
+        config_file.write_text(
+            '[{"test_name": "A", "test_groups": [1]}, '
+            '{"test_name": "B", "dataset_generation": {"x": 1}}]'
+        )
+        result = _load_config(str(config_file), module_name="search")
+        # config_name prepended + 2 stripped dicts
+        assert len(result) == 3
+        assert result[0] == {"config_name": "multi.json"}
+        assert "test_groups" not in result[1]
+        assert "dataset_generation" not in result[2]
+        assert result[1]["test_name"] == "A"
+        assert result[2]["test_name"] == "B"

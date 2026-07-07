@@ -36,6 +36,62 @@ def _resolve_module_table_name(module_name: Optional[str]) -> str:
     return f"benchmark_module_commits_{module_name}"
 
 
+def _extract_config_name(config_file: Optional[str]) -> Optional[str]:
+    """Extract config name from config file path (basename with extension).
+
+    Args:
+        config_file: Path to config file (e.g., 'configs/fts-benchmarks-arm.json').
+
+    Returns:
+        Config filename (e.g., 'fts-benchmarks-arm.json'), or None if no config_file.
+    """
+    if config_file is None:
+        return None
+    return Path(config_file).name
+
+
+def _load_config(
+    config_file: Optional[str], module_name: Optional[str] = None
+) -> Optional[dict]:
+    """Load config from file and optionally inject config_name for module tracking.
+
+    Args:
+        config_file: Path to config JSON file, or None.
+        module_name: If provided, injects config_name into the config set.
+
+    Returns:
+        Loaded config (dict or list), or None if no config_file.
+    """
+    if not config_file:
+        return None
+
+    with open(config_file, "r") as f:
+        config = json.load(f)
+
+    # For module tracking, strip large keys and add config_name
+    if module_name and config is not None:
+        config_name = _extract_config_name(config_file)
+        skip_keys = {"test_groups", "dataset_generation", "query_generation"}
+
+        if isinstance(config, dict):
+            config = {k: v for k, v in config.items() if k not in skip_keys}
+            config["config_name"] = config_name
+        elif isinstance(config, list):
+            config = [
+                {k: v for k, v in cfg.items() if k not in skip_keys}
+                for cfg in config
+                if isinstance(cfg, dict)
+            ]
+            config.insert(0, {"config_name": config_name})
+
+        print(
+            f"Injected config_name='{config_name}' into config set",
+            file=sys.stderr,
+        )
+
+    return config
+
+
 def create_tables(conn, table_name: str = CORE_TABLE_NAME):
     """Create benchmark tracking table if it doesn't exist.
 
@@ -610,10 +666,7 @@ def main():
                 )
                 sys.exit(1)
 
-            config = None
-            if args.config_file:
-                with open(args.config_file, "r") as f:
-                    config = json.load(f)
+            config = _load_config(args.config_file, module_name)
 
             enable_subset_detection = not args.disable_subset_detection
             commits = determine_commits_to_benchmark(
@@ -642,10 +695,7 @@ def main():
                 )
                 sys.exit(1)
 
-            config = None
-            if args.config_file:
-                with open(args.config_file, "r") as f:
-                    config = json.load(f)
+            config = _load_config(args.config_file, module_name)
 
             mark_commits(
                 conn=conn,
@@ -658,10 +708,7 @@ def main():
             )
 
         elif args.operation == "query":
-            config = None
-            if args.config_file:
-                with open(args.config_file, "r") as f:
-                    config = json.load(f)
+            config = _load_config(args.config_file, module_name)
 
             if args.list_configs:
                 configs = get_unique_configs(conn, table_name)
