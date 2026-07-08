@@ -85,6 +85,8 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
             schema[field] = f"VARCHAR(255) NOT NULL"
         elif field == "module_commit":
             schema[field] = "VARCHAR(255)"
+        elif field == "module_commit_timestamp":
+            schema[field] = "TIMESTAMPTZ"
         elif field == "config_set":
             schema[field] = "JSONB"
         elif field == "config_name":
@@ -255,9 +257,8 @@ def convert_metrics_to_rows(
             if column in ["id", "created_at"]:
                 # Skip auto-generated columns
                 continue
-            elif column == "timestamp":
-                # Special handling for timestamp
-                timestamp_str = metric.get("timestamp", "")
+            elif column in ("timestamp", "module_commit_timestamp"):
+                timestamp_str = metric.get(column, "")
                 if timestamp_str:
                     try:
                         timestamp_obj = datetime.fromisoformat(
@@ -373,7 +374,7 @@ def process_commit_metrics(
     dry_run: bool = False,
     test_type: str = "core",
     module_commit: Optional[str] = None,
-    max_timestamp: Optional[str] = None,
+    module_commit_timestamp: Optional[str] = None,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
@@ -384,7 +385,7 @@ def process_commit_metrics(
         dry_run: If True, only show what would be inserted without actually inserting.
         test_type: Test type identifier (e.g., 'core', 'fts') for filtering in dashboards.
         module_commit: Module commit SHA (for tracking module-specific versions).
-        max_timestamp: Override timestamp with max(core_ts, module_ts) for 2D tracking.
+        module_commit_timestamp: Module commit timestamp (ISO 8601). Overrides metric timestamp.
 
     Returns:
         Tuple of (number of metrics processed, whether any records were skipped).
@@ -406,8 +407,8 @@ def process_commit_metrics(
         metric["test_type"] = test_type
         if module_commit:
             metric["module_commit"] = module_commit
-        if max_timestamp:
-            metric["timestamp"] = max_timestamp
+        if module_commit_timestamp:
+            metric["module_commit_timestamp"] = module_commit_timestamp
 
     print(f"\n=== Processing {commit_dir.name} ===")
     count = push_to_postgres(metrics_data, conn, table_name, dry_run)
@@ -464,8 +465,9 @@ def main() -> None:
         help="Module commit SHA (for tracking module-specific versions)",
     )
     parser.add_argument(
-        "--max-timestamp",
-        help="Override timestamp with max(core_ts, module_ts) ISO 8601 string",
+        "--module-commit-timestamp",
+        default=None,
+        help="Module commit timestamp (ISO 8601). Stored as separate column for module tracking.",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
@@ -545,7 +547,7 @@ def main() -> None:
                     args.dry_run,
                     test_type=args.test_type,
                     module_commit=args.module_commit,
-                    max_timestamp=args.max_timestamp,
+                    module_commit_timestamp=args.module_commit_timestamp,
                 )
                 total_processed += count
                 if was_skipped:
