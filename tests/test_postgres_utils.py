@@ -601,3 +601,27 @@ class TestLoadConfig:
         result = _load_config(str(config_file), skip_profiling=False)
         assert len(result[0]["profiling_sets"]) == 2
         assert result[0]["profiling_sets"][1]["enabled"] is True
+
+    def test_module_commit_timestamp_parsed_to_datetime(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc123",
+                "module_commit_timestamp": "2024-06-15T10:30:00+00:00",
+            }
+        ]
+        columns = ["timestamp", "commit", "module_commit_timestamp"]
+        rows, skipped = convert_metrics_to_rows(metrics, columns)
+        assert len(rows) == 1
+        assert isinstance(rows[0][0], datetime)
+        assert isinstance(rows[0][2], datetime)
+
+    def test_module_commit_timestamp_not_in_schema_when_absent(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc123",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert "module_commit_timestamp" not in schema
