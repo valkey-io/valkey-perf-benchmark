@@ -272,6 +272,37 @@ def mark_commits(
     conn.commit()
 
 
+def _build_cleanup_query(
+    table_name: str,
+    config: Optional[dict] = None,
+    architecture: Optional[str] = None,
+) -> tuple:
+    """Build the DELETE query and params for cleanup.
+
+    Args:
+        table_name: Target table name.
+        config: If provided, scope cleanup to this config.
+        architecture: If provided (and config is set), scope to this architecture.
+
+    Returns:
+        Tuple of (query_string, params_list).
+    """
+    conditions = ["status = 'in_progress'"]
+    params = []
+
+    if config is not None:
+        conditions.append("config = %s")
+        params.append(Json(config))
+        # Only filter by architecture when config is provided
+        if architecture is not None:
+            conditions.append("architecture = %s")
+            params.append(architecture)
+
+    where_clause = " AND ".join(conditions)
+    query = f"DELETE FROM {table_name} WHERE {where_clause} RETURNING id"
+    return query, params
+
+
 def cleanup_incomplete_commits(
     conn,
     table_name: str = CORE_TABLE_NAME,
@@ -297,24 +328,10 @@ def cleanup_incomplete_commits(
     # Ensure tables exist
     create_tables(conn, table_name)
 
-    conditions = ["status = 'in_progress'"]
-    params = []
-
-    if config is not None:
-        conditions.append("config = %s")
-        params.append(Json(config))
-        # Only filter by architecture when config is provided
-        if architecture is not None:
-            conditions.append("architecture = %s")
-            params.append(architecture)
-
-    where_clause = " AND ".join(conditions)
+    query, params = _build_cleanup_query(table_name, config, architecture)
 
     with conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM {table_name} WHERE {where_clause} RETURNING id",
-            params,
-        )
+        cur.execute(query, params)
         count = cur.rowcount
 
     conn.commit()

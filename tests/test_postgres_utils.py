@@ -18,6 +18,7 @@ from utils.postgres_track_commits import (
     _resolve_module_table_name,
     _extract_config_name,
     _load_config,
+    _build_cleanup_query,
     CORE_TABLE_NAME,
 )
 from utils.push_to_postgres import (
@@ -625,3 +626,49 @@ class TestLoadConfig:
         ]
         schema = analyze_metrics_schema(metrics)
         assert "module_commit_timestamp" not in schema
+
+
+# ---------------------------------------------------------------------------
+# _build_cleanup_query (postgres_track_commits)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCleanupQuery:
+    def test_no_filters_deletes_all_in_progress(self):
+        query, params = _build_cleanup_query("benchmark_commits")
+        assert (
+            query
+            == "DELETE FROM benchmark_commits WHERE status = 'in_progress' RETURNING id"
+        )
+        assert params == []
+
+    def test_config_and_architecture_adds_both_filters(self):
+        config = [{"port": 6379}]
+        query, params = _build_cleanup_query(
+            "benchmark_commits", config=config, architecture="aarch64"
+        )
+        assert (
+            query
+            == "DELETE FROM benchmark_commits WHERE status = 'in_progress' AND config = %s AND architecture = %s RETURNING id"
+        )
+        assert len(params) == 2
+        assert params[0].adapted == config
+        assert params[1] == "aarch64"
+
+    def test_architecture_without_config_is_ignored(self):
+        query, params = _build_cleanup_query(
+            "benchmark_commits", config=None, architecture="aarch64"
+        )
+        assert (
+            query
+            == "DELETE FROM benchmark_commits WHERE status = 'in_progress' RETURNING id"
+        )
+        assert params == []
+
+    def test_uses_module_table_name(self):
+        query, params = _build_cleanup_query("benchmark_module_commits_search")
+        assert (
+            query
+            == "DELETE FROM benchmark_module_commits_search WHERE status = 'in_progress' RETURNING id"
+        )
+        assert params == []
