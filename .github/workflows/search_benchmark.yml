@@ -3,30 +3,25 @@ name: Valkey Search Benchmark
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Branch to benchmark"
-        required: false
-        default: "main"
-        type: string
       num_runs:
         description: "Number of runs to benchmark"
         required: false
         default: "1"
         type: string
-      max_pairs:
-        description: "Max commit pairs to benchmark per run"
-        required: false
-        default: "1"
-        type: string
-      max_core_commits:
-        description: "Max core commits to scan (limits populate)"
-        required: false
-        default: "3"
-        type: string
       max_module_commits:
-        description: "Max module commits to scan (limits populate)"
+        description: "Max module commits to scan"
         required: false
         default: "3"
+        type: string
+      core_commit:
+        description: "Manual core commit SHA (overrides latest HEAD)"
+        required: false
+        default: ""
+        type: string
+      module_commits:
+        description: "Manual module commit SHAs (space-separated, skips determine)"
+        required: false
+        default: ""
         type: string
   schedule:
     - cron: "0 9 * * *"
@@ -61,19 +56,17 @@ jobs:
       CORE_DIR: "valkey"
       CORE_PATH: "${{ github.workspace }}/valkey"
       # Benchmark configuration
-      PERF_BENCHMARK_REPO: "valkey-io/valkey-perf-benchmark"
-      PERF_BENCHMARK_BRANCH: "main"
+      PERF_BENCHMARK_REPO: "carol-ggg/valkey-perf-benchmark"
+      PERF_BENCHMARK_BRANCH: "module2"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
       # Run parameters
       NUM_RUN: ${{ inputs.num_runs || '5' }}
-      MAX_PAIRS: ${{ inputs.max_pairs || '1' }}
-      MAX_CORE_COMMITS: ${{ inputs.max_core_commits || '3' }}
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
-      IDLE_TIMEOUT: "60000"
       CLUSTER_MODE: ""
       SKIP_CONFIG_SET: ""
+      SKIP_PROFILING: ""
     runs-on: [self-hosted, valkey-search-arm]
     timeout-minutes: 7200
     steps:
@@ -169,103 +162,116 @@ jobs:
           fi
 
       # =========================================================================
-      # Commit tracking: populate queue and fetch next pair to benchmark
+      # Commit tracking: determine module commits to benchmark
       # =========================================================================
+
+      - name: Resolve latest core commit
+        id: core_commit
+        working-directory: ${{ env.CORE_DIR }}
+        run: |
+          if [[ -n "${{ inputs.core_commit }}" ]]; then
+            CORE_SHA="${{ inputs.core_commit }}"
+            echo "Using manual core commit: $CORE_SHA"
+          else
+            CORE_SHA=$(git rev-parse HEAD)
+            echo "Using latest core commit: $CORE_SHA"
+          fi
+          echo "sha=$CORE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Cleanup stale rows from previous runs
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
         env:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
-          python utils/module_postgres_track_commits.py cleanup \
+          python utils/postgres_track_commits.py cleanup \
             --module-name "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
-            ${CLUSTER_MODE:+--cluster-mode "$CLUSTER_MODE"} \
+            ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \
-            --idle-timeout "$IDLE_TIMEOUT" \
+            ${SKIP_PROFILING:+--skip-profiling} \
             --host ${{ secrets.RDS_HOST }} \
             --port 5432 \
             --database postgres \
             --username ${{ secrets.PG_USERNAME }} \
             --password "$PGPASSWORD"
 
-      - name: Populate commit queue
+      - name: Determine module commits to benchmark
+        id: determine_commits
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
         env:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
-          python utils/module_postgres_track_commits.py populate \
-            --module-name "$MODULE_NAME" \
-            --repo "$CORE_PATH" \
-            --branch "$CORE_BRANCH" \
-            --module-repo "$MODULE_PATH" \
-            --module-branch "$MODULE_BRANCH" \
-            --config-file "$CONFIG_FILE" \
-            ${CLUSTER_MODE:+--cluster-mode "$CLUSTER_MODE"} \
-            ${SKIP_CONFIG_SET:+--skip-config-set} \
-            --max-core-commits "$MAX_CORE_COMMITS" \
-            --max-module-commits "$MAX_MODULE_COMMITS" \
-            --idle-timeout "$IDLE_TIMEOUT" \
-            --host ${{ secrets.RDS_HOST }} \
-            --port 5432 \
-            --database postgres \
-            --username ${{ secrets.PG_USERNAME }} \
-            --password "$PGPASSWORD"
+          if [[ -n "${{ inputs.module_commits }}" ]]; then
+            COMMITS="${{ inputs.module_commits }}"
+            echo "Using manual module commits: $COMMITS"
+          else
+            COMMITS=$(python utils/postgres_track_commits.py determine \
+              --module-name "$MODULE_NAME" \
+              --repo "$MODULE_PATH" \
+              --branch "$MODULE_BRANCH" \
+              --config-file "$CONFIG_FILE" \
+              ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
+              ${SKIP_CONFIG_SET:+--skip-config-set} \
+              ${SKIP_PROFILING:+--skip-profiling} \
+              --max-commits "$MAX_MODULE_COMMITS" \
+              --host ${{ secrets.RDS_HOST }} \
+              --port 5432 \
+              --database postgres \
+              --username ${{ secrets.PG_USERNAME }} \
+              --password "$PGPASSWORD")
+          fi
 
-      - name: Fetch next commit pair
-        id: fetch_pair
-        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        env:
-          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
-        run: |
-          OUTPUT=$(python utils/module_postgres_track_commits.py fetch-next \
-            --module-name "$MODULE_NAME" \
-            --max-pairs "$MAX_PAIRS" \
-            --config-file "$CONFIG_FILE" \
-            ${CLUSTER_MODE:+--cluster-mode "$CLUSTER_MODE"} \
-            ${SKIP_CONFIG_SET:+--skip-config-set} \
-            --idle-timeout "$IDLE_TIMEOUT" \
-            --host ${{ secrets.RDS_HOST }} \
-            --port 5432 \
-            --database postgres \
-            --username ${{ secrets.PG_USERNAME }} \
-            --password "$PGPASSWORD")
+          echo "commits=$COMMITS" >> "$GITHUB_OUTPUT"
 
-          PAIRS=$(echo "$OUTPUT" | sed -n '1p')
-          TIMESTAMPS=$(echo "$OUTPUT" | sed -n '2p')
-
-          echo "pairs=$PAIRS" >> "$GITHUB_OUTPUT"
-          echo "timestamps=$TIMESTAMPS" >> "$GITHUB_OUTPUT"
-
-          if [[ -z "$PAIRS" ]]; then
-            echo "No pending pairs to benchmark. Exiting."
+          if [[ -z "$COMMITS" ]]; then
+            echo "No pending module commits to benchmark. Exiting."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Pairs to benchmark: $PAIRS"
-            echo "Timestamps: $TIMESTAMPS"
+            echo "Module commits to benchmark: $COMMITS"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # =========================================================================
-      # Loop over pairs: checkout, build, benchmark, push, mark each pair
-      # =========================================================================
-
-      - name: Benchmark all pairs
-        if: steps.fetch_pair.outputs.skip == 'false'
+      - name: Mark module commits as in progress
+        if: steps.determine_commits.outputs.skip == 'false'
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
         env:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
-          read -ra PAIRS_ARR <<< "${{ steps.fetch_pair.outputs.pairs }}"
-          read -ra TS_ARR <<< "${{ steps.fetch_pair.outputs.timestamps }}"
+          python utils/postgres_track_commits.py mark \
+            --module-name "$MODULE_NAME" \
+            --repo "$MODULE_PATH" \
+            --config-file "$CONFIG_FILE" \
+            ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
+            ${SKIP_CONFIG_SET:+--skip-config-set} \
+            ${SKIP_PROFILING:+--skip-profiling} \
+            --status in_progress \
+            --host ${{ secrets.RDS_HOST }} \
+            --port 5432 \
+            --database postgres \
+            --username ${{ secrets.PG_USERNAME }} \
+            --password "$PGPASSWORD" \
+            ${{ steps.determine_commits.outputs.commits }}
 
-          for i in "${!PAIRS_ARR[@]}"; do
-            PAIR="${PAIRS_ARR[$i]}"
-            MAX_TS="${TS_ARR[$i]}"
-            CORE_SHA="${PAIR%%:*}"
-            MODULE_SHA="${PAIR##*:}"
+      # =========================================================================
+      # Loop over module commits: checkout, build, benchmark, push, mark complete
+      # =========================================================================
+
+      - name: Benchmark module commits
+        if: steps.determine_commits.outputs.skip == 'false'
+        env:
+          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
+        run: |
+          CORE_SHA="${{ steps.core_commit.outputs.sha }}"
+          read -ra MODULE_SHAS <<< "${{ steps.determine_commits.outputs.commits }}"
+
+          for MODULE_SHA in "${MODULE_SHAS[@]}"; do
             echo "==========================================================="
-            echo "Processing pair: core=$CORE_SHA, module=$MODULE_SHA, max_ts=$MAX_TS"
+            echo "Processing: core=$CORE_SHA, module=$MODULE_SHA"
             echo "==========================================================="
+
+            # --- Get module commit timestamp ---
+            MODULE_TS=$(git -C "$MODULE_PATH" show -s --format=%cI "$MODULE_SHA")
+            echo "Module commit timestamp: $MODULE_TS"
 
             # --- Checkout module SHA and build ---
             cd "$MODULE_PATH"
@@ -289,7 +295,7 @@ jobs:
             # --- Run benchmark ---
             cd "$PERF_BENCHMARK_PATH"
             RESULTS_DIR="results/${CORE_SHA}_${MODULE_SHA}"
-            echo "Running search benchmarks for $CORE_SHA:$MODULE_SHA..."
+            echo "Running search benchmarks for core=$CORE_SHA module=$MODULE_SHA..."
             python benchmark.py \
               --module "$MODULE_NAME" \
               --valkey-path "$CORE_PATH" \
@@ -301,9 +307,11 @@ jobs:
               --module-path "$MODULE_PATH/.build-release/libsearch.so" \
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
               ${SKIP_CONFIG_SET:+--skip-config-set} \
+              ${SKIP_PROFILING:+--skip-profiling} \
               --results-dir "$RESULTS_DIR" \
               --runs $NUM_RUN
 
+            # --- Push results to postgres ---
             python utils/push_to_postgres.py \
               --results-dir "./$RESULTS_DIR" \
               --host ${{ secrets.RDS_HOST }} \
@@ -314,23 +322,25 @@ jobs:
               --module "$MODULE_NAME" \
               --test-type fts \
               --module-commit "$MODULE_SHA" \
-              --max-timestamp "$MAX_TS"
+              --module-commit-timestamp "$MODULE_TS"
 
-            # --- Mark this pair complete ---
-            python utils/module_postgres_track_commits.py mark-complete \
+            # --- Mark this module commit complete ---
+            python utils/postgres_track_commits.py mark \
               --module-name "$MODULE_NAME" \
+              --repo "$MODULE_PATH" \
               --config-file "$CONFIG_FILE" \
-              ${CLUSTER_MODE:+--cluster-mode "$CLUSTER_MODE"} \
+              ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
               ${SKIP_CONFIG_SET:+--skip-config-set} \
-              --idle-timeout "$IDLE_TIMEOUT" \
+              ${SKIP_PROFILING:+--skip-profiling} \
+              --status complete \
               --host ${{ secrets.RDS_HOST }} \
               --port 5432 \
               --database postgres \
               --username ${{ secrets.PG_USERNAME }} \
               --password "$PGPASSWORD" \
-              "$PAIR"
+              "$MODULE_SHA"
 
-            echo "✓ Completed pair: $CORE_SHA:$MODULE_SHA"
+            echo "✓ Completed module commit: $MODULE_SHA"
 
             # --- Clean up for next iteration ---
             pkill -f valkey || echo "No valkey processes to kill"
@@ -361,12 +371,12 @@ jobs:
         env:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
-          python utils/module_postgres_track_commits.py cleanup \
+          python utils/postgres_track_commits.py cleanup \
             --module-name "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
-            ${CLUSTER_MODE:+--cluster-mode "$CLUSTER_MODE"} \
+            ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \
-            --idle-timeout "$IDLE_TIMEOUT" \
+            ${SKIP_PROFILING:+--skip-profiling} \
             --host ${{ secrets.RDS_HOST }} \
             --port 5432 \
             --database postgres \
