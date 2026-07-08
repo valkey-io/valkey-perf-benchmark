@@ -272,12 +272,24 @@ def mark_commits(
     conn.commit()
 
 
-def cleanup_incomplete_commits(conn, table_name: str = CORE_TABLE_NAME) -> int:
-    """Remove all 'in_progress' entries.
+def cleanup_incomplete_commits(
+    conn,
+    table_name: str = CORE_TABLE_NAME,
+    config: Optional[dict] = None,
+    architecture: Optional[str] = None,
+) -> int:
+    """Remove 'in_progress' entries, optionally scoped by config and architecture.
+
+    When config is provided, only matching in_progress rows are deleted
+    (architecture is also used as a filter in this case). When config is not
+    provided, all in_progress rows are deleted regardless of architecture.
 
     Args:
         conn: PostgreSQL connection
         table_name: Target table name. Defaults to core table.
+        config: If provided, only clean rows matching this config.
+        architecture: If provided (and config is set), only clean rows matching
+                      this architecture. Ignored when config is None.
 
     Returns:
         Number of entries cleaned up
@@ -285,21 +297,37 @@ def cleanup_incomplete_commits(conn, table_name: str = CORE_TABLE_NAME) -> int:
     # Ensure tables exist
     create_tables(conn, table_name)
 
+    conditions = ["status = 'in_progress'"]
+    params = []
+
+    if config is not None:
+        conditions.append("config = %s")
+        params.append(Json(config))
+        # Only filter by architecture when config is provided
+        if architecture is not None:
+            conditions.append("architecture = %s")
+            params.append(architecture)
+
+    where_clause = " AND ".join(conditions)
+
     with conn.cursor() as cur:
         cur.execute(
-            f"""
-            DELETE FROM {table_name} 
-            WHERE status = 'in_progress'
-            RETURNING id
-        """
+            f"DELETE FROM {table_name} WHERE {where_clause} RETURNING id",
+            params,
         )
         count = cur.rowcount
 
     conn.commit()
 
     if count > 0:
+        filter_info = ""
+        if config or architecture:
+            filter_info = (
+                f" (config={'yes' if config else 'any'}, arch={architecture or 'any'})"
+            )
         print(
-            f"Cleaned up {count} incomplete commits from {table_name}", file=sys.stderr
+            f"Cleaned up {count} incomplete commits from {table_name}{filter_info}",
+            file=sys.stderr,
         )
 
     return count
@@ -451,7 +479,9 @@ def determine_commits_to_benchmark(
     create_tables(conn, table_name)
 
     # Clean up incomplete commits first
-    cleanup_incomplete_commits(conn, table_name)
+    cleanup_incomplete_commits(
+        conn, table_name, config=config, architecture=architecture
+    )
 
     # Get all commits from git
     all_shas = _git_rev_list(repo, branch)
@@ -835,7 +865,21 @@ def main():
                     )
 
         elif args.operation == "cleanup":
-            cleanup_incomplete_commits(conn, table_name)
+            if args.config_file:
+                # Scoped cleanup: only rows matching this config + architecture
+                config = _load_config(
+                    args.config_file,
+                    module_name,
+                    args.cluster_mode_filter,
+                    args.skip_config_set,
+                    args.skip_profiling,
+                )
+                cleanup_incomplete_commits(
+                    conn, table_name, config=config, architecture=args.architecture
+                )
+            else:
+                # No config file: clean all in_progress rows
+                cleanup_incomplete_commits(conn, table_name)
 
     finally:
         conn.close()
