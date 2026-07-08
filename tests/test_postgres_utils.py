@@ -226,7 +226,21 @@ class TestAnalyzeMetricsSchema:
         ]
         schema = analyze_metrics_schema(metrics)
         assert schema["commit"] == "VARCHAR(255) NOT NULL"
-        assert schema["command"] == "VARCHAR(255) NOT NULL"
+        assert schema["command"] == "TEXT NOT NULL"
+
+    def test_error_and_dataset_are_text(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc",
+                "command": "GET",
+                "error": "something failed",
+                "dataset": "/path/to/data.json",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert schema["error"] == "TEXT"
+        assert schema["dataset"] == "TEXT"
 
     def test_numeric_field_types(self):
         metrics = [{"rps": 150000.0, "pipeline": 1, "timestamp": "t", "commit": "c"}]
@@ -371,17 +385,6 @@ class TestModuleCommitSchema:
                 "timestamp": "2024-01-01T00:00:00",
                 "commit": "abc123",
                 "module_commit": "def456",
-            }
-        ]
-        schema = analyze_metrics_schema(metrics)
-        assert schema["module_commit"] == "VARCHAR(255)"
-
-    def test_module_commit_varchar255_regardless_of_length(self):
-        metrics = [
-            {
-                "timestamp": "2024-01-01T00:00:00",
-                "commit": "abc",
-                "module_commit": "ab",
             }
         ]
         schema = analyze_metrics_schema(metrics)
