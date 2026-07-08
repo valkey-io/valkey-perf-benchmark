@@ -81,8 +81,10 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
     for field in sorted(all_fields):
         if field == "timestamp":
             schema[field] = "TIMESTAMPTZ NOT NULL"
-        elif field in ["commit", "command"]:
-            schema[field] = f"VARCHAR(255) NOT NULL"
+        elif field == "commit":
+            schema[field] = "VARCHAR(255) NOT NULL"
+        elif field == "command":
+            schema[field] = "TEXT NOT NULL"
         elif field == "module_commit":
             schema[field] = "VARCHAR(255)"
         elif field == "module_commit_timestamp":
@@ -93,6 +95,8 @@ def analyze_metrics_schema(metrics_data: List[Dict[str, Any]]) -> Dict[str, str]
             schema[field] = f"VARCHAR({CONFIG_NAME_MAX_LENGTH})"
         elif field in ["group_description", "scenario_description"]:
             schema[field] = f"VARCHAR({DESCRIPTION_MAX_LENGTH})"
+        elif field in ["error", "dataset"]:
+            schema[field] = "TEXT"
         else:
             sample_value = field_samples.get(field)
             column_type = detect_field_type(sample_value)
