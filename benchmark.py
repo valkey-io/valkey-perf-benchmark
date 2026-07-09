@@ -184,6 +184,19 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--module-commit",
+        type=str,
+        default=None,
+        help="Module commit SHA (written to metrics for tracking module versions).",
+    )
+    parser.add_argument(
+        "--module-commit-timestamp",
+        type=str,
+        default=None,
+        help="Module commit timestamp ISO 8601 (written to metrics for module tracking).",
+    )
+
+    parser.add_argument(
         "--skip-config-set",
         action="store_true",
         help="Skip CONFIG SET commands during benchmark initialization. "
@@ -471,6 +484,8 @@ def run_benchmark_matrix(
     module_path: Optional[str] = None,
     uses_test_groups: bool = False,
     config_name: Optional[str] = None,
+    module_commit: Optional[str] = None,
+    module_commit_timestamp: Optional[str] = None,
 ) -> None:
     """Orchestrate benchmark execution for all configurations."""
     if args.module:
@@ -523,6 +538,8 @@ def run_benchmark_matrix(
             architecture,
             client_cpu_ranges,
             config_name,
+            module_commit,
+            module_commit_timestamp,
         )
 
     # Cleanup
@@ -595,6 +612,8 @@ def _execute_benchmark_run(
     architecture,
     client_cpu_ranges,
     config_name=None,
+    module_commit=None,
+    module_commit_timestamp=None,
 ):
     """Execute a single benchmark run with specific configuration."""
     cfg = exec_config["cfg"]
@@ -663,6 +682,8 @@ def _execute_benchmark_run(
             uses_test_groups=uses_test_groups,
             repository=args.repository,
             config_name=config_name,
+            module_commit=module_commit,
+            module_commit_timestamp=module_commit_timestamp,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]
@@ -820,6 +841,8 @@ def main() -> None:
                 module_path=module_path,
                 uses_test_groups=uses_test_groups,
                 config_name=Path(args.config).name if args.module else None,
+                module_commit=args.module_commit,
+                module_commit_timestamp=args.module_commit_timestamp,
             )
 
 
