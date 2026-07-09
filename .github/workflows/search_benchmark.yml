@@ -222,13 +222,11 @@ jobs:
           fi
 
           echo "commits=$COMMITS" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
 
           if [[ -z "$COMMITS" ]]; then
             echo "No pending module commits to benchmark. Exiting."
             echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Module commits to benchmark: $COMMITS"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Mark module commits as in progress
