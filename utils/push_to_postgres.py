@@ -377,8 +377,6 @@ def process_commit_metrics(
     table_name: str,
     dry_run: bool = False,
     test_type: str = "core",
-    module_commit: Optional[str] = None,
-    module_commit_timestamp: Optional[str] = None,
 ) -> Tuple[int, bool]:
     """Process metrics for a single commit directory.
 
@@ -388,8 +386,6 @@ def process_commit_metrics(
         table_name: Name of the PostgreSQL table to insert into.
         dry_run: If True, only show what would be inserted without actually inserting.
         test_type: Test type identifier (e.g., 'core', 'fts') for filtering in dashboards.
-        module_commit: Module commit SHA (for tracking module-specific versions).
-        module_commit_timestamp: Module commit timestamp (ISO 8601). Overrides metric timestamp.
 
     Returns:
         Tuple of (number of metrics processed, whether any records were skipped).
@@ -406,13 +402,9 @@ def process_commit_metrics(
         print(f"Skipping {commit_dir.name}: empty metrics")
         return 0, True
 
-    # Augment metrics with test_type, module_commit, and timestamp override at push time
+    # Augment metrics with test_type at push time
     for metric in metrics_data:
         metric["test_type"] = test_type
-        if module_commit:
-            metric["module_commit"] = module_commit
-        if module_commit_timestamp:
-            metric["module_commit_timestamp"] = module_commit_timestamp
 
     print(f"\n=== Processing {commit_dir.name} ===")
     count = push_to_postgres(metrics_data, conn, table_name, dry_run)
@@ -463,15 +455,6 @@ def main() -> None:
         "--test-type",
         default="core",
         help="Test type identifier (e.g., 'core', 'fts') for filtering in dashboards",
-    )
-    parser.add_argument(
-        "--module-commit",
-        help="Module commit SHA (for tracking module-specific versions)",
-    )
-    parser.add_argument(
-        "--module-commit-timestamp",
-        default=None,
-        help="Module commit timestamp (ISO 8601). Stored as separate column for module tracking.",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
@@ -550,8 +533,6 @@ def main() -> None:
                     args.table_name,
                     args.dry_run,
                     test_type=args.test_type,
-                    module_commit=args.module_commit,
-                    module_commit_timestamp=args.module_commit_timestamp,
                 )
                 total_processed += count
                 if was_skipped:

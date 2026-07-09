@@ -303,6 +303,8 @@ jobs:
               --config "$CONFIG_FILE" \
               --mode both \
               --module-path "$MODULE_PATH/.build-release/libsearch.so" \
+              --module-commit "$MODULE_SHA" \
+              --module-commit-timestamp "$MODULE_TS" \
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
               ${SKIP_CONFIG_SET:+--skip-config-set} \
               ${SKIP_PROFILING:+--skip-profiling} \
@@ -318,9 +320,7 @@ jobs:
               --username ${{ secrets.PG_USERNAME }} \
               --password "$PGPASSWORD" \
               --module "$MODULE_NAME" \
-              --test-type fts \
-              --module-commit "$MODULE_SHA" \
-              --module-commit-timestamp "$MODULE_TS"
+              --test-type fts
 
             # --- Mark this module commit complete ---
             python utils/postgres_track_commits.py mark \
