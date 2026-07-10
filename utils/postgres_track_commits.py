@@ -4,6 +4,7 @@
 import argparse
 import json
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,8 @@ def _resolve_module_table_name(module_name: Optional[str]) -> str:
         return CORE_TABLE_NAME
     if not module_name.strip():
         raise ValueError("Module name cannot be empty.")
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module_name):
+        raise ValueError(f"Invalid module_name: '{module_name}'")
     return f"benchmark_module_commits_{module_name}"
 
 
@@ -57,17 +60,14 @@ def _apply_config_overrides(
     cluster_mode: Optional[str] = None,
     skip_config_set: bool = False,
     skip_profiling: bool = False,
-) -> dict:
-    """Apply runtime overrides to a config dict.
+) -> None:
+    """Apply runtime overrides to a config dict in-place.
 
     Args:
-        cfg: Config dictionary to modify.
+        cfg: Config dictionary to modify in-place.
         cluster_mode: If provided, overwrites 'cluster_mode' field ('true' or 'false').
         skip_config_set: If True, sets 'config_sets' to default [{}].
         skip_profiling: If True, sets 'profiling_sets' to default [{"enabled": False}].
-
-    Returns:
-        Modified config dict.
     """
     if cluster_mode is not None:
         if cluster_mode.lower() == "true":
@@ -77,13 +77,7 @@ def _apply_config_overrides(
     if skip_config_set:
         cfg["config_sets"] = DEFAULT_CONFIG_SETS
     if skip_profiling:
-        if "profiling_sets" not in cfg:
-            print(
-                "Warning: --skip-profiling passed but no 'profiling_sets' in config",
-                file=sys.stderr,
-            )
         cfg["profiling_sets"] = DEFAULT_PROFILING_SETS
-    return cfg
 
 
 def _load_config(
@@ -113,15 +107,13 @@ def _load_config(
 
     # Apply runtime overrides to config dicts (both core and module)
     if isinstance(config, dict):
-        config = _apply_config_overrides(
-            config, cluster_mode, skip_config_set, skip_profiling
-        )
+        _apply_config_overrides(config, cluster_mode, skip_config_set, skip_profiling)
     elif isinstance(config, list):
-        config = [
-            _apply_config_overrides(cfg, cluster_mode, skip_config_set, skip_profiling)
-            for cfg in config
-            if isinstance(cfg, dict)
-        ]
+        for cfg in config:
+            if isinstance(cfg, dict):
+                _apply_config_overrides(
+                    cfg, cluster_mode, skip_config_set, skip_profiling
+                )
 
     # For module tracking, strip large keys and add config_name
     if module_name:

@@ -3,11 +3,6 @@ name: Valkey Search Benchmark
 on:
   workflow_dispatch:
     inputs:
-      num_runs:
-        description: "Number of runs to benchmark"
-        required: false
-        default: "1"
-        type: string
       max_module_commits:
         description: "Max module commits to scan"
         required: false
@@ -62,7 +57,6 @@ jobs:
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
       # Run parameters
-      NUM_RUN: ${{ inputs.num_runs || '5' }}
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
       CLUSTER_MODE: ""
       SKIP_CONFIG_SET: ""
@@ -308,8 +302,7 @@ jobs:
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
               ${SKIP_CONFIG_SET:+--skip-config-set} \
               ${SKIP_PROFILING:+--skip-profiling} \
-              --results-dir "$RESULTS_DIR" \
-              --runs $NUM_RUN
+              --results-dir "$RESULTS_DIR"
 
             # --- Push results to postgres ---
             python utils/push_to_postgres.py \

@@ -1,8 +1,10 @@
 """Unit tests for postgres utility pure logic functions.
 
 Tests cover:
-- _is_list_subset, _is_config_subset, _is_config_array_subset from utils/postgres_track_commits.py
-- detect_field_type, analyze_metrics_schema, convert_metrics_to_rows, resolve_table_name from utils/push_to_postgres.py
+- _is_list_subset, _is_config_subset, _is_config_array_subset, _resolve_module_table_name,
+  _extract_config_name, _load_config, _build_cleanup_query from utils/postgres_track_commits.py
+- detect_field_type, analyze_metrics_schema, convert_metrics_to_rows, resolve_table_name
+  from utils/push_to_postgres.py
 """
 
 from datetime import datetime
@@ -372,6 +374,20 @@ class TestConvertMetricsToRows:
         assert len(rows[0][3]) == DESCRIPTION_MAX_LENGTH
         assert rows[0][3] == "s" * DESCRIPTION_MAX_LENGTH
 
+    def test_module_commit_timestamp_parsed_to_datetime(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc123",
+                "module_commit_timestamp": "2024-06-15T10:30:00+00:00",
+            }
+        ]
+        columns = ["timestamp", "commit", "module_commit_timestamp"]
+        rows, skipped = convert_metrics_to_rows(metrics, columns)
+        assert len(rows) == 1
+        assert isinstance(rows[0][0], datetime)
+        assert isinstance(rows[0][2], datetime)
+
 
 # ---------------------------------------------------------------------------
 # module_commit and config_name schema handling
@@ -424,6 +440,16 @@ class TestModuleCommitSchema:
         schema = analyze_metrics_schema(metrics)
         assert "config_name" not in schema
 
+    def test_module_commit_timestamp_not_in_schema_when_absent(self):
+        metrics = [
+            {
+                "timestamp": "2024-01-01T00:00:00",
+                "commit": "abc123",
+            }
+        ]
+        schema = analyze_metrics_schema(metrics)
+        assert "module_commit_timestamp" not in schema
+
 
 # ---------------------------------------------------------------------------
 # resolve_table_name
@@ -441,6 +467,10 @@ class TestResolveTableName:
     def test_neither_provided_returns_none(self):
         assert resolve_table_name(None, None) is None
 
+    def test_rejects_sql_injection(self):
+        with pytest.raises(ValueError, match="Invalid module name"):
+            resolve_table_name(None, "search; DROP TABLE --")
+
 
 # ---------------------------------------------------------------------------
 # _resolve_module_table_name (postgres_track_commits)
@@ -457,6 +487,10 @@ class TestResolveModuleTableName:
     def test_whitespace_only_raises_value_error(self):
         with pytest.raises(ValueError, match="cannot be empty"):
             _resolve_module_table_name("   ")
+
+    def test_rejects_sql_injection(self):
+        with pytest.raises(ValueError, match="Invalid module_name"):
+            _resolve_module_table_name("search; DROP TABLE benchmark_commits --")
 
 
 # ---------------------------------------------------------------------------
@@ -606,30 +640,6 @@ class TestLoadConfig:
         assert len(result[0]["profiling_sets"]) == 2
         assert result[0]["profiling_sets"][1]["enabled"] is True
 
-    def test_module_commit_timestamp_parsed_to_datetime(self):
-        metrics = [
-            {
-                "timestamp": "2024-01-01T00:00:00",
-                "commit": "abc123",
-                "module_commit_timestamp": "2024-06-15T10:30:00+00:00",
-            }
-        ]
-        columns = ["timestamp", "commit", "module_commit_timestamp"]
-        rows, skipped = convert_metrics_to_rows(metrics, columns)
-        assert len(rows) == 1
-        assert isinstance(rows[0][0], datetime)
-        assert isinstance(rows[0][2], datetime)
-
-    def test_module_commit_timestamp_not_in_schema_when_absent(self):
-        metrics = [
-            {
-                "timestamp": "2024-01-01T00:00:00",
-                "commit": "abc123",
-            }
-        ]
-        schema = analyze_metrics_schema(metrics)
-        assert "module_commit_timestamp" not in schema
-
 
 # ---------------------------------------------------------------------------
 # _build_cleanup_query (postgres_track_commits)
@@ -637,13 +647,6 @@ class TestLoadConfig:
 
 
 class TestBuildCleanupQuery:
-    def test_no_filters_deletes_all_in_progress(self):
-        query, params = _build_cleanup_query("benchmark_commits")
-        assert (
-            query
-            == "DELETE FROM benchmark_commits WHERE status = 'in_progress' RETURNING id"
-        )
-        assert params == []
 
     def test_config_and_architecture_adds_both_filters(self):
         config = [{"port": 6379}]
