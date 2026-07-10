@@ -10,6 +10,7 @@ will automatically create new database columns.
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -422,6 +423,8 @@ def resolve_table_name(
     if table_name:
         return table_name
     if module:
+        if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module):
+            raise ValueError(f"Invalid module name: '{module}'")
         return f"benchmark_metrics_{module}"
     return None
 
