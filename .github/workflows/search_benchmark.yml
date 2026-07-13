@@ -138,7 +138,7 @@ jobs:
           gcc --version
           g++ --version
           
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.txt
 
       - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
         working-directory: valkey_ram
