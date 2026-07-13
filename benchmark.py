@@ -23,6 +23,7 @@ from utils.cpu_utils import (
 
 # ---------- Constants --------------------------------------------------------
 DEFAULT_RESULTS_ROOT = Path("results")
+DEFAULT_CONFIG_FILE = "./configs/benchmark-configs.json"
 REQUIRED_KEYS = [
     "keyspacelen",
     "data_sizes",
@@ -125,10 +126,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default="./configs/benchmark-configs.json",
+        default=None,
         help=(
             "Path to benchmark-configs.json. Each entry is an explicit benchmark "
             "configuration and combinations are not generated automatically."
+            "Defaults to './configs/benchmark-configs.json' if not provided."
         ),
     )
     parser.add_argument(
@@ -762,6 +764,13 @@ def main() -> None:
         sys.exit(1)
 
     # Load and validate configs
+    if args.config is None:
+        args.config = DEFAULT_CONFIG_FILE
+        print(
+            f"WARNING: --config not specified, using default: '{DEFAULT_CONFIG_FILE}'",
+            file=sys.stderr,
+        )
+
     configs_list = load_configs(args.config)
 
     if not configs_list:
