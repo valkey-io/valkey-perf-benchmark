@@ -139,17 +139,20 @@ def _load_config(
     return config
 
 
-def create_tables(conn, table_name: str = CORE_TABLE_NAME):
+def create_tables(
+    conn, table_name: str = CORE_TABLE_NAME, module_name: Optional[str] = None
+):
     """Create benchmark tracking table if it doesn't exist.
 
     Args:
         conn: PostgreSQL connection.
         table_name: Table name to create. Defaults to core 'benchmark_commits'.
+        module_name: Module name for short index prefix. If None, uses core prefix.
     """
-    if table_name == CORE_TABLE_NAME:
+    if module_name is None:
         prefix = "_"
     else:
-        prefix = f"_{table_name}_"
+        prefix = f"_{module_name}_"
 
     with conn.cursor() as cur:
         cur.execute(
@@ -164,7 +167,7 @@ def create_tables(conn, table_name: str = CORE_TABLE_NAME):
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
 
-                -- Unique constraint: same commit + config + architecture can only exist once                
+                -- Unique constraint: same commit + config + architecture can only exist once
                 CONSTRAINT unique{prefix}sha_config_arch UNIQUE(sha, config, architecture)
             );
             
@@ -223,8 +226,6 @@ def mark_commits(
         config: Config content (dict/list) to track
         table_name: Target table name. Defaults to core table.
     """
-    # Ensure tables exist
-    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         for sha in shas:
@@ -317,8 +318,6 @@ def cleanup_incomplete_commits(
     Returns:
         Number of entries cleaned up
     """
-    # Ensure tables exist
-    create_tables(conn, table_name)
 
     query, params = _build_cleanup_query(table_name, config, architecture)
 
@@ -484,8 +483,6 @@ def determine_commits_to_benchmark(
     Returns:
         List of commit SHAs that need benchmarking
     """
-    # Ensure tables exist
-    create_tables(conn, table_name)
 
     # Clean up incomplete commits first
     cleanup_incomplete_commits(
@@ -586,8 +583,6 @@ def get_commits_by_config(
     Returns:
         List of commit entries
     """
-    # Ensure tables exist
-    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         if config:
@@ -636,8 +631,6 @@ def get_unique_configs(conn, table_name: str = CORE_TABLE_NAME) -> List[dict]:
     Returns:
         List of unique configs
     """
-    # Ensure tables exist
-    create_tables(conn, table_name)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -776,6 +769,9 @@ def main():
         sys.exit(1)
 
     try:
+        # Create table once after connection
+        create_tables(conn, table_name, module_name)
+
         if args.operation == "determine":
             if not args.repo:
                 print(
