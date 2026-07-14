@@ -458,18 +458,15 @@ class TestModuleCommitSchema:
 
 class TestResolveTableName:
 
-    def test_explicit_table_name_takes_precedence(self):
-        assert resolve_table_name("custom_table", "search") == "custom_table"
+    def test_core_returns_benchmark_metrics(self):
+        assert resolve_table_name("core") == "benchmark_metrics"
 
     def test_module_generates_table_name(self):
-        assert resolve_table_name(None, "search") == "benchmark_metrics_search"
-
-    def test_core_module_returns_none(self):
-        assert resolve_table_name(None, "core") is None
+        assert resolve_table_name("search") == "benchmark_metrics_search"
 
     def test_rejects_sql_injection(self):
         with pytest.raises(ValueError, match="Invalid module name"):
-            resolve_table_name(None, "search; DROP TABLE --")
+            resolve_table_name("search; DROP TABLE --")
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +476,7 @@ class TestResolveTableName:
 
 class TestResolveModuleTableName:
     def test_module_name_generates_table(self):
-        assert _resolve_module_table_name("search") == "benchmark_module_commits_search"
+        assert _resolve_module_table_name("search") == "benchmark_commits_search"
 
     def test_core_returns_core_table_name(self):
         assert _resolve_module_table_name("core") == CORE_TABLE_NAME
@@ -672,9 +669,9 @@ class TestBuildCleanupQuery:
         assert params == []
 
     def test_uses_module_table_name(self):
-        query, params = _build_cleanup_query("benchmark_module_commits_search")
+        query, params = _build_cleanup_query("benchmark_commits_search")
         assert (
             query
-            == "DELETE FROM benchmark_module_commits_search WHERE status = 'in_progress' RETURNING id"
+            == "DELETE FROM benchmark_commits_search WHERE status = 'in_progress' RETURNING id"
         )
         assert params == []
