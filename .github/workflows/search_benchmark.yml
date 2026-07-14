@@ -180,7 +180,7 @@ jobs:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           python utils/postgres_track_commits.py cleanup \
-            --module-name "$MODULE_NAME" \
+            --module "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \
@@ -202,7 +202,7 @@ jobs:
             echo "Using manual module commits: $COMMITS"
           else
             COMMITS=$(python utils/postgres_track_commits.py determine \
-              --module-name "$MODULE_NAME" \
+              --module "$MODULE_NAME" \
               --repo "$MODULE_PATH" \
               --branch "$MODULE_BRANCH" \
               --config-file "$CONFIG_FILE" \
@@ -232,7 +232,7 @@ jobs:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           python utils/postgres_track_commits.py mark \
-            --module-name "$MODULE_NAME" \
+            --module "$MODULE_NAME" \
             --repo "$MODULE_PATH" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
@@ -319,7 +319,7 @@ jobs:
 
             # --- Mark this module commit complete ---
             python utils/postgres_track_commits.py mark \
-              --module-name "$MODULE_NAME" \
+              --module "$MODULE_NAME" \
               --repo "$MODULE_PATH" \
               --config-file "$CONFIG_FILE" \
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
@@ -365,7 +365,7 @@ jobs:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           python utils/postgres_track_commits.py cleanup \
-            --module-name "$MODULE_NAME" \
+            --module "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \

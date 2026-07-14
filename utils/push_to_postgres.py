@@ -415,17 +415,26 @@ def process_commit_metrics(
     return count, False
 
 
-def resolve_table_name(table_name: Optional[str], module: str) -> Optional[str]:
-    """Resolve table name: use explicit --table-name if provided,
-    otherwise auto-generate from --module as 'benchmark_metrics_{module}'.
-    If module is 'core', requires explicit --table-name."""
-    if table_name:
-        return table_name
-    if module and module != "core":
-        if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module):
-            raise ValueError(f"Invalid module name: '{module}'")
-        return f"benchmark_metrics_{module}"
-    return None
+CORE_METRICS_TABLE = "benchmark_metrics"
+
+
+def resolve_table_name(module_name: str) -> str:
+    """Resolve metrics table name from module name.
+
+    Args:
+        module_name: Module identifier (e.g., 'search', 'core').
+
+    Returns:
+        'benchmark_metrics' for 'core', or 'benchmark_metrics_{module_name}' otherwise.
+
+    Raises:
+        ValueError: If module_name is invalid.
+    """
+    if module_name == "core":
+        return CORE_METRICS_TABLE
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module_name):
+        raise ValueError(f"Invalid module name: '{module_name}'")
+    return f"{CORE_METRICS_TABLE}_{module_name}"
 
 
 def main() -> None:
@@ -443,17 +452,11 @@ def main() -> None:
         "--password", help="Database password (not required for dry-run)"
     )
     parser.add_argument(
-        "--table-name",
-        help="PostgreSQL table name (required if --module is not provided; "
-        "auto-generated as 'benchmark_metrics_<module>' when --module is given; "
-        "if both --table-name and --module are provided, --table-name takes precedence)",
-    )
-    parser.add_argument(
         "--module",
         default="core",
-        help="Module name (e.g., 'search'). Defaults to 'core' which requires "
-        "explicit --table-name. Other values auto-generate table name as "
-        "'benchmark_metrics_{module}'.",
+        help="Module name (e.g., 'search'). Defaults to 'core' which uses "
+        "'benchmark_metrics' table. Other values use "
+        "'benchmark_metrics_{module_name}' table.",
     )
     parser.add_argument(
         "--test-type",
@@ -466,9 +469,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    args.table_name = resolve_table_name(args.table_name, args.module)
-    if args.table_name is None:
-        parser.error("--table-name is required when --module is not provided")
+    args.table_name = resolve_table_name(args.module)
 
     if not args.dry_run:
         if not all([args.host, args.database, args.username]):

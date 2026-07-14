@@ -27,7 +27,7 @@ def _resolve_module_table_name(module_name: str) -> str:
 
     Returns:
         Table name: CORE_TABLE_NAME ('benchmark_commits') if 'core',
-        or 'benchmark_module_commits_{module_name}' otherwise.
+        or 'benchmark_commits_{module_name}' otherwise.
 
     Raises:
         ValueError: If module_name is empty or invalid.
@@ -38,7 +38,7 @@ def _resolve_module_table_name(module_name: str) -> str:
         return CORE_TABLE_NAME
     if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module_name):
         raise ValueError(f"Invalid module_name: '{module_name}'")
-    return f"benchmark_module_commits_{module_name}"
+    return f"{CORE_TABLE_NAME}_{module_name}"
 
 
 def _extract_config_name(config_file: Optional[str]) -> Optional[str]:
@@ -687,12 +687,12 @@ def main():
 
     # Module argument (defaults to 'core' which uses the core table)
     parser.add_argument(
-        "--module-name",
+        "--module",
         type=str,
         default="core",
         help="Module name (e.g., 'search'). Defaults to 'core' which uses the "
         "core 'benchmark_commits' table. Other values create/use "
-        "'benchmark_module_commits_{module_name}' table.",
+        "'benchmark_commits_{module}' table.",
     )
 
     # Runtime config overrides (applied to stored config for accurate tracking)
@@ -747,7 +747,7 @@ def main():
         print(f"Auto-detected architecture: {args.architecture}", file=sys.stderr)
 
     # Resolve table name from module name ('core' uses benchmark_commits)
-    module_name = args.module_name
+    module_name = args.module
     table_name = _resolve_module_table_name(module_name)
     print(f"Using table: {table_name}", file=sys.stderr)
 
