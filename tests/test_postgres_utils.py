@@ -464,8 +464,8 @@ class TestResolveTableName:
     def test_module_generates_table_name(self):
         assert resolve_table_name(None, "search") == "benchmark_metrics_search"
 
-    def test_neither_provided_returns_none(self):
-        assert resolve_table_name(None, None) is None
+    def test_core_module_returns_none(self):
+        assert resolve_table_name(None, "core") is None
 
     def test_rejects_sql_injection(self):
         with pytest.raises(ValueError, match="Invalid module name"):
@@ -481,8 +481,8 @@ class TestResolveModuleTableName:
     def test_module_name_generates_table(self):
         assert _resolve_module_table_name("search") == "benchmark_module_commits_search"
 
-    def test_none_returns_core_table_name(self):
-        assert _resolve_module_table_name(None) == CORE_TABLE_NAME
+    def test_core_returns_core_table_name(self):
+        assert _resolve_module_table_name("core") == CORE_TABLE_NAME
 
     def test_whitespace_only_raises_value_error(self):
         with pytest.raises(ValueError, match="cannot be empty"):
@@ -529,7 +529,7 @@ class TestLoadConfig:
         config_file.write_text(
             '[{"test_name": "FTS", "test_groups": [1, 2], "port": 6379}]'
         )
-        result = _load_config(str(config_file), None)
+        result = _load_config(str(config_file), "core")
         assert isinstance(result, list)
         assert len(result) == 1
         assert "test_groups" in result[0]
@@ -538,7 +538,7 @@ class TestLoadConfig:
     def test_loads_dict_config_without_module(self, tmp_path):
         config_file = tmp_path / "test.json"
         config_file.write_text('{"test_name": "FTS", "test_groups": [1, 2]}')
-        result = _load_config(str(config_file), None)
+        result = _load_config(str(config_file), "core")
         assert isinstance(result, dict)
         assert "test_groups" in result
         assert "config_name" not in result
