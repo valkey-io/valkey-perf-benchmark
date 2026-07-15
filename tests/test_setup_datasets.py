@@ -192,3 +192,67 @@ class TestGenerateTagOnlyQueries:
             "clothing",
             "electronics",
         ]
+
+
+# ---- vector NPY: dataset ↔ query token alignment ---------------------------
+
+
+class TestVectorHybridQueryAlignment:
+    """The vector benchmark's ingest side stores ``phrase{qid}`` per doc, and
+    the vector query side emits ``phrase{i}`` as its ``search_term``. If either
+    side changes format (say, ``phrase_{i}`` or ``phrase-{i}``), Group 15 will
+    silently return zero results and the whole KNN + text-prefilter benchmark
+    becomes meaningless. This is the same class of fragile contract that
+    ``TestGenerateFuzzyQueries`` guards for fuzzy.
+    """
+
+    def test_every_query_term_appears_in_the_hybrid_dataset(self, tmp_path: Path):
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover - numpy is a hard dep
+            import pytest
+
+            pytest.skip("numpy not installed")
+
+        dims = 4
+        doc_count = 10
+        repeats = 2  # → 5 distinct phrase ids: phrase0..phrase4
+        num_queries = 5
+
+        dataset_config = {
+            "doc_count": doc_count,
+            "fields": [
+                {
+                    "name": "title",
+                    "size": 50,
+                    "transforms": [
+                        {
+                            "type": "proximity_phrase",
+                            "term_count": 1,
+                            "combinations": 1,
+                            "repeats": repeats,
+                        }
+                    ],
+                },
+                {
+                    "name": "embedding",
+                    "size": 1,
+                    "transforms": [{"type": "vector", "dimensions": dims}],
+                },
+            ],
+        }
+        setup_datasets.generate_structured_npy(tmp_path, "hybrid.npy", dataset_config)
+
+        query_config = {"type": "vector", "doc_count": num_queries, "dimensions": dims}
+        setup_datasets.generate_queries(tmp_path, query_config, "queries.csv")
+
+        hybrid = np.load(tmp_path / "hybrid.npy", allow_pickle=False)
+        queries = np.load(tmp_path / "queries.npy", allow_pickle=False)
+
+        titles = {t.rstrip(b"\x00").decode("ascii") for t in hybrid["title"]}
+        for term in queries["search_term"]:
+            decoded = term.rstrip(b"\x00").decode("ascii")
+            assert decoded in titles, (
+                f"query term {decoded!r} does not appear in hybrid dataset titles "
+                f"({sorted(titles)}) — KNN benchmark would silently return no hits"
+            )
