@@ -392,7 +392,10 @@ class ClientRunner:
                 }
 
     def _iterate_test_groups_scenarios(self):
-        """Generate scenarios from test_groups configuration."""
+        """Generate scenarios from test_groups configuration.
+
+        When ``self.runs > 1``, the entire group is repeated multiple times.
+        """
         groups_to_run = self.config.get("groups_to_run")
         scenario_filter = self.config.get("scenario_filter")
 
@@ -407,29 +410,38 @@ class ClientRunner:
                 )
                 continue
 
-            logging.info(f"=== Group {group_id}: {group_description or ''} ===")
+            for run_num in range(self.runs):
+                if self.runs > 1:
+                    logging.info(
+                        f"=== Group {group_id}: {group_description or ''} "
+                        f"(run {run_num + 1}/{self.runs}) ==="
+                    )
+                else:
+                    logging.info(
+                        f"=== Group {group_id}: {group_description or ''} ==="
+                    )
 
-            for scenario in test_group.get("scenarios", []):
-                # Expand scenario options (e.g., with/without flags)
-                for expanded_scenario in self._expand_scenario_options(scenario):
-                    # Skip filtered scenarios
-                    if (
-                        scenario_filter
-                        and expanded_scenario.get("id") not in scenario_filter
-                    ):
-                        logging.info(
-                            f"Skipping scenario {expanded_scenario.get('id')} (filtered)"
-                        )
-                        continue
+                for scenario in test_group.get("scenarios", []):
+                    # Expand scenario options (e.g., with/without flags)
+                    for expanded_scenario in self._expand_scenario_options(scenario):
+                        # Skip filtered scenarios
+                        if (
+                            scenario_filter
+                            and expanded_scenario.get("id") not in scenario_filter
+                        ):
+                            logging.info(
+                                f"Skipping scenario {expanded_scenario.get('id')} (filtered)"
+                            )
+                            continue
 
-                    yield {
-                        "format": "test_groups",
-                        "scenario": expanded_scenario,
-                        "group_id": group_id,
-                        "group_description": group_description,
-                        "config_set": self.current_config_set,
-                        "config_suffix": self.config_suffix,
-                    }
+                        yield {
+                            "format": "test_groups",
+                            "scenario": expanded_scenario,
+                            "group_id": group_id,
+                            "group_description": group_description,
+                            "config_set": self.current_config_set,
+                            "config_suffix": self.config_suffix,
+                        }
 
     def _execute_scenario(
         self, scenario_data, profiler, metrics_processor, profiling_enabled, commit_time
