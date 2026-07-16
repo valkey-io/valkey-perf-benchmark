@@ -763,7 +763,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT * FROM ${table_name} ORDER BY module_commit_timestamp DESC, created_at DESC LIMIT 50",
+          "rawSql": "SELECT * FROM ${table_name} ORDER BY module_commit_timestamp DESC, created_at DESC, config_name ASC, config_set ASC, test_id ASC LIMIT 50",
           "refId": "A"
         }
       ],
@@ -895,14 +895,14 @@
           "type": "postgres",
           "uid": "PDA4518EDFA6642B8"
         },
-        "definition": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_module_commits_')",
+        "definition": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_commits_')",
         "hide": 2,
         "includeAll": false,
         "label": "Tracking Table",
         "multi": false,
         "name": "tracking_table",
         "options": [],
-        "query": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_module_commits_')",
+        "query": "SELECT REPLACE('${table_name}', 'benchmark_metrics_', 'benchmark_commits_')",
         "refresh": 1,
         "sort": 0,
         "type": "query"

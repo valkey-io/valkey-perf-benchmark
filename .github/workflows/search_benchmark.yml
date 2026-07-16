@@ -180,7 +180,7 @@ jobs:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           python utils/postgres_track_commits.py cleanup \
-            --module "$MODULE_NAME" \
+            --table "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \
@@ -202,7 +202,7 @@ jobs:
             echo "Using manual module commits: $COMMITS"
           else
             COMMITS=$(python utils/postgres_track_commits.py determine \
-              --module "$MODULE_NAME" \
+              --table "$MODULE_NAME" \
               --repo "$MODULE_PATH" \
               --branch "$MODULE_BRANCH" \
               --config-file "$CONFIG_FILE" \
@@ -232,7 +232,7 @@ jobs:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           python utils/postgres_track_commits.py mark \
-            --module "$MODULE_NAME" \
+            --table "$MODULE_NAME" \
             --repo "$MODULE_PATH" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
@@ -291,7 +291,7 @@ jobs:
             RESULTS_DIR="results/${CORE_SHA}_${MODULE_SHA}"
             echo "Running search benchmarks for core=$CORE_SHA module=$MODULE_SHA..."
             python benchmark.py \
-              --module "$MODULE_NAME" \
+              --table "$MODULE_NAME" \
               --valkey-path "$CORE_PATH" \
               --commits "$CORE_SHA" \
               --valkey-benchmark-path "${{ github.workspace }}/valkey_ram/src/valkey-benchmark" \
@@ -314,12 +314,12 @@ jobs:
               --database postgres \
               --username ${{ secrets.PG_USERNAME }} \
               --password "$PGPASSWORD" \
-              --module "$MODULE_NAME" \
+              --table "$MODULE_NAME" \
               --test-type fts
 
             # --- Mark this module commit complete ---
             python utils/postgres_track_commits.py mark \
-              --module "$MODULE_NAME" \
+              --table "$MODULE_NAME" \
               --repo "$MODULE_PATH" \
               --config-file "$CONFIG_FILE" \
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
@@ -365,7 +365,7 @@ jobs:
           PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           python utils/postgres_track_commits.py cleanup \
-            --module "$MODULE_NAME" \
+            --table "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \

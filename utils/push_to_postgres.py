@@ -416,25 +416,30 @@ def process_commit_metrics(
 
 
 CORE_METRICS_TABLE = "benchmark_metrics"
+TAGS_METRICS_TABLE = "benchmark_tags_metrics"
 
 
-def resolve_table_name(module_name: str) -> str:
-    """Resolve metrics table name from module name.
+def resolve_table_name(table_id: str) -> str:
+    """Resolve metrics table name from table identifier.
 
     Args:
-        module_name: Module identifier (e.g., 'search', 'core').
+        table_id: Table identifier (e.g., 'search', 'core', 'tag').
 
     Returns:
-        'benchmark_metrics' for 'core', or 'benchmark_metrics_{module_name}' otherwise.
+        'benchmark_metrics' for 'core',
+        'benchmark_tags_metrics' for 'tag',
+        or 'benchmark_metrics_{table_id}' otherwise.
 
     Raises:
-        ValueError: If module_name is invalid.
+        ValueError: If table_id is invalid.
     """
-    if module_name == "core":
+    if table_id == "core":
         return CORE_METRICS_TABLE
-    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module_name):
-        raise ValueError(f"Invalid module name: '{module_name}'")
-    return f"{CORE_METRICS_TABLE}_{module_name}"
+    if table_id == "tag":
+        return TAGS_METRICS_TABLE
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", table_id):
+        raise ValueError(f"Invalid table identifier: '{table_id}'")
+    return f"{CORE_METRICS_TABLE}_{table_id}"
 
 
 def main() -> None:
@@ -452,11 +457,11 @@ def main() -> None:
         "--password", help="Database password (not required for dry-run)"
     )
     parser.add_argument(
-        "--module",
+        "--table",
         default="core",
-        help="Module name (e.g., 'search'). Defaults to 'core' which uses "
-        "'benchmark_metrics' table. Other values use "
-        "'benchmark_metrics_{module_name}' table.",
+        help="Table identifier (e.g., 'core', 'search', 'tag'). Defaults to 'core' "
+        "which uses 'benchmark_metrics'. 'tag' uses 'benchmark_tags_metrics'. "
+        "Other values use 'benchmark_metrics_{table}'.",
     )
     parser.add_argument(
         "--test-type",
@@ -469,7 +474,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    args.table_name = resolve_table_name(args.module)
+    args.table_name = resolve_table_name(args.table)
 
     if not args.dry_run:
         if not all([args.host, args.database, args.username]):

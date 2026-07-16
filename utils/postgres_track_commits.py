@@ -19,26 +19,26 @@ DEFAULT_CONFIG_SETS = [{}]
 DEFAULT_PROFILING_SETS = [{"enabled": False}]
 
 
-def _resolve_module_table_name(module_name: str) -> str:
-    """Resolve tracking table name from module name.
+def _resolve_module_table_name(table_id: str) -> str:
+    """Resolve tracking table name from table identifier.
 
     Args:
-        module_name: Module identifier (e.g., 'search', 'core').
+        table_id: Table identifier (e.g., 'search', 'core').
 
     Returns:
         Table name: CORE_TABLE_NAME ('benchmark_commits') if 'core',
-        or 'benchmark_commits_{module_name}' otherwise.
+        or 'benchmark_commits_{table_id}' otherwise.
 
     Raises:
-        ValueError: If module_name is empty or invalid.
+        ValueError: If table_id is empty or invalid.
     """
-    if not module_name.strip():
-        raise ValueError("Module name cannot be empty.")
-    if module_name == "core":
+    if not table_id.strip():
+        raise ValueError("Table identifier cannot be empty.")
+    if table_id == "core":
         return CORE_TABLE_NAME
-    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", module_name):
-        raise ValueError(f"Invalid module_name: '{module_name}'")
-    return f"{CORE_TABLE_NAME}_{module_name}"
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", table_id):
+        raise ValueError(f"Invalid table_id: '{table_id}'")
+    return f"{CORE_TABLE_NAME}_{table_id}"
 
 
 def _extract_config_name(config_file: Optional[str]) -> Optional[str]:
@@ -82,7 +82,7 @@ def _apply_config_overrides(
 
 def _load_config(
     config_file: Optional[str],
-    module_name: str = "core",
+    table_id: str = "core",
     cluster_mode: Optional[str] = None,
     skip_config_set: bool = False,
     skip_profiling: bool = False,
@@ -116,7 +116,7 @@ def _load_config(
                 )
 
     # For module tracking, strip large keys and add config_name
-    if module_name and module_name != "core":
+    if table_id and table_id not in ("core", "tag"):
         config_name = _extract_config_name(config_file)
         skip_keys = {"test_groups", "dataset_generation", "query_generation"}
 
@@ -139,18 +139,18 @@ def _load_config(
     return config
 
 
-def create_tables(conn, table_name: str = CORE_TABLE_NAME, module_name: str = "core"):
+def create_tables(conn, table_name: str = CORE_TABLE_NAME, table_id: str = "core"):
     """Create benchmark tracking table if it doesn't exist.
 
     Args:
         conn: PostgreSQL connection.
         table_name: Table name to create. Defaults to core 'benchmark_commits'.
-        module_name: Module name for short index prefix. 'core' uses core prefix.
+        table_id: Table identifier for short index prefix. 'core' uses core prefix.
     """
-    if module_name == "core":
+    if table_id == "core":
         prefix = "_"
     else:
-        prefix = f"_{module_name}_"
+        prefix = f"_{table_id}_"
 
     with conn.cursor() as cur:
         cur.execute(
@@ -685,14 +685,14 @@ def main():
         help="Architecture (e.g., x86_64, arm64). Auto-detected if not provided.",
     )
 
-    # Module argument (defaults to 'core' which uses the core table)
+    # Table identifier (defaults to 'core' which uses the core table)
     parser.add_argument(
-        "--module",
+        "--table",
         type=str,
         default="core",
-        help="Module name (e.g., 'search'). Defaults to 'core' which uses the "
-        "core 'benchmark_commits' table. Other values create/use "
-        "'benchmark_commits_{module}' table.",
+        help="Table identifier (e.g., 'search'). Defaults to 'core' which uses "
+        "'benchmark_commits' table. Other values use "
+        "'benchmark_commits_{table}' table.",
     )
 
     # Runtime config overrides (applied to stored config for accurate tracking)
@@ -746,9 +746,9 @@ def main():
         args.architecture = platform.machine()
         print(f"Auto-detected architecture: {args.architecture}", file=sys.stderr)
 
-    # Resolve table name from module name ('core' uses benchmark_commits)
-    module_name = args.module
-    table_name = _resolve_module_table_name(module_name)
+    # Resolve table name from --table identifier ('core' uses benchmark_commits)
+    table_id = args.table
+    table_name = _resolve_module_table_name(table_id)
     print(f"Using table: {table_name}", file=sys.stderr)
 
     # Connect to PostgreSQL
@@ -769,7 +769,7 @@ def main():
 
     try:
         # Create table once after connection
-        create_tables(conn, table_name, module_name)
+        create_tables(conn, table_name, table_id)
 
         if args.operation == "determine":
             if not args.repo:
@@ -780,7 +780,7 @@ def main():
 
             config = _load_config(
                 args.config_file,
-                module_name,
+                table_id,
                 args.cluster_mode_filter,
                 args.skip_config_set,
                 args.skip_profiling,
@@ -815,7 +815,7 @@ def main():
 
             config = _load_config(
                 args.config_file,
-                module_name,
+                table_id,
                 args.cluster_mode_filter,
                 args.skip_config_set,
                 args.skip_profiling,
@@ -834,7 +834,7 @@ def main():
         elif args.operation == "query":
             config = _load_config(
                 args.config_file,
-                module_name,
+                table_id,
                 args.cluster_mode_filter,
                 args.skip_config_set,
                 args.skip_profiling,
@@ -873,7 +873,7 @@ def main():
                 # Scoped cleanup: only rows matching this config + architecture
                 config = _load_config(
                     args.config_file,
-                    module_name,
+                    table_id,
                     args.cluster_mode_filter,
                     args.skip_config_set,
                     args.skip_profiling,
