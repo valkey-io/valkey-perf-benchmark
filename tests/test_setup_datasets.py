@@ -207,12 +207,7 @@ class TestVectorHybridQueryAlignment:
     """
 
     def test_every_query_term_appears_in_the_hybrid_dataset(self, tmp_path: Path):
-        try:
-            import numpy as np
-        except ImportError:  # pragma: no cover - numpy is a hard dep
-            import pytest
-
-            pytest.skip("numpy not installed")
+        import numpy as np
 
         dims = 4
         doc_count = 10

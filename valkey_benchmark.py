@@ -1225,8 +1225,11 @@ class ClientRunner:
         else:
             ports = self._get_active_ports()
 
-        total_writes = sum(w.get("clients", 1) for w in write_scenarios)
-        total_reads = sum(r.get("clients", 1) for r in read_scenarios)
+        # Each sub-scenario is launched once per port (i.e. once per node in
+        # CME parallel mode), so the real client count is `clients * len(ports)`
+        # per sub-scenario.
+        total_writes = sum(w.get("clients", 1) for w in write_scenarios) * len(ports)
+        total_reads = sum(r.get("clients", 1) for r in read_scenarios) * len(ports)
         logging.info(
             f"Mixed workload: {total_writes} write clients + {total_reads} read clients "
             f"across {len(ports)} node(s)"

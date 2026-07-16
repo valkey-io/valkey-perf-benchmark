@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import random
@@ -11,7 +12,21 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
 import numpy as np
+
+
+def _make_rng(filename: str) -> "np.random.Generator":
+    """Return a numpy Generator seeded deterministically from `filename`.
+
+    Two invocations against the same filename produce byte-identical output,
+    so vector datasets and query vectors are reproducible across machines.
+    Different filenames get different content (avoids accidentally emitting
+    the same random values for e.g. hybrid data and queries).
+    """
+    seed = int(hashlib.sha256(filename.encode("utf-8")).hexdigest()[:8], 16)
+    return np.random.default_rng(seed)
+
 
 # Alphabet used for deterministic random-word generation (fuzzy datasets)
 ALPHABET = "abcdefghijklmnopqrstuvwxyz"
@@ -226,12 +241,16 @@ def apply_transforms(
 
         elif ttype == "fuzzy":
             # Generate fuzzy-match dataset: multiple misspelling variants per base term.
-            # Structure mirrors "expansion": variant_count × docs_per_variant × term_count.
-            # Variant 0 is the correctly-spelled base word; other variants apply
+            # Structure: variant_count × docs_per_variant. Variant 0 is the
+            # correctly-spelled base word; other variants apply
             # ``target_distance`` Levenshtein edits (insert/delete/substitute).
+            #
+            # ``min_word_length`` / ``max_word_length`` / ``target_distance``
+            # MUST match the corresponding fuzzy query-generator config so that
+            # each query resolves to the same base word its dataset variant 0
+            # holds. See TestGenerateFuzzyQueries.
             variant_count = t.get("variant_count", 5)
             docs_per_variant = t.get("docs_per_variant", 20)
-            term_count = t.get("term_count", 100)
             min_word_length = t.get("min_word_length", 5)
             max_word_length = t.get("max_word_length", 6)
             target_distance = t.get("target_distance", 1)
@@ -252,11 +271,9 @@ def apply_transforms(
                 # First variant is the correctly-spelled base word (matches queries)
                 variant = base_word
             else:
-                # Deterministic per-(term_id, variant_id) seed. We combine the two
-                # into a single integer (safe for variant_count up to 1_000_000)
-                # so the RNG is stable across Python versions - hash() of tuples
-                # is deterministic within one process but its algorithm is an
-                # implementation detail.
+                # Deterministic seed: term_id * 1_000_000 + variant_id
+                # (assumes variant_id < 1_000_000, which is trivially true for
+                # realistic ``variant_count`` values).
                 variant_seed = term_id * 1_000_000 + variant_id
                 variant_rng = random.Random(variant_seed)
                 variant = base_word
@@ -329,16 +346,25 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
     """Generate a structured NPY combining vector + text/numeric/tag fields.
 
     The output is consumable by the dataset-enabled valkey-benchmark
-    (DATASET_FORMAT_NPY with a structured dtype). Each field is realized as:
+    (DATASET_FORMAT_NPY with a structured dtype). All random draws are
+    seeded via ``_make_rng(filename)`` so two invocations against the same
+    filename produce byte-identical output — required for cross-machine
+    benchmark comparability.
 
-      - vector         → ('name', 'f4', (dims,))  L2-normalized random Gaussian
-      - proximity_phrase → ('name', 'SN')  ASCII bytes, stores 'phrase{qid}'
-                          where qid = doc_num // repeats. A short single-token
-                          value is intentional so FT.SEARCH "phrase{i}" matches
-                          ~`repeats` docs (typically ~1% selectivity).
-      - numeric_range  → ('name', 'SN')  ASCII decimal string; NUMERIC index
-                          parses at ingest.
-      - tag_list       → ('name', 'SN')  ASCII bytes, single tag per doc.
+    Each field is realized as:
+
+      - vector       → ('name', 'f4', (dims,))  L2-normalized random Gaussian
+      - phrase_label → ('name', 'SN')  ASCII bytes, stores 'phrase{qid}' where
+                        qid = doc_num // repeats. A short single-token value is
+                        intentional: FT.SEARCH "phrase{i}" matches ~`repeats`
+                        docs (~1% selectivity at repeats=1000, docs=100k).
+      - proximity_phrase → deprecated alias for phrase_label, kept for
+                        backward compatibility with existing configs. In the
+                        NPY path it ignores term_count/combinations; use the
+                        CSV path if you need those semantics.
+      - numeric_range → ('name', 'SN')  ASCII decimal string; NUMERIC index
+                        parses at ingest.
+      - tag_list     → ('name', 'SN')  ASCII bytes, single tag per doc.
     """
     output = output_dir / filename
     if output.exists():
@@ -347,6 +373,7 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
 
     doc_count = config["doc_count"]
     field_configs = build_field_configs(config)
+    rng = _make_rng(filename)
 
     # Build structured dtype from field transforms.
     dtype_list = []
@@ -357,7 +384,14 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
             if ttype == "vector":
                 dims = t.get("dimensions", 256)
                 dtype_list.append((field_name, "f4", (dims,)))
-            elif ttype == "proximity_phrase":
+            elif ttype in ("phrase_label", "proximity_phrase"):
+                if ttype == "proximity_phrase":
+                    logging.warning(
+                        f"field '{field_name}': type 'proximity_phrase' in a "
+                        f"vector-bearing dataset is treated as 'phrase_label' "
+                        f"(term_count / combinations are ignored). Rename to "
+                        f"'phrase_label' to silence this warning."
+                    )
                 size = field.get("size", 50)
                 dtype_list.append((field_name, f"S{size}"))
             elif ttype == "numeric_range":
@@ -379,15 +413,17 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
 
     if not dtype_list:
         raise ValueError(
-            f"No supported fields (vector / proximity_phrase / numeric_range / "
-            f"tag_list) declared for {filename}; nothing to generate"
+            f"No supported fields (vector / phrase_label / proximity_phrase / "
+            f"numeric_range / tag_list) declared for {filename}; nothing to "
+            f"generate"
         )
 
     logging.info(f"Generating {filename} ({doc_count} docs, {len(dtype_list)} fields)")
     data = np.zeros(doc_count, dtype=dtype_list)
 
     # Fill each field. All inner loops are numpy-vectorized so throughput scales
-    # linearly with doc_count instead of degrading at 10^5+ rows.
+    # linearly with doc_count instead of degrading at 10^5+ rows. All random
+    # draws go through the seeded `rng` for byte-identical reproducibility.
     for field in field_configs:
         field_name = field["name"]
         for t in field.get("transforms", []):
@@ -395,10 +431,10 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
 
             if ttype == "vector":
                 dims = t.get("dimensions", 256)
-                vectors = np.random.randn(doc_count, dims).astype(np.float32)
+                vectors = rng.standard_normal((doc_count, dims), dtype=np.float32)
                 data[field_name] = _l2_normalize(vectors)
 
-            elif ttype == "proximity_phrase":
+            elif ttype in ("phrase_label", "proximity_phrase"):
                 # Short single-token value: "phrase{qid}". With repeats=1000 and
                 # doc_count=100_000, there are 100 unique phrase ids and each
                 # matches ~1000 docs when queried.
@@ -415,15 +451,14 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
             elif ttype == "numeric_range":
                 min_val = t.get("min", 0)
                 max_val = t.get("max", 1000)
-                prices = np.random.uniform(min_val, max_val, doc_count)
+                prices = rng.uniform(min_val, max_val, doc_count)
                 formatted = np.char.mod("%.2f", prices)  # returns U-dtype
                 data[field_name] = formatted.astype(data[field_name].dtype)
 
             elif ttype == "tag_list":
                 tags = t.get("tags", ["electronics", "books", "clothing"])
-                # np.random.choice picks a random tag per row; encode once via
-                # the target byte dtype so we skip the per-row .encode() loop.
-                choices = np.random.choice(tags, size=doc_count)
+                # Pick a random tag per row via the seeded rng.
+                choices = rng.choice(tags, size=doc_count)
                 data[field_name] = choices.astype(data[field_name].dtype)
 
     np.save(output, data)
@@ -699,10 +734,10 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
         elif query_type == "vector":
             # Structured NPY: (search_term: SN, query_vector: f4[dims]).
             # Terms are 'phrase{i}' so they match generate_structured_npy() ingest
-            # (proximity_phrase transform stores 'phrase{qid}' per doc). Query
-            # vectors are L2-normalized random Gaussians. A companion CSV of just
-            # the search terms is also written so text-only validators / fallback
-            # tools without numpy still work.
+            # (phrase_label / proximity_phrase transform stores 'phrase{qid}' per
+            # doc). Query vectors are L2-normalized random Gaussians drawn from
+            # a filename-seeded RNG so two invocations produce byte-identical
+            # output. A companion CSV of just the search terms is also written.
             dimensions = config.get("dimensions", 256)
             npy_path = output_dir / Path(filename).with_suffix(".npy")
 
@@ -711,6 +746,7 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
                     f"Generating {npy_path.name} "
                     f"(structured: search_term + query_vector)"
                 )
+                rng = _make_rng(npy_path.name)
                 dtype = [
                     ("search_term", "S20"),
                     ("query_vector", "f4", (dimensions,)),
@@ -722,7 +758,9 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
                     dtype=data["search_term"].dtype,
                 )
                 # query_vector: random Gaussian, L2-normalized in a single pass.
-                vectors = np.random.randn(num_queries, dimensions).astype(np.float32)
+                vectors = rng.standard_normal(
+                    (num_queries, dimensions), dtype=np.float32
+                )
                 data["query_vector"] = _l2_normalize(vectors)
                 np.save(npy_path, data)
                 logging.info(f"Complete: {npy_path.name}")

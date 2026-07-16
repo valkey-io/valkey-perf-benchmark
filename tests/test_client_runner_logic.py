@@ -779,3 +779,64 @@ class TestRunMixedWorkload:
 
         assert result is None
         assert mock_popen.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# _create_mixed_metric — signature guard using the REAL MetricsProcessor
+# ---------------------------------------------------------------------------
+#
+# Other mixed-workload tests mock MetricsProcessor via ``side_effect``. That
+# accepts any positional/keyword combination, so a drift between
+# _create_mixed_metric's call site and MetricsProcessor.create_metrics's real
+# signature would pass mocked tests but blow up at runtime.
+#
+# This test wires the two together with a real MetricsProcessor to catch that
+# drift class of bug.
+
+
+class TestCreateMixedMetricRealProcessor:
+    """Signature-drift guard: _create_mixed_metric ↔ MetricsProcessor.create_metrics."""
+
+    def test_real_processor_accepts_all_positional_args(self, mixed_runner):
+        from process_metrics import MetricsProcessor
+
+        real_processor = MetricsProcessor(
+            commit_id="abc123",
+            cluster_mode=False,
+            tls_mode=False,
+            commit_time="2026-01-01T00:00:00Z",
+        )
+
+        # Minimal well-formed CSV row (matches _parse_csv_row output shape).
+        row = {
+            "test": "FT.SEARCH",
+            "rps": "1000.0",
+            "avg_latency_ms": "1.0",
+            "min_latency_ms": "0.5",
+            "p50_latency_ms": "1.0",
+            "p95_latency_ms": "2.0",
+            "p99_latency_ms": "3.0",
+            "max_latency_ms": "5.0",
+        }
+        sub_cfg = {"command": "FT.SEARCH rd0 hello", "clients": 10, "pipeline": 1}
+        parent_scenario = {"duration": 60}
+
+        metric = mixed_runner._create_mixed_metric(
+            row=row,
+            sub_cfg=sub_cfg,
+            parent_scenario=parent_scenario,
+            group_id=1,
+            scenario_id="j",
+            sub_id="r1",
+            phase="read",
+            config_set={},
+            warmup_duration=0,
+            metrics_processor=real_processor,
+        )
+
+        # If create_metrics's signature drifts (arg reorder, rename, added
+        # required kwarg), the call above raises TypeError before we get here.
+        assert metric is not None
+        assert metric["test_id"] == "1_j_read_r1"
+        assert metric["test_phase"] == "mixed_read"
+        assert metric["rps"] == 1000.0
