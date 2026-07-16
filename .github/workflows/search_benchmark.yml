@@ -291,7 +291,7 @@ jobs:
             RESULTS_DIR="results/${CORE_SHA}_${MODULE_SHA}"
             echo "Running search benchmarks for core=$CORE_SHA module=$MODULE_SHA..."
             python benchmark.py \
-              --table "$MODULE_NAME" \
+              --module "$MODULE_NAME" \
               --valkey-path "$CORE_PATH" \
               --commits "$CORE_SHA" \
               --valkey-benchmark-path "${{ github.workspace }}/valkey_ram/src/valkey-benchmark" \
