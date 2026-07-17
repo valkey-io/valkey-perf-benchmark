@@ -1,0 +1,553 @@
+[
+  {
+    "test_name": "FTS Shortened Performance Benchmarks",
+    "seed": false,
+    "socket_timeout": 300,
+    "dataset_generation": {
+      "hybrid_data_100k.csv": {
+        "doc_count": 100000,
+        "fields": [
+          {
+            "name": "title",
+            "size": 50,
+            "transforms": [
+              {
+                "type": "proximity_phrase",
+                "term_count": 1,
+                "combinations": 1,
+                "repeats": 1000
+              }
+            ]
+          },
+          {
+            "name": "price",
+            "size": 10,
+            "transforms": [
+              {
+                "type": "numeric_range",
+                "min": 10,
+                "max": 1000
+              }
+            ]
+          },
+          {
+            "name": "category",
+            "size": 30,
+            "transforms": [
+              {
+                "type": "tag_list",
+                "tags": [
+                  "electronics",
+                  "books",
+                  "clothing",
+                  "food",
+                  "sports"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "vector_hybrid_100k.csv": {
+        "doc_count": 100000,
+        "fields": [
+          {
+            "name": "title",
+            "size": 50,
+            "transforms": [
+              {
+                "type": "proximity_phrase",
+                "term_count": 1,
+                "combinations": 1,
+                "repeats": 1000
+              }
+            ]
+          },
+          {
+            "name": "price",
+            "size": 10,
+            "transforms": [
+              {
+                "type": "numeric_range",
+                "min": 10,
+                "max": 1000
+              }
+            ]
+          },
+          {
+            "name": "category",
+            "size": 30,
+            "transforms": [
+              {
+                "type": "tag_list",
+                "tags": [
+                  "electronics",
+                  "books",
+                  "clothing",
+                  "food",
+                  "sports"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "embedding",
+            "size": 1,
+            "transforms": [
+              {
+                "type": "vector",
+                "dimensions": 256
+              }
+            ]
+          }
+        ]
+      },
+      "wiki_1m_1field_100tok.xml": {
+        "doc_count": 1000000,
+        "fields": [
+          {
+            "name": "field1",
+            "size": 5000,
+            "transforms": [
+              {
+                "type": "wikipedia"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "query_generation": {
+      "hybrid_queries.csv": {
+        "type": "proximity_phrase",
+        "doc_count": 100,
+        "term_count": 1
+      },
+      "composed_tag_queries.csv": {
+        "type": "tag_only",
+        "doc_count": 100,
+        "tags": ["electronics", "books", "clothing", "food", "sports"]
+      },
+      "vector_queries_100.csv": {
+        "type": "vector",
+        "doc_count": 100,
+        "dimensions": 256
+      }
+    },
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "P1 - Text single-field baseline",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "Load 100K wiki docs into single TEXT field index",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/wiki_1m_1field_100tok.xml",
+            "xml_root_element": "doc",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "Single term search - TEXT baseline",
+            "dataset": "datasets/search_terms.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term__\"",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "2-term AND same field",
+            "dataset": "datasets/proximity_phrases.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__\"",
+            "options": {
+              "": ""
+            }
+          }
+        ]
+      },
+      {
+        "group": 2,
+        "description": "P2 - Multi-index hybrid (TEXT + NUMERIC + TAG)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "Load 100K hybrid docs (TEXT + NUMERIC + TAG)",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA title TEXT price NUMERIC category TAG SEPARATOR |"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/hybrid_data_100k.csv",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "TEXT-only on hybrid schema (baseline comparison with P1b)",
+            "dataset": "datasets/hybrid_queries.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"@title:__field:term1__\"",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "TEXT + NUMERIC range filter",
+            "dataset": "datasets/hybrid_queries.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "d",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "TEXT + TAG filter",
+            "dataset": "datasets/hybrid_queries.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term1__ @category:{electronics}\"",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "e",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "NUMERIC + TAG only (pure entries-fetcher path, no text)",
+            "dataset": "datasets/composed_tag_queries.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"@price:[100 500] @category:{__field:category__}\"",
+            "options": {
+              "": ""
+            }
+          }
+        ]
+      },
+      {
+        "group": 3,
+        "description": "P3 - Vector FLAT (prefilter path)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "Load 100K vector hybrid docs (FLAT index)",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA title TEXT price NUMERIC category TAG SEPARATOR | embedding VECTOR FLAT 6 DIM 256 DISTANCE_METRIC L2 TYPE FLOAT32"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/vector_hybrid_100k.npy",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "Pure KNN, no filter (isolates FLAT scan cost)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"*=>[KNN 10 @embedding $vec]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "KNN + text prefilter (prefilter + FLAT + intersection)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"(@title:__field:search_term__)=>[KNN 10 @embedding $vec]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
+            "options": {
+              "": ""
+            }
+          }
+        ]
+      },
+      {
+        "group": 4,
+        "description": "P4 - Vector HNSW (UsePreFiltering ratio branch)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "Load 100K vector hybrid docs (HNSW index)",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA title TEXT price NUMERIC category TAG SEPARATOR | embedding VECTOR HNSW 10 DIM 256 DISTANCE_METRIC L2 TYPE FLOAT32 M 16 EF_CONSTRUCTION 200"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/vector_hybrid_100k.npy",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "Pure KNN (isolates HNSW graph traversal)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"*=>[KNN 10 @embedding $vec EF_RUNTIME 100]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "KNN + selective TAG prefilter (small candidate set, prefilter branch)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"(@category:{electronics})=>[KNN 10 @embedding $vec EF_RUNTIME 100]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "d",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "KNN + broad NUMERIC prefilter (large candidate set, inline filter branch)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"(@price:[10 1000])=>[KNN 10 @embedding $vec EF_RUNTIME 100]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
+            "options": {
+              "": ""
+            }
+          }
+        ]
+      }
+    ],
+    "port": 6379,
+    "cluster_mode": [
+      false
+    ],
+    "cluster_nodes": 5,
+    "cluster_ports": [
+      6379,
+      6380,
+      6381,
+      6382,
+      6383
+    ],
+    "cpu_allocation": {
+      "cores_per_server": 8,
+      "cores_per_client": 8
+    },
+    "tls_mode": false,
+    "io-threads": 8,
+    "modules": [
+      {
+        "path": "../valkey-search/.build-release/libsearch.so",
+        "startup_args": [
+          "--use-coordinator"
+        ]
+      }
+    ],
+    "config_sets": [
+      {
+        "search.reader-threads": 8,
+        "search.writer-threads": 8,
+        "search.async-fanout-threshold": 4
+      }
+    ],
+    "monitoring": {
+      "cpu_enabled": false,
+      "per_cpu_enabled": false
+    },
+    "profiling_sets": [
+      {
+        "enabled": false
+      }
+    ]
+  },
+  {
+    "test_name": "FTS Shortened - Cluster Canary",
+    "seed": false,
+    "socket_timeout": 300,
+    "dataset_generation": {
+      "hybrid_data_100k.csv": {
+        "doc_count": 100000,
+        "fields": [
+          {
+            "name": "title",
+            "size": 50,
+            "transforms": [
+              {
+                "type": "proximity_phrase",
+                "term_count": 1,
+                "combinations": 1,
+                "repeats": 1000
+              }
+            ]
+          },
+          {
+            "name": "price",
+            "size": 10,
+            "transforms": [
+              {
+                "type": "numeric_range",
+                "min": 10,
+                "max": 1000
+              }
+            ]
+          },
+          {
+            "name": "category",
+            "size": 30,
+            "transforms": [
+              {
+                "type": "tag_list",
+                "tags": [
+                  "electronics",
+                  "books",
+                  "clothing",
+                  "food",
+                  "sports"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "query_generation": {
+    },
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "Cluster canary - P2c re-run under cluster mode (fanout.cc coverage)",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "Load 100K hybrid docs for cluster canary",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA title TEXT price NUMERIC category TAG SEPARATOR |"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/hybrid_data_100k.csv",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "TEXT + NUMERIC range (cluster fanout.cc coverage)",
+            "dataset": "datasets/hybrid_queries.csv",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
+            "options": {
+              "": ""
+            }
+          }
+        ]
+      }
+    ],
+    "port": 6379,
+    "cluster_mode": [
+      true
+    ],
+    "cluster_nodes": 5,
+    "cluster_ports": [
+      6379,
+      6380,
+      6381,
+      6382,
+      6383
+    ],
+    "cpu_allocation": {
+      "cores_per_server": 8,
+      "cores_per_client": 8
+    },
+    "tls_mode": false,
+    "io-threads": 8,
+    "modules": [
+      {
+        "path": "../valkey-search/.build-release/libsearch.so",
+        "startup_args": [
+          "--use-coordinator"
+        ]
+      }
+    ],
+    "config_sets": [
+      {
+        "search.reader-threads": 8,
+        "search.writer-threads": 8,
+        "search.async-fanout-threshold": 4
+      }
+    ],
+    "monitoring": {
+      "cpu_enabled": false,
+      "per_cpu_enabled": false
+    },
+    "profiling_sets": [
+      {
+        "enabled": false
+      }
+    ]
+  }
+]
