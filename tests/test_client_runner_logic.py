@@ -548,6 +548,7 @@ def mixed_runner(minimal_valid_config):
         results_dir=Path("/tmp/test_results"),
         valkey_path="/tmp/valkey",
         valkey_benchmark_path="src/valkey-benchmark",
+        config_name="fts-mixed-test.json",
     )
     runner.client_cpu_ranges = ["10-11", "12-13", "14-15"]
     return runner
@@ -713,6 +714,8 @@ class TestRunMixedWorkload:
         assert by_phase["1_j_write_w1"] == "mixed_write"
         assert by_phase["1_j_read_r1"] == "mixed_read"
         assert by_phase["1_j_read_r2"] == "mixed_read"
+
+        assert all(m.get("config_name") == "fts-mixed-test.json" for m in result)
 
     def test_warmup_mode_still_spawns_processes_but_returns_no_metrics(
         self, mixed_runner, mixed_scenario

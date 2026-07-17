@@ -4,6 +4,7 @@
 import argparse
 import json
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,12 +14,148 @@ import psycopg2
 from psycopg2.extras import Json
 
 
-def create_tables(conn):
-    """Create benchmark tracking tables if they don't exist."""
+CORE_TABLE_NAME = "benchmark_commits"
+DEFAULT_CONFIG_SETS = [{}]
+DEFAULT_PROFILING_SETS = [{"enabled": False}]
+
+
+def _resolve_module_table_name(table_id: str) -> str:
+    """Resolve tracking table name from table identifier.
+
+    Args:
+        table_id: Table identifier (e.g., 'search', 'core').
+
+    Returns:
+        Table name: CORE_TABLE_NAME ('benchmark_commits') if 'core',
+        or 'benchmark_commits_{table_id}' otherwise.
+
+    Raises:
+        ValueError: If table_id is empty or invalid.
+    """
+    if not table_id.strip():
+        raise ValueError("Table identifier cannot be empty.")
+    if table_id == "core":
+        return CORE_TABLE_NAME
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", table_id):
+        raise ValueError(f"Invalid table_id: '{table_id}'")
+    return f"{CORE_TABLE_NAME}_{table_id}"
+
+
+def _extract_config_name(config_file: Optional[str]) -> Optional[str]:
+    """Extract config name from config file path (basename with extension).
+
+    Args:
+        config_file: Path to config file (e.g., 'configs/fts-benchmarks-arm.json').
+
+    Returns:
+        Config filename (e.g., 'fts-benchmarks-arm.json'), or None if no config_file.
+    """
+    if config_file is None:
+        return None
+    return Path(config_file).name
+
+
+def _apply_config_overrides(
+    cfg: dict,
+    cluster_mode: Optional[str] = None,
+    skip_config_set: bool = False,
+    skip_profiling: bool = False,
+) -> None:
+    """Apply runtime overrides to a config dict in-place.
+
+    Args:
+        cfg: Config dictionary to modify in-place.
+        cluster_mode: If provided, overwrites 'cluster_mode' field ('true' or 'false').
+        skip_config_set: If True, sets 'config_sets' to default [{}].
+        skip_profiling: If True, sets 'profiling_sets' to default [{"enabled": False}].
+    """
+    if cluster_mode is not None:
+        if cluster_mode.lower() == "true":
+            cfg["cluster_mode"] = True
+        elif cluster_mode.lower() == "false":
+            cfg["cluster_mode"] = False
+    if skip_config_set:
+        cfg["config_sets"] = DEFAULT_CONFIG_SETS
+    if skip_profiling:
+        cfg["profiling_sets"] = DEFAULT_PROFILING_SETS
+
+
+def _load_config(
+    config_file: Optional[str],
+    table_id: str = "core",
+    cluster_mode: Optional[str] = None,
+    skip_config_set: bool = False,
+    skip_profiling: bool = False,
+) -> Optional[dict]:
+    """Load config from file, apply runtime overrides, and optionally transform for module.
+
+    Args:
+        config_file: Path to config JSON file, or None.
+        module_name: If provided, strips large keys and injects config_name.
+        cluster_mode: If provided, overwrites 'cluster_mode' field in config dicts.
+        skip_config_set: If True, sets 'config_sets' to default [{}].
+        skip_profiling: If True, sets 'profiling_sets' to default [{"enabled": False}].
+
+    Returns:
+        Loaded config (dict or list), or None if no config_file.
+    """
+    if not config_file:
+        return None
+
+    with open(config_file, "r") as f:
+        config = json.load(f)
+
+    # Apply runtime overrides to config dicts (both core and module)
+    if isinstance(config, dict):
+        _apply_config_overrides(config, cluster_mode, skip_config_set, skip_profiling)
+    elif isinstance(config, list):
+        for cfg in config:
+            if isinstance(cfg, dict):
+                _apply_config_overrides(
+                    cfg, cluster_mode, skip_config_set, skip_profiling
+                )
+
+    # For module tracking, strip large keys and add config_name
+    if table_id and table_id not in ("core", "tag"):
+        config_name = _extract_config_name(config_file)
+        skip_keys = {"test_groups", "dataset_generation", "query_generation"}
+
+        if isinstance(config, dict):
+            config = {k: v for k, v in config.items() if k not in skip_keys}
+            config["config_name"] = config_name
+        elif isinstance(config, list):
+            config = [
+                {k: v for k, v in cfg.items() if k not in skip_keys}
+                for cfg in config
+                if isinstance(cfg, dict)
+            ]
+            config.insert(0, {"config_name": config_name})
+
+        print(
+            f"Injected config_name='{config_name}' into config set",
+            file=sys.stderr,
+        )
+
+    return config
+
+
+def create_tables(conn, table_name: str = CORE_TABLE_NAME, table_id: str = "core"):
+    """Create benchmark tracking table if it doesn't exist.
+
+    Args:
+        conn: PostgreSQL connection.
+        table_name: Table name to create. Defaults to core 'benchmark_commits'.
+        table_id: Table identifier for short index prefix. 'core' uses core prefix.
+    """
+    if table_id == "core":
+        prefix = "_"
+    else:
+        prefix = f"_{table_id}_"
+
     with conn.cursor() as cur:
         cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS benchmark_commits (
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
                 id SERIAL PRIMARY KEY,
                 sha VARCHAR(40) NOT NULL,
                 timestamp TIMESTAMPTZ NOT NULL,
@@ -27,21 +164,20 @@ def create_tables(conn):
                 architecture VARCHAR(50),
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
-                
+
                 -- Unique constraint: same commit + config + architecture can only exist once
-                CONSTRAINT unique_sha_config_arch UNIQUE(sha, config, architecture)
+                CONSTRAINT unique{prefix}sha_config_arch UNIQUE(sha, config, architecture)
             );
             
-            -- Indexes for fast lookups
-            CREATE INDEX IF NOT EXISTS idx_commits_sha ON benchmark_commits(sha);
-            CREATE INDEX IF NOT EXISTS idx_commits_status ON benchmark_commits(status);
-            CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON benchmark_commits(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_commits_config ON benchmark_commits USING GIN(config);
-            CREATE INDEX IF NOT EXISTS idx_commits_sha_status ON benchmark_commits(sha, status);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_sha ON {table_name}(sha);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_status ON {table_name}(status);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_timestamp ON {table_name}(timestamp);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_config ON {table_name} USING GIN(config);
+            CREATE INDEX IF NOT EXISTS idx{prefix}commits_sha_status ON {table_name}(sha, status);
         """
         )
     conn.commit()
-    print("Created/verified benchmark_commits table", file=sys.stderr)
+    print(f"Created/verified {table_name} table", file=sys.stderr)
 
 
 def _git_rev_list(repo: Path, branch: str) -> List[str]:
@@ -75,6 +211,7 @@ def mark_commits(
     status: str,
     architecture: str,
     config: Optional[dict] = None,
+    table_name: str = CORE_TABLE_NAME,
 ) -> None:
     """Mark commits with status, architecture, and config.
 
@@ -85,9 +222,8 @@ def mark_commits(
         status: Status to set ('in_progress', 'complete')
         architecture: Architecture (e.g., 'x86_64', 'arm64')
         config: Config content (dict/list) to track
+        table_name: Target table name. Defaults to core table.
     """
-    # Ensure tables exist
-    create_tables(conn)
 
     with conn.cursor() as cur:
         for sha in shas:
@@ -101,8 +237,8 @@ def mark_commits(
 
             # Insert or update
             cur.execute(
-                """
-                INSERT INTO benchmark_commits (sha, status, config, timestamp, architecture)
+                f"""
+                INSERT INTO {table_name} (sha, status, config, timestamp, architecture)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (sha, config, architecture) 
                 DO UPDATE SET 
@@ -127,29 +263,78 @@ def mark_commits(
     conn.commit()
 
 
-def cleanup_incomplete_commits(conn) -> int:
-    """Remove all 'in_progress' entries.
+def _build_cleanup_query(
+    table_name: str,
+    config: Optional[dict] = None,
+    architecture: Optional[str] = None,
+) -> tuple:
+    """Build the DELETE query and params for cleanup.
+
+    Args:
+        table_name: Target table name.
+        config: If provided, scope cleanup to this config.
+        architecture: If provided (and config is set), scope to this architecture.
+
+    Returns:
+        Tuple of (query_string, params_list).
+    """
+    conditions = ["status = 'in_progress'"]
+    params = []
+
+    if config is not None:
+        conditions.append("config = %s")
+        params.append(Json(config))
+        # Only filter by architecture when config is provided
+        if architecture is not None:
+            conditions.append("architecture = %s")
+            params.append(architecture)
+
+    where_clause = " AND ".join(conditions)
+    query = f"DELETE FROM {table_name} WHERE {where_clause} RETURNING id"
+    return query, params
+
+
+def cleanup_incomplete_commits(
+    conn,
+    table_name: str = CORE_TABLE_NAME,
+    config: Optional[dict] = None,
+    architecture: Optional[str] = None,
+) -> int:
+    """Remove 'in_progress' entries, optionally scoped by config and architecture.
+
+    When config is provided, only matching in_progress rows are deleted
+    (architecture is also used as a filter in this case). When config is not
+    provided, all in_progress rows are deleted regardless of architecture.
+
+    Args:
+        conn: PostgreSQL connection
+        table_name: Target table name. Defaults to core table.
+        config: If provided, only clean rows matching this config.
+        architecture: If provided (and config is set), only clean rows matching
+                      this architecture. Ignored when config is None.
 
     Returns:
         Number of entries cleaned up
     """
-    # Ensure tables exist
-    create_tables(conn)
+
+    query, params = _build_cleanup_query(table_name, config, architecture)
 
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            DELETE FROM benchmark_commits 
-            WHERE status = 'in_progress'
-            RETURNING id
-        """
-        )
+        cur.execute(query, params)
         count = cur.rowcount
 
     conn.commit()
 
     if count > 0:
-        print(f"Cleaned up {count} incomplete commits", file=sys.stderr)
+        filter_info = ""
+        if config or architecture:
+            filter_info = (
+                f" (config={'yes' if config else 'any'}, arch={architecture or 'any'})"
+            )
+        print(
+            f"Cleaned up {count} incomplete commits from {table_name}{filter_info}",
+            file=sys.stderr,
+        )
 
     return count
 
@@ -229,7 +414,11 @@ def _is_config_array_subset(
 
 
 def _find_superset_configs(
-    conn, sha: str, target_config: dict, architecture: str
+    conn,
+    sha: str,
+    target_config: dict,
+    architecture: str,
+    table_name: str = CORE_TABLE_NAME,
 ) -> List[dict]:
     """Find completed configs for a commit that are supersets of target_config.
 
@@ -238,14 +427,15 @@ def _find_superset_configs(
         sha: Commit SHA to check
         target_config: Config to find supersets for
         architecture: Architecture to filter by
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of superset configs found
     """
     with conn.cursor() as cur:
         cur.execute(
-            """
-            SELECT config FROM benchmark_commits
+            f"""
+            SELECT config FROM {table_name}
             WHERE sha = %s AND status = 'complete' AND architecture = %s
         """,
             (sha, architecture),
@@ -274,6 +464,7 @@ def determine_commits_to_benchmark(
     architecture: str,
     config: Optional[dict] = None,
     enable_subset_detection: bool = True,
+    table_name: str = CORE_TABLE_NAME,
 ) -> List[str]:
     """Return up to max_commits SHAs not benchmarked with the given config and architecture.
 
@@ -285,15 +476,16 @@ def determine_commits_to_benchmark(
         architecture: Architecture to filter by
         config: Config content to check against
         enable_subset_detection: If True, skip commits that have superset configs completed
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of commit SHAs that need benchmarking
     """
-    # Ensure tables exist
-    create_tables(conn)
 
     # Clean up incomplete commits first
-    cleanup_incomplete_commits(conn)
+    cleanup_incomplete_commits(
+        conn, table_name, config=config, architecture=architecture
+    )
 
     # Get all commits from git
     all_shas = _git_rev_list(repo, branch)
@@ -302,16 +494,16 @@ def determine_commits_to_benchmark(
     with conn.cursor() as cur:
         if config:
             cur.execute(
-                """
-                SELECT DISTINCT sha FROM benchmark_commits
+                f"""
+                SELECT DISTINCT sha FROM {table_name}
                 WHERE status = 'complete' AND config = %s AND architecture = %s
             """,
                 (Json(config), architecture),
             )
         else:
             cur.execute(
-                """
-                SELECT DISTINCT sha FROM benchmark_commits
+                f"""
+                SELECT DISTINCT sha FROM {table_name}
                 WHERE status = 'complete' AND architecture = %s
             """,
                 (architecture,),
@@ -330,7 +522,9 @@ def determine_commits_to_benchmark(
 
         # Check for subset detection if enabled and config is provided
         if enable_subset_detection and config:
-            superset_configs = _find_superset_configs(conn, sha, config, architecture)
+            superset_configs = _find_superset_configs(
+                conn, sha, config, architecture, table_name
+            )
             if superset_configs:
                 subset_skipped += 1
                 # Format superset info for display
@@ -371,7 +565,10 @@ def determine_commits_to_benchmark(
 
 
 def get_commits_by_config(
-    conn, architecture: str, config: Optional[dict] = None
+    conn,
+    architecture: str,
+    config: Optional[dict] = None,
+    table_name: str = CORE_TABLE_NAME,
 ) -> List[Dict]:
     """Get commits filtered by architecture and config.
 
@@ -379,19 +576,18 @@ def get_commits_by_config(
         conn: PostgreSQL connection
         architecture: Architecture to filter by
         config: Config to filter by (None returns all for the architecture)
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of commit entries
     """
-    # Ensure tables exist
-    create_tables(conn)
 
     with conn.cursor() as cur:
         if config:
             cur.execute(
-                """
+                f"""
                 SELECT sha, timestamp, status, config, architecture
-                FROM benchmark_commits
+                FROM {table_name}
                 WHERE config = %s AND architecture = %s
                 ORDER BY timestamp DESC
             """,
@@ -399,9 +595,9 @@ def get_commits_by_config(
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT sha, timestamp, status, config, architecture
-                FROM benchmark_commits
+                FROM {table_name}
                 WHERE architecture = %s
                 ORDER BY timestamp DESC
             """,
@@ -423,23 +619,22 @@ def get_commits_by_config(
         return results
 
 
-def get_unique_configs(conn) -> List[dict]:
+def get_unique_configs(conn, table_name: str = CORE_TABLE_NAME) -> List[dict]:
     """Get list of unique config objects used.
 
     Args:
         conn: PostgreSQL connection
+        table_name: Target table name. Defaults to core table.
 
     Returns:
         List of unique configs
     """
-    # Ensure tables exist
-    create_tables(conn)
 
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT DISTINCT config
-            FROM benchmark_commits
+            FROM {table_name}
         """
         )
         return [row[0] for row in cur.fetchall()]
@@ -490,6 +685,39 @@ def main():
         help="Architecture (e.g., x86_64, arm64). Auto-detected if not provided.",
     )
 
+    # Table identifier (defaults to 'core' which uses the core table)
+    parser.add_argument(
+        "--table",
+        type=str,
+        default="core",
+        help="Table identifier (e.g., 'search'). Defaults to 'core' which uses "
+        "'benchmark_commits' table. Other values use "
+        "'benchmark_commits_{table}' table.",
+    )
+
+    # Runtime config overrides (applied to stored config for accurate tracking)
+    parser.add_argument(
+        "--cluster-mode-filter",
+        choices=["false", "true"],
+        default=None,
+        help="Filter which cluster_mode to run. "
+        "'false' runs only non-cluster tests, 'true' runs only cluster tests. "
+        "If not specified, runs all modes in config. "
+        "Used with configs that have cluster_mode as array (e.g., [false, true]).",
+    )
+    parser.add_argument(
+        "--skip-config-set",
+        action="store_true",
+        help="Remove config_sets from stored config (when benchmarking without config sets).",
+    )
+    parser.add_argument(
+        "--skip-profiling",
+        action="store_true",
+        help="Skip profiling and run single test pass only. "
+        "Overrides profiling_sets from config file. "
+        "Use for quick benchmarks or when profiling overhead is unwanted.",
+    )
+
     # Arguments for mark operation
     parser.add_argument(
         "--status", choices=["in_progress", "complete"], help="Status to set (for mark)"
@@ -518,6 +746,11 @@ def main():
         args.architecture = platform.machine()
         print(f"Auto-detected architecture: {args.architecture}", file=sys.stderr)
 
+    # Resolve table name from --table identifier ('core' uses benchmark_commits)
+    table_id = args.table
+    table_name = _resolve_module_table_name(table_id)
+    print(f"Using table: {table_name}", file=sys.stderr)
+
     # Connect to PostgreSQL
     try:
         conn = psycopg2.connect(
@@ -535,6 +768,9 @@ def main():
         sys.exit(1)
 
     try:
+        # Create table once after connection
+        create_tables(conn, table_name, table_id)
+
         if args.operation == "determine":
             if not args.repo:
                 print(
@@ -542,10 +778,13 @@ def main():
                 )
                 sys.exit(1)
 
-            config = None
-            if args.config_file:
-                with open(args.config_file, "r") as f:
-                    config = json.load(f)
+            config = _load_config(
+                args.config_file,
+                table_id,
+                args.cluster_mode_filter,
+                args.skip_config_set,
+                args.skip_profiling,
+            )
 
             enable_subset_detection = not args.disable_subset_detection
             commits = determine_commits_to_benchmark(
@@ -556,6 +795,7 @@ def main():
                 architecture=args.architecture,
                 config=config,
                 enable_subset_detection=enable_subset_detection,
+                table_name=table_name,
             )
             print(" ".join(commits))
 
@@ -573,10 +813,13 @@ def main():
                 )
                 sys.exit(1)
 
-            config = None
-            if args.config_file:
-                with open(args.config_file, "r") as f:
-                    config = json.load(f)
+            config = _load_config(
+                args.config_file,
+                table_id,
+                args.cluster_mode_filter,
+                args.skip_config_set,
+                args.skip_profiling,
+            )
 
             mark_commits(
                 conn=conn,
@@ -585,16 +828,20 @@ def main():
                 status=args.status,
                 architecture=args.architecture,
                 config=config,
+                table_name=table_name,
             )
 
         elif args.operation == "query":
-            config = None
-            if args.config_file:
-                with open(args.config_file, "r") as f:
-                    config = json.load(f)
+            config = _load_config(
+                args.config_file,
+                table_id,
+                args.cluster_mode_filter,
+                args.skip_config_set,
+                args.skip_profiling,
+            )
 
             if args.list_configs:
-                configs = get_unique_configs(conn)
+                configs = get_unique_configs(conn, table_name)
                 print(f"Unique configs used: {len(configs)}", file=sys.stderr)
                 for i, cfg in enumerate(configs, 1):
                     summary = ""
@@ -603,7 +850,9 @@ def main():
                         summary = f"(io-threads={first.get('io-threads', 'N/A')}, cluster={first.get('cluster_mode', 'N/A')}, tls={first.get('tls_mode', 'N/A')})"
                     print(f"  Config {i}: {summary}", file=sys.stderr)
             else:
-                commits = get_commits_by_config(conn, args.architecture, config)
+                commits = get_commits_by_config(
+                    conn, args.architecture, config, table_name
+                )
                 count = len(commits)
                 if config:
                     summary = ""
@@ -620,7 +869,21 @@ def main():
                     )
 
         elif args.operation == "cleanup":
-            cleanup_incomplete_commits(conn)
+            if args.config_file:
+                # Scoped cleanup: only rows matching this config + architecture
+                config = _load_config(
+                    args.config_file,
+                    table_id,
+                    args.cluster_mode_filter,
+                    args.skip_config_set,
+                    args.skip_profiling,
+                )
+                cleanup_incomplete_commits(
+                    conn, table_name, config=config, architecture=args.architecture
+                )
+            else:
+                # No config file: clean all in_progress rows
+                cleanup_incomplete_commits(conn, table_name)
 
     finally:
         conn.close()

@@ -23,6 +23,7 @@ from utils.cpu_utils import (
 
 # ---------- Constants --------------------------------------------------------
 DEFAULT_RESULTS_ROOT = Path("results")
+DEFAULT_CONFIG_FILE = "./configs/benchmark-configs.json"
 REQUIRED_KEYS = [
     "keyspacelen",
     "data_sizes",
@@ -125,10 +126,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config",
-        default="./configs/benchmark-configs.json",
+        default=None,
         help=(
             "Path to benchmark-configs.json. Each entry is an explicit benchmark "
             "configuration and combinations are not generated automatically."
+            "Defaults to './configs/benchmark-configs.json' if not provided."
         ),
     )
     parser.add_argument(
@@ -181,6 +183,19 @@ def parse_args() -> argparse.Namespace:
         help="Path to pre-built module .so file (e.g., ../valkey-search/.build-release/libsearch.so). "
         "REQUIRED for module testing unless --use-running-server is set. "
         "Build your module with its native build system (build.sh, make, cmake) before running benchmarks.",
+    )
+
+    parser.add_argument(
+        "--module-commit",
+        type=str,
+        default=None,
+        help="Module commit SHA (written to metrics for tracking module versions).",
+    )
+    parser.add_argument(
+        "--module-commit-timestamp",
+        type=str,
+        default=None,
+        help="Module commit timestamp ISO 8601 (written to metrics for module tracking).",
     )
 
     parser.add_argument(
@@ -470,6 +485,9 @@ def run_benchmark_matrix(
     args: argparse.Namespace,
     module_path: Optional[str] = None,
     uses_test_groups: bool = False,
+    config_name: Optional[str] = None,
+    module_commit: Optional[str] = None,
+    module_commit_timestamp: Optional[str] = None,
 ) -> None:
     """Orchestrate benchmark execution for all configurations."""
     if args.module:
@@ -521,6 +539,9 @@ def run_benchmark_matrix(
             uses_test_groups,
             architecture,
             client_cpu_ranges,
+            config_name,
+            module_commit,
+            module_commit_timestamp,
         )
 
     # Cleanup
@@ -592,6 +613,9 @@ def _execute_benchmark_run(
     uses_test_groups,
     architecture,
     client_cpu_ranges,
+    config_name=None,
+    module_commit=None,
+    module_commit_timestamp=None,
 ):
     """Execute a single benchmark run with specific configuration."""
     cfg = exec_config["cfg"]
@@ -659,6 +683,9 @@ def _execute_benchmark_run(
             architecture=architecture,
             uses_test_groups=uses_test_groups,
             repository=args.repository,
+            config_name=config_name,
+            module_commit=module_commit,
+            module_commit_timestamp=module_commit_timestamp,
         )
 
         runner.current_profiling_set = exec_config["profiling_set"]
@@ -737,6 +764,13 @@ def main() -> None:
         sys.exit(1)
 
     # Load and validate configs
+    if args.config is None:
+        args.config = DEFAULT_CONFIG_FILE
+        print(
+            f"WARNING: --config not specified, using default: '{DEFAULT_CONFIG_FILE}'",
+            file=sys.stderr,
+        )
+
     configs_list = load_configs(args.config)
 
     if not configs_list:
@@ -815,6 +849,9 @@ def main() -> None:
                 args=args,
                 module_path=module_path,
                 uses_test_groups=uses_test_groups,
+                config_name=Path(args.config).name if args.module else None,
+                module_commit=args.module_commit,
+                module_commit_timestamp=args.module_commit_timestamp,
             )
 
 

@@ -150,7 +150,7 @@ jobs:
             --database ${{ secrets.RDS_DATABASE }} \
             --username ${{ secrets.RDS_USERNAME }} \
             --password "$PGPASSWORD" \
-            --table-name "benchmark_tags_metrics"
+            --table tag
 
       - name: Cleanup any running valkey processes and files
         if: always()
