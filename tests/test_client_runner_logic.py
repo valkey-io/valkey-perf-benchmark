@@ -1,7 +1,9 @@
 """Unit tests for pure logic methods on ClientRunner from valkey_benchmark.py."""
 
-import pytest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from valkey_benchmark import ClientRunner
 
@@ -518,3 +520,323 @@ class TestIterateSimpleScenarios:
         first = items[0]
         for key in ("command", "data_size", "pipeline", "clients", "requests"):
             assert key in first
+
+
+# ---------------------------------------------------------------------------
+# Mixed workload: _normalize_mixed_configs, _get_cpu_for_mixed_process,
+# _run_mixed_workload
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mixed_runner(minimal_valid_config):
+    """ClientRunner configured for mixed-workload tests.
+
+    Adds cpu_allocation (used by _get_cpu_for_mixed_process) and a set of
+    client CPU ranges wide enough to test partitioning.
+    """
+    cfg = {
+        **minimal_valid_config,
+        "cpu_allocation": {"cores_per_server": 1, "cores_per_client": 2},
+    }
+    runner = ClientRunner(
+        commit_id="abc123",
+        config=cfg,
+        cluster_mode=False,
+        tls_mode=False,
+        target_ip="127.0.0.1",
+        results_dir=Path("/tmp/test_results"),
+        valkey_path="/tmp/valkey",
+        valkey_benchmark_path="src/valkey-benchmark",
+    )
+    runner.client_cpu_ranges = ["10-11", "12-13", "14-15"]
+    return runner
+
+
+@pytest.fixture
+def mixed_scenario():
+    """Representative mixed scenario with 1 write + 2 read sub-scenarios."""
+    return {
+        "id": "j",
+        "type": "mixed",
+        "duration": 60,
+        "pipeline": 2,
+        "writes": [{"id": "w1", "command": "HSET doc:x f v", "clients": 3}],
+        "reads": [
+            {"id": "r1", "command": "FT.SEARCH idx q1", "clients": 5},
+            {"id": "r2", "command": "FT.SEARCH idx q2", "clients": 5},
+        ],
+    }
+
+
+class TestNormalizeMixedConfigs:
+    """Tests for ClientRunner._normalize_mixed_configs."""
+
+    def test_sub_scenario_duration_overrides_parent(self, mixed_runner):
+        """Sub-scenario duration must NOT be replaced by parent duration."""
+        scenario = {
+            "id": "j",
+            "duration": 60,
+            "writes": [
+                {"id": "w1", "command": "HSET k f v", "clients": 1, "duration": 10}
+            ],
+            "reads": [{"id": "r1", "command": "FT.SEARCH idx q", "clients": 1}],
+        }
+        writes, reads = mixed_runner._normalize_mixed_configs(scenario)
+        assert writes[0]["duration"] == 10  # override preserved
+        assert reads[0]["duration"] == 60  # parent propagated
+
+    def test_cluster_execution_only_propagated_when_parent_sets_it(self, mixed_runner):
+        """cluster_execution is set on subs only when the parent has it."""
+        with_ce = {
+            "id": "j",
+            "cluster_execution": "single",
+            "writes": [{"id": "w1", "command": "HSET k f v", "clients": 1}],
+            "reads": [],
+        }
+        writes, _ = mixed_runner._normalize_mixed_configs(with_ce)
+        assert writes[0]["cluster_execution"] == "single"
+
+        without_ce = {
+            "id": "j",
+            "writes": [{"id": "w1", "command": "HSET k f v", "clients": 1}],
+            "reads": [],
+        }
+        writes, _ = mixed_runner._normalize_mixed_configs(without_ce)
+        assert "cluster_execution" not in writes[0]
+
+
+class TestGetCpuForMixedProcess:
+    """Tests for ClientRunner._get_cpu_for_mixed_process."""
+
+    def test_partitions_pool_by_cores_per_client(self, mixed_runner):
+        """cores_per_client=2 starting at core 10 → 10-11, 12-13, 14-15."""
+        assert mixed_runner._get_cpu_for_mixed_process(0) == "10-11"
+        assert mixed_runner._get_cpu_for_mixed_process(1) == "12-13"
+        assert mixed_runner._get_cpu_for_mixed_process(2) == "14-15"
+
+    def test_single_core_per_client_returns_bare_number(self, minimal_valid_config):
+        """When only 1 core per client, output must be '20' not '20-20'."""
+        cfg = {
+            **minimal_valid_config,
+            "cpu_allocation": {"cores_per_server": 1, "cores_per_client": 1},
+        }
+        runner = ClientRunner(
+            commit_id="abc",
+            config=cfg,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp",
+        )
+        runner.client_cpu_ranges = ["20-25"]
+        assert runner._get_cpu_for_mixed_process(0) == "20"
+        assert runner._get_cpu_for_mixed_process(1) == "21"
+
+    def test_first_range_as_single_core_parses_correctly(self, minimal_valid_config):
+        """When client_cpu_ranges[0] has no dash it still parses as an int."""
+        cfg = {
+            **minimal_valid_config,
+            "cpu_allocation": {"cores_per_server": 1, "cores_per_client": 2},
+        }
+        runner = ClientRunner(
+            commit_id="abc",
+            config=cfg,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp"),
+            valkey_path="/tmp",
+        )
+        runner.client_cpu_ranges = ["30"]
+        assert runner._get_cpu_for_mixed_process(0) == "30-31"
+        assert runner._get_cpu_for_mixed_process(1) == "32-33"
+
+
+def _popen_mock(stdout: str, returncode: int = 0):
+    """Return a MagicMock that mimics ``subprocess.Popen`` for one child."""
+    proc = MagicMock()
+    proc.communicate.return_value = (stdout, "")
+    proc.returncode = returncode
+    return proc
+
+
+_MIXED_CSV = _make_csv(
+    [
+        {
+            "test": "HSET",
+            "rps": "1000.0",
+            "avg_latency_ms": "1.0",
+            "min_latency_ms": "0.5",
+            "p50_latency_ms": "1.0",
+            "p95_latency_ms": "1.5",
+            "p99_latency_ms": "2.0",
+            "max_latency_ms": "3.0",
+        }
+    ]
+)
+
+
+class TestRunMixedWorkload:
+    """Tests for ClientRunner._run_mixed_workload (Popen mocked)."""
+
+    def test_metrics_have_correct_test_id_and_phase_per_sub_scenario(
+        self, mixed_runner, mixed_scenario
+    ):
+        """Every produced metric must be attributable to its sub-scenario id."""
+        # Use side_effect (not return_value) so each call returns a *fresh*
+        # dict. _create_mixed_metric mutates the dict returned by
+        # create_metrics; a shared return_value would cause every metric to
+        # end up as the same dict with the last-written test_id.
+        metrics_processor = MagicMock()
+        metrics_processor.create_metrics.side_effect = lambda *a, **kw: {"rps": 1000.0}
+
+        with patch("valkey_benchmark.subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = [_popen_mock(_MIXED_CSV) for _ in range(3)]
+
+            result = mixed_runner._run_mixed_workload(
+                mixed_scenario,
+                group_id=1,
+                config_set={},
+                metrics_processor=metrics_processor,
+                warmup_duration=0,
+                commit_time="2026-01-01T00:00:00Z",
+                scenario_id="j",
+            )
+
+        assert result is not None and len(result) == 3
+        test_ids = {m["test_id"] for m in result}
+        assert test_ids == {"1_j_write_w1", "1_j_read_r1", "1_j_read_r2"}
+
+        by_phase = {m["test_id"]: m["test_phase"] for m in result}
+        assert by_phase["1_j_write_w1"] == "mixed_write"
+        assert by_phase["1_j_read_r1"] == "mixed_read"
+        assert by_phase["1_j_read_r2"] == "mixed_read"
+
+    def test_warmup_mode_still_spawns_processes_but_returns_no_metrics(
+        self, mixed_runner, mixed_scenario
+    ):
+        """Warmup (metrics_processor=None) must still drain workload processes."""
+        with patch("valkey_benchmark.subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = [_popen_mock(_MIXED_CSV) for _ in range(3)]
+
+            result = mixed_runner._run_mixed_workload(
+                mixed_scenario,
+                group_id=1,
+                config_set={},
+                metrics_processor=None,
+                warmup_duration=0,
+                commit_time="2026-01-01T00:00:00Z",
+                scenario_id="j",
+            )
+
+        assert mock_popen.call_count == 3
+        assert result is None
+
+    def test_failed_process_produces_no_metric_for_that_sub_scenario(
+        self, mixed_runner, mixed_scenario
+    ):
+        """Non-zero exit for one process must not poison metrics for others."""
+        # side_effect returns a fresh dict per call (see other test for why).
+        metrics_processor = MagicMock()
+        metrics_processor.create_metrics.side_effect = lambda *a, **kw: {"rps": 1000.0}
+
+        with patch("valkey_benchmark.subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = [
+                _popen_mock("", returncode=1),  # w1 fails
+                _popen_mock(_MIXED_CSV),  # r1 ok
+                _popen_mock(_MIXED_CSV),  # r2 ok
+            ]
+
+            result = mixed_runner._run_mixed_workload(
+                mixed_scenario,
+                group_id=1,
+                config_set={},
+                metrics_processor=metrics_processor,
+                warmup_duration=0,
+                commit_time="2026-01-01T00:00:00Z",
+                scenario_id="j",
+            )
+
+        test_ids = {m["test_id"] for m in result}
+        assert "1_j_write_w1" not in test_ids
+        assert "1_j_read_r1" in test_ids
+        assert "1_j_read_r2" in test_ids
+
+    def test_empty_writes_and_reads_returns_none_without_spawning(self, mixed_runner):
+        """A scenario with no sub-scenarios must not spawn anything."""
+        scenario = {"id": "j", "duration": 60, "writes": [], "reads": []}
+        with patch("valkey_benchmark.subprocess.Popen") as mock_popen:
+            result = mixed_runner._run_mixed_workload(
+                scenario,
+                group_id=1,
+                config_set={},
+                metrics_processor=MagicMock(),
+                warmup_duration=0,
+                commit_time="2026-01-01T00:00:00Z",
+            )
+
+        assert result is None
+        assert mock_popen.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# _create_mixed_metric — signature guard using the REAL MetricsProcessor
+# ---------------------------------------------------------------------------
+#
+# Other mixed-workload tests mock MetricsProcessor via ``side_effect``. That
+# accepts any positional/keyword combination, so a drift between
+# _create_mixed_metric's call site and MetricsProcessor.create_metrics's real
+# signature would pass mocked tests but blow up at runtime.
+#
+# This test wires the two together with a real MetricsProcessor to catch that
+# drift class of bug.
+
+
+class TestCreateMixedMetricRealProcessor:
+    """Signature-drift guard: _create_mixed_metric ↔ MetricsProcessor.create_metrics."""
+
+    def test_real_processor_accepts_all_positional_args(self, mixed_runner):
+        from process_metrics import MetricsProcessor
+
+        real_processor = MetricsProcessor(
+            commit_id="abc123",
+            cluster_mode=False,
+            tls_mode=False,
+            commit_time="2026-01-01T00:00:00Z",
+        )
+
+        # Minimal well-formed CSV row (matches _parse_csv_row output shape).
+        row = {
+            "test": "FT.SEARCH",
+            "rps": "1000.0",
+            "avg_latency_ms": "1.0",
+            "min_latency_ms": "0.5",
+            "p50_latency_ms": "1.0",
+            "p95_latency_ms": "2.0",
+            "p99_latency_ms": "3.0",
+            "max_latency_ms": "5.0",
+        }
+        sub_cfg = {"command": "FT.SEARCH rd0 hello", "clients": 10, "pipeline": 1}
+        parent_scenario = {"duration": 60}
+
+        metric = mixed_runner._create_mixed_metric(
+            row=row,
+            sub_cfg=sub_cfg,
+            parent_scenario=parent_scenario,
+            group_id=1,
+            scenario_id="j",
+            sub_id="r1",
+            phase="read",
+            config_set={},
+            warmup_duration=0,
+            metrics_processor=real_processor,
+        )
+
+        # If create_metrics's signature drifts (arg reorder, rename, added
+        # required kwarg), the call above raises TypeError before we get here.
+        assert metric is not None
+        assert metric["test_id"] == "1_j_read_r1"
+        assert metric["test_phase"] == "mixed_read"
+        assert metric["rps"] == 1000.0

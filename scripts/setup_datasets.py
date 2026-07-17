@@ -3,13 +3,33 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
+import random
 import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import numpy as np
+
+
+def _make_rng(filename: str) -> "np.random.Generator":
+    """Return a numpy Generator seeded deterministically from `filename`.
+
+    Two invocations against the same filename produce byte-identical output,
+    so vector datasets and query vectors are reproducible across machines.
+    Different filenames get different content (avoids accidentally emitting
+    the same random values for e.g. hybrid data and queries).
+    """
+    seed = int(hashlib.sha256(filename.encode("utf-8")).hexdigest()[:8], 16)
+    return np.random.default_rng(seed)
+
+
+# Alphabet used for deterministic random-word generation (fuzzy datasets)
+ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 
 # Constants for query generation
 STOP_WORDS = {
@@ -47,6 +67,42 @@ STOP_WORDS = {
     "will",
     "with",
 }
+
+
+def _generate_random_word(rng: random.Random, min_length: int, max_length: int) -> str:
+    """Generate a deterministic random word using the supplied local RNG.
+
+    A local RNG (not the global one) is used so that fuzzy dataset generation
+    remains reproducible regardless of other transforms.
+    """
+    word_length = rng.randint(min_length, max_length)
+    return "".join(rng.choices(ALPHABET, k=word_length))
+
+
+def _apply_fuzzy_edit(word: str, edit_type: str, rng: random.Random) -> str:
+    """Apply a single Levenshtein edit (insert/delete/substitute) to ``word``.
+
+    Uses the supplied local RNG for reproducibility. Substitute retries until a
+    different character is produced to avoid no-op edits.
+    """
+    if len(word) < 2:
+        return word
+
+    if edit_type == "insert":
+        pos = rng.randint(0, len(word))
+        return word[:pos] + rng.choice(ALPHABET) + word[pos:]
+    if edit_type == "delete":
+        pos = rng.randint(0, len(word) - 1)
+        return word[:pos] + word[pos + 1 :]
+    if edit_type == "substitute":
+        pos = rng.randint(0, len(word) - 1)
+        original_char = word[pos]
+        new_char = rng.choice(ALPHABET)
+        while new_char == original_char and len(ALPHABET) > 1:
+            new_char = rng.choice(ALPHABET)
+        return word[:pos] + new_char + word[pos + 1 :]
+
+    return word
 
 
 def download_wikipedia(output_dir: Path) -> Path:
@@ -183,6 +239,50 @@ def apply_transforms(
                 parts.extend(terms)
                 content = " ".join(parts)
 
+        elif ttype == "fuzzy":
+            # Generate fuzzy-match dataset: multiple misspelling variants per base term.
+            # Structure: variant_count × docs_per_variant. Variant 0 is the
+            # correctly-spelled base word; other variants apply
+            # ``target_distance`` Levenshtein edits (insert/delete/substitute).
+            #
+            # ``min_word_length`` / ``max_word_length`` / ``target_distance``
+            # MUST match the corresponding fuzzy query-generator config so that
+            # each query resolves to the same base word its dataset variant 0
+            # holds. See TestGenerateFuzzyQueries.
+            variant_count = t.get("variant_count", 5)
+            docs_per_variant = t.get("docs_per_variant", 20)
+            min_word_length = t.get("min_word_length", 5)
+            max_word_length = t.get("max_word_length", 6)
+            target_distance = t.get("target_distance", 1)
+
+            # Determine which term / variant this document belongs to
+            docs_per_term = variant_count * docs_per_variant
+            term_id = ((doc_num - 1) // docs_per_term) + 1
+            within_term = (doc_num - 1) % docs_per_term
+            variant_id = within_term // docs_per_variant
+
+            # Deterministic base word seeded by term_id
+            term_rng = random.Random(term_id)
+            base_word = _generate_random_word(
+                term_rng, min_word_length, max_word_length
+            )
+
+            if variant_id == 0:
+                # First variant is the correctly-spelled base word (matches queries)
+                variant = base_word
+            else:
+                # Deterministic seed: term_id * 1_000_000 + variant_id
+                # (assumes variant_id < 1_000_000, which is trivially true for
+                # realistic ``variant_count`` values).
+                variant_seed = term_id * 1_000_000 + variant_id
+                variant_rng = random.Random(variant_seed)
+                variant = base_word
+                for _ in range(target_distance):
+                    edit_type = variant_rng.choice(["insert", "delete", "substitute"])
+                    variant = _apply_fuzzy_edit(variant, edit_type, variant_rng)
+
+            content = variant
+
         elif ttype == "expansion":
             # Generate expansion variants: prefix_a suffix_a, prefix_aa suffix_aa, etc.
             # Tests wildcard expansion with multiple documents per variant
@@ -210,23 +310,160 @@ def apply_transforms(
 
         elif ttype == "numeric_range":
             # Generate random numeric values in range
-            import random
-
             min_val = t.get("min", 0)
             max_val = t.get("max", 100)
             content = str(random.uniform(min_val, max_val))
 
         elif ttype == "tag_list":
             # Generate tag combinations
-            import random
-
             tags = t.get("tags", ["tag1", "tag2", "tag3"])
             # Select 1-2 random tags and join with pipe
             num_tags = random.randint(1, min(2, len(tags)))
             selected = random.sample(tags, num_tags)
             content = "|".join(selected)
 
+        elif ttype == "vector":
+            # Vector fields live in structured NPY, not CSV. This marker exists
+            # so build_field_configs()/generate_csv_dataset() can detect a vector
+            # field and route generation to generate_structured_npy().
+            content = ""
+
     return content[:field_size]
+
+
+def _l2_normalize(vectors: "np.ndarray") -> "np.ndarray":
+    """Return `vectors` scaled to unit L2 norm along the last axis (in-place safe).
+
+    Rows with zero norm are left as-is (division would produce NaN). In practice
+    this never triggers for `np.random.randn` output, but keeping the branch
+    keeps the function safe for any caller that might pass sparser input.
+    """
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    return np.divide(vectors, norms, out=np.zeros_like(vectors), where=(norms != 0))
+
+
+def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Path:
+    """Generate a structured NPY combining vector + text/numeric/tag fields.
+
+    The output is consumable by the dataset-enabled valkey-benchmark
+    (DATASET_FORMAT_NPY with a structured dtype). All random draws are
+    seeded via ``_make_rng(filename)`` so two invocations against the same
+    filename produce byte-identical output — required for cross-machine
+    benchmark comparability.
+
+    Each field is realized as:
+
+      - vector       → ('name', 'f4', (dims,))  L2-normalized random Gaussian
+      - phrase_label → ('name', 'SN')  ASCII bytes, stores 'phrase{qid}' where
+                        qid = doc_num // repeats. A short single-token value is
+                        intentional: FT.SEARCH "phrase{i}" matches ~`repeats`
+                        docs (~1% selectivity at repeats=1000, docs=100k).
+      - proximity_phrase → deprecated alias for phrase_label, kept for
+                        backward compatibility with existing configs. In the
+                        NPY path it ignores term_count/combinations; use the
+                        CSV path if you need those semantics.
+      - numeric_range → ('name', 'SN')  ASCII decimal string; NUMERIC index
+                        parses at ingest.
+      - tag_list     → ('name', 'SN')  ASCII bytes, single tag per doc.
+    """
+    output = output_dir / filename
+    if output.exists():
+        logging.info(f"Exists: {filename}")
+        return output
+
+    doc_count = config["doc_count"]
+    field_configs = build_field_configs(config)
+    rng = _make_rng(filename)
+
+    # Build structured dtype from field transforms.
+    dtype_list = []
+    for field in field_configs:
+        field_name = field["name"]
+        for t in field.get("transforms", []):
+            ttype = t.get("type")
+            if ttype == "vector":
+                dims = t.get("dimensions", 256)
+                dtype_list.append((field_name, "f4", (dims,)))
+            elif ttype in ("phrase_label", "proximity_phrase"):
+                if ttype == "proximity_phrase":
+                    logging.warning(
+                        f"field '{field_name}': type 'proximity_phrase' in a "
+                        f"vector-bearing dataset is treated as 'phrase_label' "
+                        f"(term_count / combinations are ignored). Rename to "
+                        f"'phrase_label' to silence this warning."
+                    )
+                size = field.get("size", 50)
+                dtype_list.append((field_name, f"S{size}"))
+            elif ttype == "numeric_range":
+                size = field.get("size", 15)
+                # Sanity: an unsigned decimal with 2 fractional digits needs
+                # len(str(int(max_val))) + 3 bytes at minimum. Fail loudly at
+                # generation time rather than silently truncating in the file.
+                max_val = t.get("max", 1000)
+                needed = len(f"{max_val:.2f}")
+                if size < needed:
+                    raise ValueError(
+                        f"numeric_range field '{field_name}' has size={size} "
+                        f"but max={max_val} requires at least {needed} bytes"
+                    )
+                dtype_list.append((field_name, f"S{size}"))
+            elif ttype == "tag_list":
+                size = field.get("size", 30)
+                dtype_list.append((field_name, f"S{size}"))
+
+    if not dtype_list:
+        raise ValueError(
+            f"No supported fields (vector / phrase_label / proximity_phrase / "
+            f"numeric_range / tag_list) declared for {filename}; nothing to "
+            f"generate"
+        )
+
+    logging.info(f"Generating {filename} ({doc_count} docs, {len(dtype_list)} fields)")
+    data = np.zeros(doc_count, dtype=dtype_list)
+
+    # Fill each field. All inner loops are numpy-vectorized so throughput scales
+    # linearly with doc_count instead of degrading at 10^5+ rows. All random
+    # draws go through the seeded `rng` for byte-identical reproducibility.
+    for field in field_configs:
+        field_name = field["name"]
+        for t in field.get("transforms", []):
+            ttype = t.get("type")
+
+            if ttype == "vector":
+                dims = t.get("dimensions", 256)
+                vectors = rng.standard_normal((doc_count, dims), dtype=np.float32)
+                data[field_name] = _l2_normalize(vectors)
+
+            elif ttype in ("phrase_label", "proximity_phrase"):
+                # Short single-token value: "phrase{qid}". With repeats=1000 and
+                # doc_count=100_000, there are 100 unique phrase ids and each
+                # matches ~1000 docs when queried.
+                repeats = t.get("repeats", 1000)
+                qids = np.arange(doc_count) // repeats
+                # Encode the small set of unique labels once and gather.
+                unique_qids = np.unique(qids)
+                labels = np.array(
+                    [f"phrase{q}".encode("ascii") for q in unique_qids],
+                    dtype=data[field_name].dtype,
+                )
+                data[field_name] = labels[qids - unique_qids[0]]
+
+            elif ttype == "numeric_range":
+                min_val = t.get("min", 0)
+                max_val = t.get("max", 1000)
+                prices = rng.uniform(min_val, max_val, doc_count)
+                formatted = np.char.mod("%.2f", prices)  # returns U-dtype
+                data[field_name] = formatted.astype(data[field_name].dtype)
+
+            elif ttype == "tag_list":
+                tags = t.get("tags", ["electronics", "books", "clothing"])
+                # Pick a random tag per row via the seeded rng.
+                choices = rng.choice(tags, size=doc_count)
+                data[field_name] = choices.astype(data[field_name].dtype)
+
+    np.save(output, data)
+    logging.info(f"Complete: {filename}")
+    return output
 
 
 def generate_csv_dataset(
@@ -241,6 +478,16 @@ def generate_csv_dataset(
 
     doc_count = config["doc_count"]
     field_configs = build_field_configs(config)
+
+    # If any field has a `vector` transform, output is a structured NPY (not CSV).
+    # Route to generate_structured_npy() and rewrite the .csv suffix to .npy.
+    has_vector = any(
+        any(t.get("type") == "vector" for t in field.get("transforms", []))
+        for field in field_configs
+    )
+    if has_vector:
+        npy_filename = str(Path(filename).with_suffix(".npy"))
+        return generate_structured_npy(output_dir, npy_filename, config)
 
     # Check if any field needs Wikipedia
     needs_wiki = any(
@@ -457,6 +704,72 @@ def generate_queries(output_dir: Path, config: dict, filename: str) -> Path:
             for term_id in range(1, num_queries + 1):
                 writer.writerow([f"term{term_id:03d}"])
 
+        elif query_type == "fuzzy":
+            # Generate the correctly-spelled base words for fuzzy datasets.
+            # Uses the same term_id → base_word mapping as the fuzzy transform,
+            # so each query is guaranteed to have matching variants in the dataset.
+            min_length = config.get("min_word_length", 5)
+            max_length = config.get("max_word_length", 6)
+
+            writer.writerow(["term"])
+            for term_id in range(1, num_queries + 1):
+                term_rng = random.Random(term_id)
+                base_word = _generate_random_word(term_rng, min_length, max_length)
+                writer.writerow([base_word])
+
+        elif query_type == "tag_only":
+            # Generate tag-only queries for composed TAG filter tests.
+            # Rotates through the provided tag list to produce ``doc_count`` queries.
+            tags = config.get(
+                "tags", ["electronics", "books", "clothing", "food", "sports"]
+            )
+            if not tags:
+                logging.error(f"tag_only query {filename} needs non-empty 'tags' list")
+                return output
+
+            writer.writerow(["category"])
+            for i in range(num_queries):
+                writer.writerow([tags[i % len(tags)]])
+
+        elif query_type == "vector":
+            # Structured NPY: (search_term: SN, query_vector: f4[dims]).
+            # Terms are 'phrase{i}' so they match generate_structured_npy() ingest
+            # (phrase_label / proximity_phrase transform stores 'phrase{qid}' per
+            # doc). Query vectors are L2-normalized random Gaussians drawn from
+            # a filename-seeded RNG so two invocations produce byte-identical
+            # output. A companion CSV of just the search terms is also written.
+            dimensions = config.get("dimensions", 256)
+            npy_path = output_dir / Path(filename).with_suffix(".npy")
+
+            if not npy_path.exists():
+                logging.info(
+                    f"Generating {npy_path.name} "
+                    f"(structured: search_term + query_vector)"
+                )
+                rng = _make_rng(npy_path.name)
+                dtype = [
+                    ("search_term", "S20"),
+                    ("query_vector", "f4", (dimensions,)),
+                ]
+                data = np.zeros(num_queries, dtype=dtype)
+                # search_term: deterministic 'phrase{i}' → vectorized encode.
+                data["search_term"] = np.array(
+                    [f"phrase{i}".encode("ascii") for i in range(num_queries)],
+                    dtype=data["search_term"].dtype,
+                )
+                # query_vector: random Gaussian, L2-normalized in a single pass.
+                vectors = rng.standard_normal(
+                    (num_queries, dimensions), dtype=np.float32
+                )
+                data["query_vector"] = _l2_normalize(vectors)
+                np.save(npy_path, data)
+                logging.info(f"Complete: {npy_path.name}")
+
+            # Companion CSV with just the terms (validate_queries.py fallback).
+            writer.writerow(["search_term"])
+            for i in range(num_queries):
+                writer.writerow([f"phrase{i}"])
+
     logging.info(f"Complete: {filename} ({num_queries} queries)")
     return output
 
@@ -504,16 +817,32 @@ def main():
     wiki_file = download_wikipedia(args.output_dir) if needs_wiki else None
 
     for filename in files_to_gen:
-        if filename in dataset_configs:
-            if filename.endswith(".csv"):
-                # CSV format - pass wiki_file if needed
+        # A scenario may reference `foo.npy` while the dataset_generation key
+        # is `foo.csv` (structured NPY is produced by the CSV path when a
+        # vector field is present). Fall back to the .csv key in that case.
+        config_key = filename
+        if filename.endswith(".npy") and filename not in dataset_configs:
+            csv_key = str(Path(filename).with_suffix(".csv"))
+            if csv_key in dataset_configs:
+                config_key = csv_key
+
+        if config_key in dataset_configs:
+            if config_key.endswith(".csv"):
+                # CSV format - pass wiki_file if needed. Auto-routes to
+                # structured NPY internally when any field is a vector.
                 generate_csv_dataset(
-                    args.output_dir, dataset_configs[filename], filename, wiki_file
+                    args.output_dir,
+                    dataset_configs[config_key],
+                    config_key,
+                    wiki_file,
                 )
             elif wiki_file:
                 # XML format - needs Wikipedia
                 generate_dataset(
-                    args.output_dir, wiki_file, dataset_configs[filename], filename
+                    args.output_dir,
+                    wiki_file,
+                    dataset_configs[config_key],
+                    config_key,
                 )
 
     # Generate query CSVs
