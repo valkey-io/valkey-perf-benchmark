@@ -19,7 +19,7 @@ on:
         default: ""
         type: string
       skip_profiling:
-        description: "Skip profiling (default: on). Uncheck to enable full profiling. Scheduled runs always skip profiling."
+        description: "Check for skip profiling (perf/flamegraph). Leave unchecked for full profiling (default)."
         required: false
         default: false
         type: boolean
@@ -69,7 +69,7 @@ jobs:
       SKIP_CONFIG_SET: ""
       SKIP_PROFILING: ${{ inputs.skip_profiling && '1' || '' }}
     runs-on: [self-hosted, valkey-search-arm]
-    timeout-minutes: 1800
+    timeout-minutes: 300
     steps:
       - name: Ensure git is installed
         run: command -v git || sudo dnf install -y git

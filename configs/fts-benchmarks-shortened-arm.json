@@ -153,7 +153,15 @@
             "maxdocs": 100000,
             "clients": 1000,
             "sequential": true,
-            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\""
+            "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 10,
+                  "duration": 10
+                }
+              }
+            }
           },
           {
             "id": "b",
@@ -202,7 +210,15 @@
             "maxdocs": 100000,
             "clients": 1000,
             "sequential": true,
-            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 3,
+                  "duration": 10
+                }
+              }
+            }
           },
           {
             "id": "b",
@@ -279,7 +295,15 @@
             "maxdocs": 100000,
             "clients": 1000,
             "sequential": true,
-            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 10,
+                  "duration": 15
+                }
+              }
+            }
           },
           {
             "id": "b",
@@ -328,7 +352,15 @@
             "maxdocs": 100000,
             "clients": 1000,
             "sequential": true,
-            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\"",
+            "profiling": {
+              "delays": {
+                "write": {
+                  "delay": 15,
+                  "duration": 15
+                }
+              }
+            }
           },
           {
             "id": "b",
@@ -547,6 +579,21 @@
     "profiling_sets": [
       {
         "enabled": false
+      },
+      {
+        "enabled": true,
+        "mode": "wall-time",
+        "sampling_freq": 999,
+        "delays": {
+          "write": {
+            "delay": 0,
+            "duration": 10
+          },
+          "read": {
+            "delay": 60,
+            "duration": 10
+          }
+        }
       }
     ]
   }
