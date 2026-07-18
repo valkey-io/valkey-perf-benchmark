@@ -18,6 +18,11 @@ on:
         required: false
         default: ""
         type: string
+      skip_profiling:
+        description: "Skip profiling (default: on). Uncheck to enable full profiling. Scheduled runs always skip profiling."
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "0 9 * * *"
 
@@ -42,7 +47,7 @@ jobs:
       # Module configuration
       MODULE_NAME: "search"
       MODULE_GITHUB_REPO: "valkey-io/valkey-search"
-      MODULE_BRANCH: ${{ inputs.branch || 'main' }}
+      MODULE_BRANCH: "main"
       MODULE_DIR: "valkey-search"
       MODULE_PATH: "${{ github.workspace }}/valkey-search"
       # Core configuration
@@ -55,14 +60,14 @@ jobs:
       PERF_BENCHMARK_BRANCH: "main"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs//fts-benchmarks-shortened-arm.json"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
       CLUSTER_MODE: ""
       SKIP_CONFIG_SET: ""
-      SKIP_PROFILING: ""
+      SKIP_PROFILING: ${{ inputs.skip_profiling && '1' || '' }}
     runs-on: [self-hosted, valkey-search-arm]
     timeout-minutes: 1800
     steps:
@@ -113,7 +118,7 @@ jobs:
           # Create persistent dataset directory on runner
           DATASET_CACHE="/home/ec2-user/search-datasets-cache"
           mkdir -p "$DATASET_CACHE"
-
+          
           # Copy any repo-committed datasets to cache (updates/adds files)
           if [[ -d "$PERF_BENCHMARK_PATH/datasets" ]] && [[ "$(ls -A $PERF_BENCHMARK_PATH/datasets 2>/dev/null)" ]]; then
             echo "Updating cache with repo-committed datasets..."
@@ -276,13 +281,14 @@ jobs:
           # (build + benchmark) can take much longer than either, we refresh
           # both right before every DB call:
           reauth_aws() {
+            echo "[reauth_aws] refreshing AWS STS credentials..."
             # Disable trace so credentials never appear in the workflow log.
             { set +x; } 2>/dev/null
             local id_token creds ak sk st
             id_token=$(curl -sSL \
               -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
-              | python -c "import sys, json; print(json.load(sys.stdin)['value'])")
+              | python3 -c "import sys, json; print(json.load(sys.stdin)['value'])")
             creds=$(aws sts assume-role-with-web-identity \
               --role-arn "${{ secrets.AWS_ROLE_TO_ASSUME }}" \
               --role-session-name "search-benchmark-$(date +%s)" \
