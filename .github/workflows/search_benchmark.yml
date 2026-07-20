@@ -24,7 +24,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 */4 * * *"
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
