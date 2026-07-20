@@ -150,12 +150,6 @@ jobs:
           
           pip install --require-hashes -r requirements.txt
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ secrets.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-
       - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
         working-directory: valkey_ram
         run: |
@@ -187,6 +181,12 @@ jobs:
             echo "Using latest core commit: $CORE_SHA"
           fi
           echo "sha=$CORE_SHA" >> "$GITHUB_OUTPUT"
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
       - name: Cleanup stale rows from previous runs
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
@@ -276,10 +276,7 @@ jobs:
       - name: Benchmark module commits
         if: steps.determine_commits.outputs.skip == 'false'
         run: |
-          # AWS STS session credentials expire after 1 hour by default, and RDS
-          # IAM auth tokens expire after 15 minutes. Since a single iteration
-          # (build + benchmark) can take much longer than either, we refresh
-          # both right before every DB call:
+          # refresh AWS STS credentials and RDS IAM auth token before each call
           reauth_aws() {
             echo "[reauth_aws] refreshing AWS STS credentials..."
             # Disable trace so credentials never appear in the workflow log.
