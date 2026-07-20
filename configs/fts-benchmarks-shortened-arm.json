@@ -435,6 +435,11 @@
     ],
     "config_sets": [
       {
+        "search.reader-threads": 1,
+        "search.writer-threads": 1,
+        "search.async-fanout-threshold": 4
+      },
+      {
         "search.reader-threads": 8,
         "search.writer-threads": 8,
         "search.async-fanout-threshold": 4
@@ -589,6 +594,11 @@
       }
     ],
     "config_sets": [
+      {
+        "search.reader-threads": 1,
+        "search.writer-threads": 1,
+        "search.async-fanout-threshold": 4
+      },
       {
         "search.reader-threads": 8,
         "search.writer-threads": 8,

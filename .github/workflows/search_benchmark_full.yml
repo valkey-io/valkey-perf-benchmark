@@ -1,4 +1,4 @@
-name: Valkey Search Benchmark
+name: Valkey Search Benchmark (Full)
 
 on:
   workflow_dispatch:
@@ -23,8 +23,6 @@ on:
         required: false
         default: true
         type: boolean
-  schedule:
-    - cron: "0 */4 * * *"
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
@@ -60,7 +58,7 @@ jobs:
       PERF_BENCHMARK_BRANCH: "main"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-shortened-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
