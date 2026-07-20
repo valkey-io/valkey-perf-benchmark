@@ -1,4 +1,4 @@
-name: Valkey Search Benchmark
+name: Valkey Search Benchmark (Full)
 
 on:
   workflow_dispatch:
@@ -18,18 +18,11 @@ on:
         required: false
         default: ""
         type: string
-      num_runs:
-        description: "Number of times to repeat each read scenario (default: 1)"
-        required: false
-        default: "1"
-        type: string
       skip_profiling:
         description: "Check for skip profiling (perf/flamegraph). Leave unchecked for full profiling (default)."
         required: false
         default: true
         type: boolean
-  schedule:
-    - cron: "0 */4 * * *"
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
@@ -65,10 +58,9 @@ jobs:
       PERF_BENCHMARK_BRANCH: "main"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-shortened-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
-      NUM_RUNS: ${{ inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
       CLUSTER_MODE: ""
@@ -328,7 +320,6 @@ jobs:
               --module-path "$MODULE_PATH/.build-release/libsearch.so" \
               --module-commit "$MODULE_SHA" \
               --module-commit-timestamp "$MODULE_TS" \
-              --runs "$NUM_RUNS" \
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
               ${SKIP_CONFIG_SET:+--skip-config-set} \
               ${SKIP_PROFILING:+--skip-profiling} \
