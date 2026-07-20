@@ -323,6 +323,37 @@ Supported commands:
 "SET", "GET", "RPUSH", "LPUSH", "LPOP", "SADD", "SPOP", "HSET", "GET", "MGET", "LRANGE", "SPOP", "ZPOPMIN"
 ```
 
+### Scenario-based Configurations (`test_groups`)
+
+For module benchmarks (e.g. `valkey-search`) a scenario-based format is also supported.
+Instead of a cross-product of `commands x data_sizes x ...`, each scenario is an
+explicit test with its own `command`, `dataset`, `clients`, `duration`/`requests`,
+and `warmup`. Scenarios are grouped under `test_groups`. Sub-flags of the command
+can be expanded via `options` (e.g. `NOCONTENT`) into separate variants.
+
+Two scenario types worth calling out:
+
+- **`type: "write"` / `type: "read"`** — a single benchmark process against the
+  server. Reads may be `cluster_execution: "parallel"` to fan out one client per
+  cluster node.
+- **`type: "mixed"`** — spawns concurrent write **and** read processes in the same
+  test window. Each sub-scenario listed under `writes: [...]` and `reads: [...]`
+  becomes its own `valkey-benchmark` process on its own CPU range and produces
+  its own metric entry (`test_phase: mixed_write` / `mixed_read`). Options
+  declared on a mixed scenario are applied to every read sub-scenario, not to a
+  (non-existent) top-level command.
+
+Datasets consumed by scenarios can be generated ahead of time from a
+`dataset_generation` block in the same config, via `scripts/setup_datasets.py`.
+Supported CSV transforms include `wikipedia`, `inject`, `repeat`, `prefix_gen`,
+`proximity_phrase`, `expansion`, `fuzzy`, `numeric_range`, and `tag_list`. The
+`fuzzy` transform pairs with a `type: "fuzzy"` query generator so a query term
+matches variant 0 of its corresponding dataset row and `target_distance`-edit
+variants (insert/delete/substitute) match under fuzzy search.
+
+See `configs/module-test-arm.json` for a runnable example that includes a
+mixed workload and per-cluster-execution options.
+
 ## Results
 
 Benchmark results are stored in the `results/` directory, organized by commit ID:
@@ -804,6 +835,16 @@ The framework uses a **transform-based dataset generation system** that supports
 - `proximity_phrase`: Generate N-term phrases for proximity testing
   - Parameters: `term_count`, `combinations` (1=best case, 100=worst case), `repeats` (copies per pattern)
   - Supports CSV output (no Wikipedia needed)
+- `expansion`: Generate wildcard-expansion variants (term001_a, term001_aa, ...) grouped
+  as `expansion_count` × `docs_per_expansion` copies × `term_count` base terms
+- `fuzzy`: Generate misspelled variants for fuzzy-match tests
+  - Parameters: `variant_count`, `docs_per_variant`, `term_count`, `min_word_length`,
+    `max_word_length`, `target_distance`
+  - Variant 0 is the correctly-spelled base word (matches `type: "fuzzy"` queries);
+    variants ≥1 apply `target_distance` Levenshtein edits (insert/delete/substitute)
+- `numeric_range`: Random numeric value in `[min, max]` (for NUMERIC index tests)
+- `tag_list`: Pipe-separated random tags from a supplied list (for TAG index tests)
+
 
 **Compact Format (for field explosion):**
 ```json
@@ -829,6 +870,17 @@ The framework uses a **transform-based dataset generation system** that supports
 ```
 - Auto-generates query CSVs matching ingestion datasets
 - Supports type-based generation (extensible for future query types)
+
+Supported query types:
+- `proximity_phrase` — multi-column phrase terms matching a `proximity_phrase` transform
+- `prefix` / `suffix` — substring queries extracted from an existing source CSV
+- `expansion` — zero-padded base terms (e.g. `term001`) matching an `expansion` transform
+- `fuzzy` — deterministic base words matching variant 0 of a `fuzzy` transform, so
+  every query has known matches in the dataset (parameters: `min_word_length`,
+  `max_word_length`)
+- `tag_only` — rotates through a supplied `tags` list to produce category filters
+  for composed TAG queries
+
 
 ### FTS Test Groups
 

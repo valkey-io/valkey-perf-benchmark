@@ -126,3 +126,29 @@ class TestExpandScenarioWithOptions:
 
         assert scenario["id"] == original_id
         assert scenario["command"] == original_cmd
+
+
+class TestExpandScenarioMixedOptions:
+    """For mixed scenarios, options must apply to read sub-scenarios (not writes,
+    and not to a non-existent top-level command)."""
+
+    def test_mixed_options_applied_to_reads_not_writes(self, minimal_client_runner):
+        """Flag is appended to every read command; write commands are unchanged."""
+        scenario = {
+            "id": "j",
+            "type": "mixed",
+            "writes": [{"id": "a", "command": "HSET doc:x field v", "clients": 3}],
+            "reads": [
+                {"id": "b", "command": "FT.SEARCH idx q1", "clients": 7},
+                {"id": "c", "command": "FT.SEARCH idx q2", "clients": 7},
+            ],
+            "options": {"NOCONTENT": "_nc"},
+        }
+        result = minimal_client_runner._expand_scenario_options(scenario)
+
+        assert len(result) == 1
+        variant = result[0]
+        assert variant["id"] == "j_nc"
+        assert variant["writes"][0]["command"] == "HSET doc:x field v"
+        assert variant["reads"][0]["command"] == "FT.SEARCH idx q1 NOCONTENT"
+        assert variant["reads"][1]["command"] == "FT.SEARCH idx q2 NOCONTENT"

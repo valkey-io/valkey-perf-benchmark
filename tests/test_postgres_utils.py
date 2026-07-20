@@ -465,7 +465,7 @@ class TestResolveTableName:
         assert resolve_table_name("search") == "benchmark_metrics_search"
 
     def test_rejects_sql_injection(self):
-        with pytest.raises(ValueError, match="Invalid module name"):
+        with pytest.raises(ValueError, match="Invalid table identifier"):
             resolve_table_name("search; DROP TABLE --")
 
 
@@ -486,7 +486,7 @@ class TestResolveModuleTableName:
             _resolve_module_table_name("   ")
 
     def test_rejects_sql_injection(self):
-        with pytest.raises(ValueError, match="Invalid module_name"):
+        with pytest.raises(ValueError, match="Invalid table_id"):
             _resolve_module_table_name("search; DROP TABLE benchmark_commits --")
 
 
@@ -519,7 +519,7 @@ class TestLoadConfig:
         assert _load_config(None) is None
 
     def test_no_config_file_with_module_returns_none(self):
-        assert _load_config(None, module_name="search") is None
+        assert _load_config(None, table_id="search") is None
 
     def test_loads_list_config_without_module(self, tmp_path):
         config_file = tmp_path / "test.json"
@@ -547,7 +547,7 @@ class TestLoadConfig:
             '"dataset_generation": {"x": 1}, "query_generation": {"y": 2}, '
             '"port": 6379}]'
         )
-        result = _load_config(str(config_file), module_name="search")
+        result = _load_config(str(config_file), table_id="search")
         assert isinstance(result, list)
         # config_name dict prepended
         assert result[0] == {"config_name": "fts-benchmarks-arm.json"}
@@ -566,7 +566,7 @@ class TestLoadConfig:
             '"dataset_generation": {"x": 1}, "query_generation": {"y": 2}, '
             '"port": 6379}'
         )
-        result = _load_config(str(config_file), module_name="search")
+        result = _load_config(str(config_file), table_id="search")
         assert isinstance(result, dict)
         assert result["config_name"] == "my-config.json"
         assert "test_groups" not in result
@@ -581,7 +581,7 @@ class TestLoadConfig:
             '[{"test_name": "A", "test_groups": [1]}, '
             '{"test_name": "B", "dataset_generation": {"x": 1}}]'
         )
-        result = _load_config(str(config_file), module_name="search")
+        result = _load_config(str(config_file), table_id="search")
         # config_name prepended + 2 stripped dicts
         assert len(result) == 3
         assert result[0] == {"config_name": "multi.json"}
