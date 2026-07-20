@@ -63,7 +63,7 @@ jobs:
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
-      NUM_RUNS: ${{ inputs.num_runs || '1' }}
+      NUM_RUNS: ${{ inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
       CLUSTER_MODE: ""
