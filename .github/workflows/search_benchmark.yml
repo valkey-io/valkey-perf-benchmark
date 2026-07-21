@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       max_module_commits:
-        description: "Max module commits to scan"
+        description: "Max module commits to benchmark (default 1)"
         required: false
-        default: "3"
+        default: "1"
         type: string
       core_commit:
         description: "Manual core commit SHA (overrides latest HEAD)"
@@ -24,10 +24,21 @@ on:
         default: "3"
         type: string
       skip_profiling:
-        description: "Check for skip profiling (perf/flamegraph). Leave unchecked for full profiling (default)."
-        required: false
+        description: "Check for skip profiling"
         default: true
         type: boolean
+      skip_config_set:
+        description: "Check for skip config_sets (use default config set)"
+        default: false
+        type: boolean
+      cluster_mode:
+        description: "Cluster mode (empty=run config in file, true=cluster-mode only, false=non-cluster-mode only)"
+        default: ""
+        type: choice
+        options:
+          - ""
+          - "true"
+          - "false"
   schedule:
     - cron: "0 */4 * * *"
 
@@ -67,12 +78,12 @@ jobs:
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-shortened-arm.json"
       # Run parameters
-      MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
+      MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '1' }}
       NUM_RUNS: ${{ inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
-      CLUSTER_MODE: ""
-      SKIP_CONFIG_SET: ""
+      CLUSTER_MODE: ${{ inputs.cluster_mode || '' }}
+      SKIP_CONFIG_SET: ${{ inputs.skip_config_set && '1' || '' }}
       SKIP_PROFILING: ${{ (inputs.skip_profiling == false) && '' || '1' }}
     runs-on: [self-hosted, valkey-search-arm]
     timeout-minutes: 300
