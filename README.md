@@ -194,6 +194,17 @@ The Coefficient of Variation (CV) is useful for:
 - **Performance consistency assessment**: Lower CV indicates more consistent performance
 - **Benchmark reliability evaluation**: High CV indicates unstable test conditions
 
+### Interpreting Significance
+
+- **% Change**: The relative difference between the two means (e.g., `+3±2%`). The `±` is the uncertainty range — given the noise in the runs, the true change likely falls within that range (so `+3±2%` means somewhere between +1% and +5%).
+- **Significance indicators**: Determined by whether the 95% confidence intervals of the baseline and new means overlap.
+  - ✅ — CIs do not overlap, change is in the favorable direction (higher RPS or lower latency)
+  - ❌ — CIs do not overlap, change is in the unfavorable direction
+  - ➖ — CIs overlap, the difference cannot be distinguished from run-to-run noise
+  - ❔ — One or both sides have only a single run (n ≤ 1), so no CI can be computed
+
+A large % change may still be marked ➖: if variance is high — the indicator reflects statistical confidence, not the magnitude of the change.
+
 ### Graph Types
 
 1. **Consolidated Comparison Graphs**: Single graphs showing all metrics with legend format `{commit}-P{pipeline}/IO{io_threads}`
