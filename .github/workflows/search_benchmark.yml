@@ -3,6 +3,14 @@ name: Valkey Search Benchmark
 on:
   workflow_dispatch:
     inputs:
+      config_json:
+        description: "Benchmark config file to use"
+        required: true
+        default: "fts-benchmarks-shortened-arm.json"
+        type: choice
+        options:
+          - "fts-benchmarks-shortened-arm.json"
+          - "fts-benchmarks-arm.json"
       max_module_commits:
         description: "Max module commits to benchmark (default 1)"
         required: false
@@ -71,7 +79,7 @@ jobs:
       PERF_BENCHMARK_BRANCH: "main"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-shortened-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ inputs.config_json || 'fts-benchmarks-shortened-arm.json' }}"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '1' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
