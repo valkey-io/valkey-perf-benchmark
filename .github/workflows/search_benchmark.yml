@@ -86,7 +86,7 @@ jobs:
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
       CLUSTER_MODE: ${{ inputs.cluster_mode || '' }}
       SKIP_CONFIG_SET: ${{ inputs.skip_config_set && '1' || '' }}
-      SKIP_PROFILING: ${{ (inputs.skip_profiling == false) && '' || '1' }}
+      SKIP_PROFILING: ${{ (github.event_name == 'schedule' || inputs.skip_profiling) && '1' || '' }}
     runs-on: [self-hosted, valkey-search-arm]
     timeout-minutes: 300
     steps:
