@@ -23,28 +23,35 @@ def _run_cmd(cmd: str, default: str = "unknown") -> str:
         return default
 
 
+def _read_sysfs(path: str, default: str = "") -> str:
+    """Read a single-line sysfs/procfs file, returning default if unreadable."""
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return default
+
+
 def get_cpu_governor() -> str:
     """Return the active CPU frequency governor, or 'not_available' for fixed-frequency CPUs."""
-    result = _run_cmd(
-        "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null",
-        default="",
-    )
+    result = _read_sysfs("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
     return result if result else "not_available"
+
+
+_INTEL_NO_TURBO_PATH = "/sys/devices/system/cpu/intel_pstate/no_turbo"
+_AMD_BOOST_PATH = "/sys/devices/system/cpu/cpufreq/boost"
 
 
 def get_turbo_boost_status() -> str:
     """Return turbo/boost status: 'enabled', 'disabled', or 'not_available'."""
-    # Intel
-    intel_path = "/sys/devices/system/cpu/intel_pstate/no_turbo"
-    result = _run_cmd(f"cat {intel_path} 2>/dev/null", default="")
+    # Intel (note inverted semantics: no_turbo=0 means turbo enabled)
+    result = _read_sysfs(_INTEL_NO_TURBO_PATH)
     if result == "0":
         return "enabled"
     elif result == "1":
         return "disabled"
 
     # AMD
-    amd_path = "/sys/devices/system/cpu/cpufreq/boost"
-    result = _run_cmd(f"cat {amd_path} 2>/dev/null", default="")
+    result = _read_sysfs(_AMD_BOOST_PATH)
     if result == "1":
         return "enabled"
     elif result == "0":
@@ -59,13 +66,13 @@ def get_turbo_boost_status() -> str:
 
 def get_cpu_frequency_mhz() -> Optional[int]:
     """Return current CPU frequency in MHz, or None if unavailable."""
-    freq_str = _run_cmd(
-        "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null",
-        default="",
-    )
+    freq_str = _read_sysfs("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
     if freq_str.isdigit():
         return int(freq_str) // 1000  # kHz -> MHz
     return None
+
+
+_CPUIDLE_DIR = Path("/sys/devices/system/cpu/cpu0/cpuidle")
 
 
 def get_idle_states_status() -> str:
@@ -77,7 +84,7 @@ def get_idle_states_status() -> str:
     - 'all_enabled': all idle states are enabled (default kernel behavior)
     - 'unknown': cannot determine
     """
-    states_dir = Path("/sys/devices/system/cpu/cpu0/cpuidle")
+    states_dir = _CPUIDLE_DIR
     if not states_dir.exists():
         return "not_available"
 
@@ -90,7 +97,7 @@ def get_idle_states_status() -> str:
         for state in states:
             disable_file = state / "disable"
             if disable_file.exists():
-                val = _run_cmd(f"cat {disable_file}", default="")
+                val = disable_file.read_text().strip()
                 if val == "1":
                     disabled_count += 1
 
@@ -102,25 +109,6 @@ def get_idle_states_status() -> str:
             return "all_enabled"
     except Exception:
         return "unknown"
-
-
-def get_cpu_pinning_info(server_pid: Optional[int] = None) -> Dict[str, str]:
-    """Return CPU affinity information for benchmark processes.
-
-    If server_pid is provided, reports its actual taskset affinity.
-    Otherwise reports the calling process's affinity as a sanity check.
-    """
-    info: Dict[str, str] = {}
-
-    if server_pid:
-        affinity = _run_cmd(
-            f"taskset -cp {server_pid} 2>/dev/null | grep -oP '(?<=: ).*'",
-            default="",
-        )
-        if affinity:
-            info["server_affinity"] = affinity
-
-    return info
 
 
 def get_benchmark_tool_version(benchmark_path: str) -> str:
@@ -141,13 +129,13 @@ def get_benchmark_tool_version(benchmark_path: str) -> str:
 
 def get_aslr_status() -> str:
     """Return ASLR status: 'full' (2), 'partial' (1), or 'disabled' (0)."""
-    val = _run_cmd("sysctl -n kernel.randomize_va_space", default="")
+    val = _read_sysfs("/proc/sys/kernel/randomize_va_space")
     return {"0": "disabled", "1": "partial", "2": "full"}.get(val, "unknown")
 
 
 def get_thp_status() -> str:
     """Return THP mode: 'always', 'madvise', or 'never'."""
-    content = _run_cmd("cat /sys/kernel/mm/transparent_hugepage/enabled", default="")
+    content = _read_sysfs("/sys/kernel/mm/transparent_hugepage/enabled")
     if "[always]" in content:
         return "always"
     elif "[madvise]" in content:
@@ -157,11 +145,18 @@ def get_thp_status() -> str:
     return "unknown"
 
 
+def _get_os_pretty_name() -> str:
+    """Return PRETTY_NAME from /etc/os-release, or 'unknown'."""
+    for line in _read_sysfs("/etc/os-release").splitlines():
+        if line.startswith("PRETTY_NAME="):
+            return line.split("=", 1)[1].strip().strip('"')
+    return "unknown"
+
+
 def collect_environment_metadata(
     benchmark_path: Optional[str] = None,
     server_cpu_range: Optional[str] = None,
     client_cpu_range: Optional[str] = None,
-    stabilized: bool = False,
 ) -> Dict[str, Any]:
     """Collect all environment metadata for a benchmark run.
 
@@ -169,9 +164,7 @@ def collect_environment_metadata(
     """
     metadata: Dict[str, Any] = {
         "kernel_version": platform.release(),
-        "os": _run_cmd(
-            "cat /etc/os-release 2>/dev/null | grep ^PRETTY_NAME | cut -d= -f2 | tr -d '\"'"
-        ),
+        "os": _get_os_pretty_name(),
         "cpu_model": _run_cmd("lscpu | grep 'Model name' | sed 's/.*: *//'"),
         "cpu_governor": get_cpu_governor(),
         "turbo_boost": get_turbo_boost_status(),
@@ -179,12 +172,11 @@ def collect_environment_metadata(
         "aslr": get_aslr_status(),
         "thp": get_thp_status(),
         "numa_nodes": _run_cmd("lscpu | grep 'NUMA node(s)' | awk '{print $NF}'"),
-        "stabilized": stabilized,
     }
 
     freq = get_cpu_frequency_mhz()
     if freq:
-        metadata["cpu_freq_mhz"] = freq
+        metadata["cpu_freq_mhz_at_setup"] = freq
 
     # Record CPU pinning configuration (intent from config)
     if server_cpu_range:

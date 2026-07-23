@@ -21,71 +21,113 @@ class TestGetCpuGovernor:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    @patch("environment_metadata._run_cmd", return_value="performance")
-    def test_performance_governor(self, mock_cmd):
+    @patch("environment_metadata._read_sysfs", return_value="performance")
+    def test_performance_governor(self, mock_read):
         assert get_cpu_governor() == "performance"
+
+    @patch("environment_metadata._read_sysfs", return_value="")
+    def test_not_available_when_no_cpufreq(self, mock_read):
+        assert get_cpu_governor() == "not_available"
 
 
 class TestGetTurboBoostStatus:
-    def test_returns_valid_status(self):
-        result = get_turbo_boost_status()
-        assert result in ("enabled", "disabled", "not_available", "unknown")
+    """Each test mocks the sysfs reads to force a specific, assertable outcome."""
 
-    @patch("environment_metadata._run_cmd")
+    @staticmethod
+    def _sysfs(values):
+        """Return a _read_sysfs side_effect serving canned per-path values."""
+
+        def read(path, default=""):
+            return values.get(path, default)
+
+        return read
+
+    @patch("environment_metadata._read_sysfs")
+    def test_intel_turbo_enabled(self, mock_read):
+        mock_read.side_effect = self._sysfs(
+            {"/sys/devices/system/cpu/intel_pstate/no_turbo": "0"}
+        )
+        assert get_turbo_boost_status() == "enabled"
+
+    @patch("environment_metadata._read_sysfs")
+    def test_intel_turbo_disabled(self, mock_read):
+        # no_turbo has inverted semantics: 1 means turbo is OFF
+        mock_read.side_effect = self._sysfs(
+            {"/sys/devices/system/cpu/intel_pstate/no_turbo": "1"}
+        )
+        assert get_turbo_boost_status() == "disabled"
+
+    @patch("environment_metadata._read_sysfs")
+    def test_amd_boost_enabled(self, mock_read):
+        mock_read.side_effect = self._sysfs(
+            {"/sys/devices/system/cpu/cpufreq/boost": "1"}
+        )
+        assert get_turbo_boost_status() == "enabled"
+
+    @patch("environment_metadata._read_sysfs")
+    def test_amd_boost_disabled(self, mock_read):
+        mock_read.side_effect = self._sysfs(
+            {"/sys/devices/system/cpu/cpufreq/boost": "0"}
+        )
+        assert get_turbo_boost_status() == "disabled"
+
+    @patch("environment_metadata._read_sysfs", return_value="")
     @patch("platform.machine", return_value="aarch64")
-    def test_arm_no_turbo(self, mock_machine, mock_cmd):
-        mock_cmd.return_value = ""
+    def test_arm_no_turbo_mechanism(self, mock_machine, mock_read):
         assert get_turbo_boost_status() == "not_available"
+
+    @patch("environment_metadata._read_sysfs", return_value="")
+    @patch("platform.machine", return_value="x86_64")
+    def test_x86_without_either_sysfs_path(self, mock_machine, mock_read):
+        assert get_turbo_boost_status() == "unknown"
 
 
 class TestGetCpuFrequencyMhz:
-    @patch("environment_metadata._run_cmd", return_value="2600000")
-    def test_parses_khz_to_mhz(self, mock_cmd):
+    @patch("environment_metadata._read_sysfs", return_value="2600000")
+    def test_parses_khz_to_mhz(self, mock_read):
         assert get_cpu_frequency_mhz() == 2600
 
-    @patch("environment_metadata._run_cmd", return_value="")
-    def test_returns_none_on_failure(self, mock_cmd):
+    @patch("environment_metadata._read_sysfs", return_value="")
+    def test_returns_none_on_failure(self, mock_read):
         assert get_cpu_frequency_mhz() is None
 
-    @patch("environment_metadata._run_cmd", return_value="not_a_number")
-    def test_returns_none_on_invalid(self, mock_cmd):
+    @patch("environment_metadata._read_sysfs", return_value="not_a_number")
+    def test_returns_none_on_invalid(self, mock_read):
         assert get_cpu_frequency_mhz() is None
 
 
 class TestGetIdleStatesStatus:
-    def test_returns_valid_status(self):
-        result = get_idle_states_status()
-        assert result in (
-            "all_disabled",
-            "partially_disabled",
-            "all_enabled",
-            "not_available",
-            "unknown",
-        )
+    """Build a fake cpuidle sysfs tree in tmp_path and assert exact outcomes."""
 
-    @patch("environment_metadata._run_cmd", return_value="1")
-    def test_all_disabled(self, mock_cmd, tmp_path):
-        from pathlib import Path
+    @staticmethod
+    def _make_states(root, disable_values):
+        for i, val in enumerate(disable_values, start=1):
+            state = root / f"state{i}"
+            state.mkdir()
+            (state / "disable").write_text(f"{val}\n")
 
-        with patch("environment_metadata.Path") as mock_path_cls:
-            states_dir = tmp_path / "cpuidle"
-            states_dir.mkdir()
-            for i in range(1, 4):
-                state = states_dir / f"state{i}"
-                state.mkdir()
-                (state / "disable").write_text("1")
+    def test_all_disabled(self, tmp_path):
+        self._make_states(tmp_path, ["1", "1", "1"])
+        with patch("environment_metadata._CPUIDLE_DIR", tmp_path):
+            assert get_idle_states_status() == "all_disabled"
 
-            # Use real Path for the states_dir check
-            mock_path_cls.return_value = states_dir
-            # Can't easily mock Path glob, test the real function instead
-        # Just verify it returns a valid value
-        assert get_idle_states_status() in (
-            "all_disabled",
-            "partially_disabled",
-            "all_enabled",
-            "not_available",
-            "unknown",
-        )
+    def test_partially_disabled(self, tmp_path):
+        self._make_states(tmp_path, ["1", "0", "1"])
+        with patch("environment_metadata._CPUIDLE_DIR", tmp_path):
+            assert get_idle_states_status() == "partially_disabled"
+
+    def test_all_enabled(self, tmp_path):
+        self._make_states(tmp_path, ["0", "0", "0"])
+        with patch("environment_metadata._CPUIDLE_DIR", tmp_path):
+            assert get_idle_states_status() == "all_enabled"
+
+    def test_not_available_when_dir_missing(self, tmp_path):
+        with patch("environment_metadata._CPUIDLE_DIR", tmp_path / "missing"):
+            assert get_idle_states_status() == "not_available"
+
+    def test_unknown_when_no_states(self, tmp_path):
+        with patch("environment_metadata._CPUIDLE_DIR", tmp_path):
+            assert get_idle_states_status() == "unknown"
 
 
 class TestGetBenchmarkToolVersion:
@@ -142,11 +184,3 @@ class TestCollectEnvironmentMetadata:
         metadata = collect_environment_metadata()
         assert "thp" in metadata
         assert metadata["thp"] in ("always", "madvise", "never", "unknown")
-
-    def test_stabilized_flag_default_false(self):
-        metadata = collect_environment_metadata()
-        assert metadata["stabilized"] is False
-
-    def test_stabilized_flag_when_set(self):
-        metadata = collect_environment_metadata(stabilized=True)
-        assert metadata["stabilized"] is True

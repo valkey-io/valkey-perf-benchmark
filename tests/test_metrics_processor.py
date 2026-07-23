@@ -300,3 +300,52 @@ class TestWriteMetrics:
 
         data = json.loads(metrics_file.read_text(encoding="utf-8"))
         assert data == new_metrics
+
+
+# ---------------------------------------------------------------------------
+# create_metrics — environment metadata flattening
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentMetadataFlattening:
+    def test_env_metadata_flattened_with_prefix(self, sample_benchmark_data):
+        processor = MetricsProcessor(
+            commit_id="abc123",
+            cluster_mode=False,
+            tls_mode=False,
+            commit_time="2024-01-15T10:00:00Z",
+            environment_metadata={
+                "cpu_governor": "performance",
+                "turbo_boost": "disabled",
+                "kernel_version": "6.1.0",
+            },
+        )
+        result = processor.create_metrics(
+            benchmark_data=sample_benchmark_data,
+            command="GET",
+            data_size=64,
+            pipeline=1,
+            clients=50,
+            requests=10000,
+        )
+
+        assert result is not None
+        # Flattened top-level keys, not a nested dict
+        assert "environment" not in result
+        assert result["env_cpu_governor"] == "performance"
+        assert result["env_turbo_boost"] == "disabled"
+        assert result["env_kernel_version"] == "6.1.0"
+
+    def test_no_env_keys_when_metadata_absent(self, processor, sample_benchmark_data):
+        result = processor.create_metrics(
+            benchmark_data=sample_benchmark_data,
+            command="GET",
+            data_size=64,
+            pipeline=1,
+            clients=50,
+            requests=10000,
+        )
+
+        assert result is not None
+        assert "environment" not in result
+        assert not any(k.startswith("env_") for k in result)

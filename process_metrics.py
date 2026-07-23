@@ -24,6 +24,7 @@ class MetricsProcessor:
         GitHub repository in "owner/repo" format (e.g., "valkey-io/valkey").
     environment_metadata : dict, optional
         System environment metadata (CPU governor, turbo state, kernel, etc.).
+        Flattened into top-level ``env_``-prefixed keys in each metric entry.
     """
 
     def __init__(
@@ -139,9 +140,13 @@ class MetricsProcessor:
             if self.architecture is not None:
                 metrics_dict["architecture"] = self.architecture
 
-            # Add environment metadata for reproducibility
+            # Add environment metadata for reproducibility. Flattened into
+            # top-level "env_"-prefixed keys because metrics entries are
+            # converted to columns downstream (nested dicts don't map to
+            # columns).
             if self.environment_metadata:
-                metrics_dict["environment"] = self.environment_metadata
+                for key, value in self.environment_metadata.items():
+                    metrics_dict[f"env_{key}"] = value
 
             return metrics_dict
         except Exception:
