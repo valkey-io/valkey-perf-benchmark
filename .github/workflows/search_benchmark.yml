@@ -3,10 +3,18 @@ name: Valkey Search Benchmark
 on:
   workflow_dispatch:
     inputs:
+      config_json:
+        description: "Benchmark config file to use"
+        required: true
+        default: "fts-benchmarks-shortened-arm.json"
+        type: choice
+        options:
+          - "fts-benchmarks-shortened-arm.json"
+          - "fts-benchmarks-arm.json"
       max_module_commits:
-        description: "Max module commits to scan"
+        description: "Max module commits to benchmark (default 1)"
         required: false
-        default: "3"
+        default: "1"
         type: string
       core_commit:
         description: "Manual core commit SHA (overrides latest HEAD)"
@@ -18,8 +26,24 @@ on:
         required: false
         default: ""
         type: string
+      skip_profiling:
+        description: "Check for skip profiling"
+        default: true
+        type: boolean
+      skip_config_set:
+        description: "Check for skip config_sets (use default config set)"
+        default: false
+        type: boolean
+      cluster_mode:
+        description: "Cluster mode (empty=run config in file, true=cluster-mode only, false=non-cluster-mode only)"
+        default: ""
+        type: choice
+        options:
+          - ""
+          - "true"
+          - "false"
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 */4 * * *"
 
 # Prevent concurrent workflow runs to avoid conflicts and resource contention
 # - group: All workflow runs share the same concurrency group
@@ -42,7 +66,7 @@ jobs:
       # Module configuration
       MODULE_NAME: "search"
       MODULE_GITHUB_REPO: "valkey-io/valkey-search"
-      MODULE_BRANCH: ${{ inputs.branch || 'main' }}
+      MODULE_BRANCH: "main"
       MODULE_DIR: "valkey-search"
       MODULE_PATH: "${{ github.workspace }}/valkey-search"
       # Core configuration
@@ -55,17 +79,20 @@ jobs:
       PERF_BENCHMARK_BRANCH: "main"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ inputs.config_json || 'fts-benchmarks-shortened-arm.json' }}"
       # Run parameters
-      MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '3' }}
+      MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '1' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
-      CLUSTER_MODE: ""
-      SKIP_CONFIG_SET: ""
-      SKIP_PROFILING: ""
+      CLUSTER_MODE: ${{ inputs.cluster_mode || '' }}
+      SKIP_CONFIG_SET: ${{ inputs.skip_config_set && '1' || '' }}
+      SKIP_PROFILING: ${{ (github.event_name == 'schedule' || inputs.skip_profiling) && '1' || '' }}
     runs-on: [self-hosted, valkey-search-arm]
-    timeout-minutes: 1800
+    timeout-minutes: 300
     steps:
+      - name: Ensure git is installed
+        run: command -v git || sudo dnf install -y git
+
       - name: Set up Python
         uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
         with:
@@ -173,34 +200,46 @@ jobs:
             echo "Using latest core commit: $CORE_SHA"
           fi
           echo "sha=$CORE_SHA" >> "$GITHUB_OUTPUT"
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
       - name: Cleanup stale rows from previous runs
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        env:
-          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
           python utils/postgres_track_commits.py cleanup \
             --table "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \
             ${SKIP_PROFILING:+--skip-profiling} \
-            --host ${{ secrets.RDS_HOST }} \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
             --port 5432 \
-            --database postgres \
-            --username ${{ secrets.PG_USERNAME }} \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
             --password "$PGPASSWORD"
 
       - name: Determine module commits to benchmark
         id: determine_commits
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        env:
-          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           if [[ -n "$MODULE_COMMITS_INPUT" ]]; then
             COMMITS="$MODULE_COMMITS_INPUT"
             echo "Using manual module commits: $COMMITS"
           else
+            PGPASSWORD=$(aws rds generate-db-auth-token \
+              --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+              --port 5432 \
+              --region ${{ secrets.AWS_REGION }} \
+              --username ${{ secrets.RDS_USERNAME }})
             COMMITS=$(python utils/postgres_track_commits.py determine \
               --table "$MODULE_NAME" \
               --repo "$MODULE_PATH" \
@@ -210,10 +249,10 @@ jobs:
               ${SKIP_CONFIG_SET:+--skip-config-set} \
               ${SKIP_PROFILING:+--skip-profiling} \
               --max-commits "$MAX_MODULE_COMMITS" \
-              --host ${{ secrets.RDS_HOST }} \
+              --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
               --port 5432 \
-              --database postgres \
-              --username ${{ secrets.PG_USERNAME }} \
+              --database ${{ secrets.RDS_DATABASE }} \
+              --username ${{ secrets.RDS_USERNAME }} \
               --password "$PGPASSWORD")
           fi
 
@@ -228,9 +267,12 @@ jobs:
       - name: Mark module commits as in progress
         if: steps.determine_commits.outputs.skip == 'false'
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        env:
-          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
           python utils/postgres_track_commits.py mark \
             --table "$MODULE_NAME" \
             --repo "$MODULE_PATH" \
@@ -239,21 +281,19 @@ jobs:
             ${SKIP_CONFIG_SET:+--skip-config-set} \
             ${SKIP_PROFILING:+--skip-profiling} \
             --status in_progress \
-            --host ${{ secrets.RDS_HOST }} \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
             --port 5432 \
-            --database postgres \
-            --username ${{ secrets.PG_USERNAME }} \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
             --password "$PGPASSWORD" \
             ${{ steps.determine_commits.outputs.commits }}
 
       # =========================================================================
-      # Loop over module commits: checkout, build, benchmark, push, mark complete
+      # Loop over module commits: checkout, build, and benchmark
       # =========================================================================
 
       - name: Benchmark module commits
         if: steps.determine_commits.outputs.skip == 'false'
-        env:
-          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
           CORE_SHA="${{ steps.core_commit.outputs.sha }}"
           read -ra MODULE_SHAS <<< "${{ steps.determine_commits.outputs.commits }}"
@@ -306,34 +346,7 @@ jobs:
               ${SKIP_PROFILING:+--skip-profiling} \
               --results-dir "$RESULTS_DIR"
 
-            # --- Push results to postgres ---
-            python utils/push_to_postgres.py \
-              --results-dir "./$RESULTS_DIR" \
-              --host ${{ secrets.RDS_HOST }} \
-              --port 5432 \
-              --database postgres \
-              --username ${{ secrets.PG_USERNAME }} \
-              --password "$PGPASSWORD" \
-              --table "$MODULE_NAME" \
-              --test-type fts
-
-            # --- Mark this module commit complete ---
-            python utils/postgres_track_commits.py mark \
-              --table "$MODULE_NAME" \
-              --repo "$MODULE_PATH" \
-              --config-file "$CONFIG_FILE" \
-              ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
-              ${SKIP_CONFIG_SET:+--skip-config-set} \
-              ${SKIP_PROFILING:+--skip-profiling} \
-              --status complete \
-              --host ${{ secrets.RDS_HOST }} \
-              --port 5432 \
-              --database postgres \
-              --username ${{ secrets.PG_USERNAME }} \
-              --password "$PGPASSWORD" \
-              "$MODULE_SHA"
-
-            echo "✓ Completed module commit: $MODULE_SHA"
+            echo "✓ Completed benchmarks for module commit: $MODULE_SHA"
 
             # --- Clean up for next iteration ---
             pkill -f valkey || echo "No valkey processes to kill"
@@ -341,6 +354,58 @@ jobs:
             # Reset to workspace root for next iteration
             cd "${{ github.workspace }}"
           done
+
+      # =========================================================================
+      # Push results and mark commits complete (outside loop, fresh AWS auth)
+      # =========================================================================
+
+      - name: Configure AWS credentials for results push
+        if: steps.determine_commits.outputs.skip == 'false'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Push results to PostgreSQL
+        if: steps.determine_commits.outputs.skip == 'false'
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          python "$PERF_BENCHMARK_PATH/utils/push_to_postgres.py" \
+            --results-dir "$PERF_BENCHMARK_PATH/results" \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
+            --table "$MODULE_NAME" \
+            --test-type fts
+
+      - name: Mark module commits complete
+        if: steps.determine_commits.outputs.skip == 'false'
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
+          python "$PERF_BENCHMARK_PATH/utils/postgres_track_commits.py" mark \
+            --table "$MODULE_NAME" \
+            --repo "$MODULE_PATH" \
+            --config-file "$CONFIG_FILE" \
+            ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
+            ${SKIP_CONFIG_SET:+--skip-config-set} \
+            ${SKIP_PROFILING:+--skip-profiling} \
+            --status complete \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
+            --password "$PGPASSWORD" \
+            ${{ steps.determine_commits.outputs.commits }}
 
       - name: Clean large profiling data
         if: always()
@@ -357,23 +422,34 @@ jobs:
           name: benchmark-results
           path: ${{ env.PERF_BENCHMARK_DIR }}/results
 
+      - name: Re-auth with AWS credentials
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
       - name: Cleanup stale commit tracking
         if: always()
         continue-on-error: true
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        env:
-          PGPASSWORD: ${{ secrets.PG_PASSWORD }}
         run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+            --port 5432 \
+            --region ${{ secrets.AWS_REGION }} \
+            --username ${{ secrets.RDS_USERNAME }})
           python utils/postgres_track_commits.py cleanup \
             --table "$MODULE_NAME" \
             --config-file "$CONFIG_FILE" \
             ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
             ${SKIP_CONFIG_SET:+--skip-config-set} \
             ${SKIP_PROFILING:+--skip-profiling} \
-            --host ${{ secrets.RDS_HOST }} \
+            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
             --port 5432 \
-            --database postgres \
-            --username ${{ secrets.PG_USERNAME }} \
+            --database ${{ secrets.RDS_DATABASE }} \
+            --username ${{ secrets.RDS_USERNAME }} \
             --password "$PGPASSWORD"
 
       - name: Cleanup
