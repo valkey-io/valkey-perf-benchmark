@@ -15,7 +15,7 @@ from typing import Iterable, List, Optional
 import valkey
 
 from process_metrics import MetricsProcessor
-from valkey_server import ServerLauncher
+from valkey_server import ServerLauncher, apply_config_to_servers
 from profiler import PerformanceProfiler
 from utils.git_utils import resolve_ref, get_commit_timestamp
 
@@ -280,6 +280,16 @@ class ClientRunner:
         except Exception as e:
             logging.error(f"Failed to flush database: {e}")
             raise RuntimeError(f"Database flush failed: {e}")
+
+    def _apply_config_set(self, config_set: dict) -> None:
+        """Apply CONFIG SET commands to all server nodes after restart."""
+        apply_config_to_servers(
+            config_set,
+            self._get_active_ports(),
+            self.target_ip,
+            tls_mode=self.tls_mode,
+            valkey_dir=self.valkey_path,
+        )
 
     def _populate_keyspace(
         self,
@@ -868,7 +878,13 @@ class ClientRunner:
         logging.info(f"Running scenario: {scenario_id} (type: {scenario_type})")
 
         if scenario.get("flush_before", False):
-            self._flush_database()
+            if self.server_launcher:
+                self._restart_server()
+                # Re-apply config_set after restart since CONFIG SET values are lost
+                if config_set:
+                    self._apply_config_set(config_set)
+            else:
+                self._flush_database()
 
         for setup_cmd in scenario.get("setup_commands", []):
             self._execute_setup_command(setup_cmd)
@@ -1484,12 +1500,13 @@ class ClientRunner:
         # Shutdown current server
         self.server_launcher.shutdown(self.tls_mode)
 
-        # Start fresh server (module_path is stored in launcher)
+        # Start fresh server (module_path and config are stored in launcher)
         self.server_launcher.launch(
             cluster_mode=self.cluster_mode,
             tls_mode=self.tls_mode,
             io_threads=self.io_threads,
             module_path=self.server_launcher.module_path,
+            config=self.server_launcher.config,
         )
 
         # Wait for server to be ready

@@ -11,7 +11,7 @@ import sys
 
 
 from valkey_build import ServerBuilder
-from valkey_server import ServerLauncher
+from valkey_server import ServerLauncher, apply_config_to_servers
 from valkey_benchmark import ClientRunner
 from benchmark_build import BenchmarkBuilder
 from utils.cpu_utils import (
@@ -650,7 +650,13 @@ def _execute_benchmark_run(
 
     # Apply config set
     if exec_config["config_set"] and not args.skip_config_set:
-        _apply_config_to_servers(exec_config["config_set"], cfg, args.target_ip)
+        apply_config_to_servers(
+            exec_config["config_set"],
+            _get_active_ports(cfg),
+            args.target_ip,
+            tls_mode=cfg.get("tls_mode", False),
+            valkey_dir=valkey_dir,
+        )
 
     # Run benchmark client
     if args.mode in ("client", "both"):
@@ -701,20 +707,6 @@ def _execute_benchmark_run(
     # Shutdown server
     if launcher and not args.use_running_server:
         launcher.shutdown(cfg["tls_mode"])
-
-
-def _apply_config_to_servers(config_set: dict, cfg: dict, target_ip: str) -> None:
-    """Apply CONFIG SET commands to all server nodes."""
-    import valkey
-
-    for port in _get_active_ports(cfg):
-        client = valkey.Valkey(host=target_ip, port=port)
-        try:
-            for k, v in config_set.items():
-                client.execute_command("CONFIG", "SET", k, str(v))
-                logging.info(f"Set {k} = {v} on port {port}")
-        finally:
-            client.close()
 
 
 def get_module_binary_path(args: argparse.Namespace, config: dict) -> Optional[str]:
