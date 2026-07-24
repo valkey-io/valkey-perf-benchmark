@@ -119,7 +119,9 @@ def download_wikipedia(output_dir: Path) -> Path:
         if result.returncode == 0:
             return extracted
         else:
-            logging.warning(f"Extraction failed (possibly partial download). Removing {compressed.name} and re-downloading...")
+            logging.warning(
+                f"Extraction failed (possibly partial download). Removing {compressed.name} and re-downloading..."
+            )
             compressed.unlink()
 
     url = (
@@ -130,9 +132,14 @@ def download_wikipedia(output_dir: Path) -> Path:
     try:
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "valkey-perf-benchmark/1.0 (benchmark dataset download)"},
+            headers={
+                "User-Agent": "valkey-perf-benchmark/1.0 (benchmark dataset download)"
+            },
         )
-        with urllib.request.urlopen(req) as response, open(compressed, "wb") as out_file:
+        with (
+            urllib.request.urlopen(req) as response,
+            open(compressed, "wb") as out_file,
+        ):
             while True:
                 chunk = response.read(1024 * 1024)  # 1MB chunks
                 if not chunk:
@@ -815,7 +822,9 @@ def main():
     # Also check if any CSV file needs Wikipedia (hybrid data with wikipedia transforms)
     if not needs_wiki:
         for filename in files_to_gen:
-            if filename in dataset_configs and (filename.endswith(".csv") or filename.endswith(".xml")):
+            if filename in dataset_configs and (
+                filename.endswith(".csv") or filename.endswith(".xml")
+            ):
                 field_configs = build_field_configs(dataset_configs[filename])
                 needs_wiki = any(
                     any(
