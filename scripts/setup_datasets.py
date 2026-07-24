@@ -815,7 +815,7 @@ def main():
     # Also check if any CSV file needs Wikipedia (hybrid data with wikipedia transforms)
     if not needs_wiki:
         for filename in files_to_gen:
-            if filename in dataset_configs and filename.endswith(".csv"):
+            if filename in dataset_configs and (filename.endswith(".csv") or filename.endswith(".xml")):
                 field_configs = build_field_configs(dataset_configs[filename])
                 needs_wiki = any(
                     any(
