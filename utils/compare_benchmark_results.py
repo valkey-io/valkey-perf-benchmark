@@ -989,6 +989,7 @@ def format_comparison_report(
     new_version: str,
     baseline_repo: Optional[str] = None,
     new_repo: Optional[str] = None,
+    core_commit: Optional[str] = None,
 ) -> str:
     """
     Format the comparison data as a markdown report.
@@ -1151,6 +1152,8 @@ def format_comparison_report(
         report_lines.append("**Configuration:**")
         for key in sorted(common_config.keys()):
             report_lines.append(f"- {key}: {common_config[key]}")
+        if core_commit:
+            report_lines.append(f"- core_commit: {core_commit}")
         report_lines.append("")
 
     # Add legend
@@ -1935,8 +1938,14 @@ def main():
                 print(f"  - {file_path}")
 
     # Format the comparison report
+    # Extract core commit if module_commit is used as the version identifier
+    core_commit = None
+    if baseline_data and baseline_data[0].get("module_commit"):
+        core_commit = baseline_data[0].get("commit")
+
     comparison_table = format_comparison_report(
-        config_groups, baseline_version, new_version, baseline_repo, new_repo
+        config_groups, baseline_version, new_version, baseline_repo, new_repo,
+        core_commit=core_commit,
     )
 
     # Create final report with metadata
