@@ -286,8 +286,6 @@ class TestDiscoverConfigKeys:
         assert "module_commit" not in keys
 
     def test_test_id_sorted_first(self):
-        # test_id should sort before other keys for natural test ordering,
-        # even when other keys alphabetically precede it.
         data = [{"arch": "x86", "clients": 100, "test_id": "1_get"}]
         keys = discover_config_keys(data)
         assert keys[0] == "test_id"

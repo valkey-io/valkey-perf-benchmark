@@ -1944,7 +1944,11 @@ def main():
         core_commit = baseline_data[0].get("commit")
 
     comparison_table = format_comparison_report(
-        config_groups, baseline_version, new_version, baseline_repo, new_repo,
+        config_groups,
+        baseline_version,
+        new_version,
+        baseline_repo,
+        new_repo,
         core_commit=core_commit,
     )
 
