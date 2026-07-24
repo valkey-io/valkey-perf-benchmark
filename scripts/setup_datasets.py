@@ -115,8 +115,14 @@ def download_wikipedia(output_dir: Path) -> Path:
 
     if compressed.exists():
         logging.info(f"Extracting {compressed.name}...")
-        subprocess.run(["bunzip2", "-k", str(compressed)], check=True)
-        return extracted
+        result = subprocess.run(["bunzip2", "-k", str(compressed)])
+        if result.returncode == 0:
+            return extracted
+        else:
+            logging.warning(
+                f"Extraction failed (possibly partial download). Removing {compressed.name} and re-downloading..."
+            )
+            compressed.unlink()
 
     url = (
         "https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2"
@@ -124,7 +130,21 @@ def download_wikipedia(output_dir: Path) -> Path:
     logging.info(f"Downloading Wikipedia (~20GB, 30-60 min)...")
 
     try:
-        urllib.request.urlretrieve(url, compressed)
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "valkey-perf-benchmark/1.0 (benchmark dataset download)"
+            },
+        )
+        with (
+            urllib.request.urlopen(req) as response,
+            open(compressed, "wb") as out_file,
+        ):
+            while True:
+                chunk = response.read(1024 * 1024)  # 1MB chunks
+                if not chunk:
+                    break
+                out_file.write(chunk)
         subprocess.run(["bunzip2", "-k", str(compressed)], check=True)
         return extracted
     except Exception as e:
@@ -802,7 +822,9 @@ def main():
     # Also check if any CSV file needs Wikipedia (hybrid data with wikipedia transforms)
     if not needs_wiki:
         for filename in files_to_gen:
-            if filename in dataset_configs and filename.endswith(".csv"):
+            if filename in dataset_configs and (
+                filename.endswith(".csv") or filename.endswith(".xml")
+            ):
                 field_configs = build_field_configs(dataset_configs[filename])
                 needs_wiki = any(
                     any(
