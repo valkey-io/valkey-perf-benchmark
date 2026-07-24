@@ -525,8 +525,6 @@ def extract_version_with_repo(data: List[Dict[str, Any]]) -> Tuple[str, Optional
     repository = None
 
     if data:
-        # If module_commit was used as version, use repository field
-        # (which typically contains the module repo for module benchmarks)
         repository = data[0].get("repository")
 
     return version, repository
