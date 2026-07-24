@@ -26,6 +26,11 @@ on:
         required: false
         default: ""
         type: string
+      num_runs:
+        description: "Number of times to repeat each read scenario (default: 3)"
+        required: false
+        default: "3"
+        type: string
       skip_profiling:
         description: "Check for skip profiling"
         default: true
@@ -82,6 +87,7 @@ jobs:
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ inputs.config_json || 'fts-benchmarks-shortened-arm.json' }}"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '1' }}
+      NUM_RUNS: ${{ inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
       CLUSTER_MODE: ${{ inputs.cluster_mode || '' }}
@@ -341,6 +347,7 @@ jobs:
               --module-path "$MODULE_PATH/.build-release/libsearch.so" \
               --module-commit "$MODULE_SHA" \
               --module-commit-timestamp "$MODULE_TS" \
+              --runs "$NUM_RUNS" \
               ${CLUSTER_MODE:+--cluster-mode-filter "$CLUSTER_MODE"} \
               ${SKIP_CONFIG_SET:+--skip-config-set} \
               ${SKIP_PROFILING:+--skip-profiling} \
