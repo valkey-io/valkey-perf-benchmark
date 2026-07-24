@@ -94,7 +94,7 @@ jobs:
       SKIP_CONFIG_SET: ${{ inputs.skip_config_set && '1' || '' }}
       SKIP_PROFILING: ${{ (github.event_name == 'schedule' || inputs.skip_profiling) && '1' || '' }}
     runs-on: [self-hosted, valkey-search-arm]
-    timeout-minutes: 300
+    timeout-minutes: 1500
     steps:
       - name: Ensure git is installed
         run: command -v git || sudo dnf install -y git
