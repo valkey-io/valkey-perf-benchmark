@@ -221,6 +221,7 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
     excluded_fields = {
         "timestamp",
         "commit",
+        "module_commit",
         "repository",
         "run_count",
         # Performance metrics
@@ -284,7 +285,12 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
                 if isinstance(value, (str, int, float, bool, type(None))):
                     config_keys.add(key)
 
-    return sorted(config_keys)
+    # Sort with test_id first (if present) for natural test ordering
+    sorted_keys = sorted(config_keys)
+    if "test_id" in sorted_keys:
+        sorted_keys.remove("test_id")
+        sorted_keys.insert(0, "test_id")
+    return sorted_keys
 
 
 def create_config_signature(item: Dict[str, Any], config_keys: List[str]) -> Tuple:
@@ -429,6 +435,13 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     0
                 ]  # Use first commit (should be same for all runs)
 
+            # Preserve module_commit information from any run
+            module_commits = [
+                run.get("module_commit") for run in runs if run.get("module_commit")
+            ]
+            if module_commits:
+                averaged_item["module_commit"] = module_commits[0]
+
             # Preserve repository information from any run
             repositories = [
                 run.get("repository") for run in runs if run.get("repository")
@@ -465,14 +478,20 @@ def extract_version_identifier(data: List[Dict[str, Any]]) -> str:
     """
     Extract a version identifier from benchmark data.
 
-    Prioritizes commit hash, falls back to a short timestamp format, or returns "Unknown".
+    Prioritizes module_commit (for module benchmarks), then commit hash,
+    falls back to a short timestamp format, or returns "Unknown".
     """
     if not data:
         return "Unknown"
 
     first_item = data[0]
 
-    # Try commit hash first
+    # Try module_commit first (module benchmarks)
+    module_commit = first_item.get("module_commit")
+    if module_commit:
+        return module_commit if len(module_commit) <= 12 else module_commit[:8]
+
+    # Try commit hash (core benchmarks)
     commit = first_item.get("commit")
     if commit:
         # Return short hash if already short, otherwise truncate to 8 characters
@@ -506,6 +525,8 @@ def extract_version_with_repo(data: List[Dict[str, Any]]) -> Tuple[str, Optional
     repository = None
 
     if data:
+        # If module_commit was used as version, use repository field
+        # (which typically contains the module repo for module benchmarks)
         repository = data[0].get("repository")
 
     return version, repository
