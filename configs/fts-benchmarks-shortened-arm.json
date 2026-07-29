@@ -152,6 +152,7 @@
             "xml_root_element": "doc",
             "maxdocs": 100000,
             "clients": 1000,
+            "duration": 90,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\""
           },
@@ -166,7 +167,8 @@
             "warmup": 30,
             "command": "FT.SEARCH rd0 \"__field:term__\"",
             "options": {
-              "": ""
+              "": "",
+              "NOCONTENT": "_nocontent"
             }
           },
           {
@@ -179,6 +181,20 @@
             "duration": 90,
             "warmup": 30,
             "command": "FT.SEARCH rd0 \"@field1:__field:term1__ @field1:__field:term2__\"",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "d",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "Single term search TEXT - latency (10 clients)",
+            "dataset": "datasets/search_terms.csv",
+            "clients": 10,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term__\"",
             "options": {
               "": ""
             }
@@ -201,6 +217,7 @@
             "dataset": "datasets/hybrid_data_100k.csv",
             "maxdocs": 100000,
             "clients": 1000,
+            "duration": 90,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
           },
@@ -215,7 +232,8 @@
             "warmup": 30,
             "command": "FT.SEARCH rd0 \"@title:__field:term1__\"",
             "options": {
-              "": ""
+              "": "",
+              "NOCONTENT": "_nocontent"
             }
           },
           {
@@ -259,6 +277,47 @@
             "options": {
               "": ""
             }
+          },
+          {
+            "id": "f",
+            "type": "mixed",
+            "cluster_execution": "single",
+            "description": "Concurrent writes + TEXT+NUMERIC reads (30% writes / 70% reads)",
+            "duration": 90,
+            "warmup": 30,
+            "options": {
+              "": ""
+            },
+            "writes": [
+              {
+                "id": "a",
+                "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\"",
+                "dataset": "datasets/hybrid_data_100k.csv",
+                "clients": 300
+              }
+            ],
+            "reads": [
+              {
+                "id": "b",
+                "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
+                "dataset": "datasets/hybrid_queries.csv",
+                "clients": 700
+              }
+            ]
+          },
+          {
+            "id": "g",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "TEXT + NUMERIC range filter - latency (10 clients)",
+            "dataset": "datasets/hybrid_queries.csv",
+            "clients": 10,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
+            "options": {
+              "": ""
+            }
           }
         ]
       },
@@ -278,6 +337,7 @@
             "dataset": "datasets/vector_hybrid_100k.npy",
             "maxdocs": 100000,
             "clients": 1000,
+            "duration": 90,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
           },
@@ -327,6 +387,7 @@
             "dataset": "datasets/vector_hybrid_100k.npy",
             "maxdocs": 100000,
             "clients": 1000,
+            "duration": 90,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\"",
             "profiling": {
@@ -376,6 +437,20 @@
             "duration": 90,
             "warmup": 30,
             "command": "FT.SEARCH rd0 \"(@price:[10 1000])=>[KNN 10 @embedding $vec EF_RUNTIME 100]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "e",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "Pure KNN HNSW - latency (10 clients)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 10,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"*=>[KNN 10 @embedding $vec EF_RUNTIME 100]\" PARAMS 2 vec \"__field:query_vector__\" DIALECT 2",
             "options": {
               "": ""
             }
@@ -435,7 +510,7 @@
         "sampling_freq": 999,
         "delays": {
           "write": {
-            "delay": 0,
+            "delay": 60,
             "duration": 10
           },
           "read": {
@@ -515,6 +590,7 @@
             "dataset": "datasets/hybrid_data_100k.csv",
             "maxdocs": 100000,
             "clients": 1000,
+            "duration": 90,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
           },
@@ -525,6 +601,21 @@
             "description": "TEXT + NUMERIC range (cluster fanout.cc coverage)",
             "dataset": "datasets/hybrid_queries.csv",
             "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
+            "options": {
+              "": "",
+              "NOCONTENT": "_nocontent"
+            }
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "TEXT + NUMERIC range cluster - latency (10 clients)",
+            "dataset": "datasets/hybrid_queries.csv",
+            "clients": 10,
             "duration": 90,
             "warmup": 30,
             "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
@@ -587,7 +678,7 @@
         "sampling_freq": 999,
         "delays": {
           "write": {
-            "delay": 0,
+            "delay": 60,
             "duration": 10
           },
           "read": {
