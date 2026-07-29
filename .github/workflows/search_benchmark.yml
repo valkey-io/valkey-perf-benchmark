@@ -410,20 +410,27 @@ jobs:
       - name: Push results to PostgreSQL
         if: steps.determine_commits.outputs.skip == 'false'
         run: |
-          PGPASSWORD=$(aws rds generate-db-auth-token \
-            --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
-            --port 5432 \
-            --region ${{ secrets.AWS_REGION }} \
-            --username ${{ secrets.RDS_USERNAME }})
-          python "$PERF_BENCHMARK_PATH/utils/push_to_postgres.py" \
-            --results-dir "$PERF_BENCHMARK_PATH/results" \
-            --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
-            --port 5432 \
-            --database ${{ secrets.RDS_DATABASE }} \
-            --username ${{ secrets.RDS_USERNAME }} \
-            --password "$PGPASSWORD" \
-            --table "$MODULE_NAME" \
-            --test-type fts
+          CORE_SHA="${{ steps.core_commit.outputs.sha }}"
+          read -ra MODULE_SHAS <<< "${{ steps.determine_commits.outputs.commits }}"
+
+          for MODULE_SHA in "${MODULE_SHAS[@]}"; do
+            RESULTS_DIR="results/${CORE_SHA}_${MODULE_SHA}"
+            echo "Pushing results from ./$RESULTS_DIR"
+            PGPASSWORD=$(aws rds generate-db-auth-token \
+              --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
+              --port 5432 \
+              --region ${{ secrets.AWS_REGION }} \
+              --username ${{ secrets.RDS_USERNAME }})
+            python "$PERF_BENCHMARK_PATH/utils/push_to_postgres.py" \
+              --results-dir "./$RESULTS_DIR" \
+              --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
+              --port 5432 \
+              --database ${{ secrets.RDS_DATABASE }} \
+              --username ${{ secrets.RDS_USERNAME }} \
+              --password "$PGPASSWORD" \
+              --table "$MODULE_NAME" \
+              --test-type fts
+          done
 
       - name: Mark module commits complete
         if: steps.determine_commits.outputs.skip == 'false'
