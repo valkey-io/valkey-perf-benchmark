@@ -152,7 +152,7 @@
             "xml_root_element": "doc",
             "maxdocs": 100000,
             "clients": 1000,
-            "duration": 90,
+            "duration": 120,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ field1 \"__field:field1__\""
           },
@@ -217,7 +217,7 @@
             "dataset": "datasets/hybrid_data_100k.csv",
             "maxdocs": 100000,
             "clients": 1000,
-            "duration": 90,
+            "duration": 120,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
           },
@@ -337,7 +337,7 @@
             "dataset": "datasets/vector_hybrid_100k.npy",
             "maxdocs": 100000,
             "clients": 1000,
-            "duration": 90,
+            "duration": 120,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
           },
@@ -387,7 +387,7 @@
             "dataset": "datasets/vector_hybrid_100k.npy",
             "maxdocs": 100000,
             "clients": 1000,
-            "duration": 90,
+            "duration": 120,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\"",
             "profiling": {
@@ -590,7 +590,7 @@
             "dataset": "datasets/hybrid_data_100k.csv",
             "maxdocs": 100000,
             "clients": 1000,
-            "duration": 90,
+            "duration": 120,
             "sequential": true,
             "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\""
           },
@@ -605,8 +605,7 @@
             "warmup": 30,
             "command": "FT.SEARCH rd0 \"__field:term1__ @price:[100 500]\"",
             "options": {
-              "": "",
-              "NOCONTENT": "_nocontent"
+              "": ""
             }
           },
           {
@@ -653,11 +652,6 @@
       }
     ],
     "config_sets": [
-      {
-        "search.reader-threads": 1,
-        "search.writer-threads": 1,
-        "search.async-fanout-threshold": 4
-      },
       {
         "search.reader-threads": 8,
         "search.writer-threads": 8,
