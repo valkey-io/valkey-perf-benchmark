@@ -436,7 +436,6 @@ jobs:
       - name: Mark module commits complete
         if: steps.determine_commits.outputs.skip == 'false'
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-
         run: |
           PGPASSWORD=$(aws rds generate-db-auth-token \
             --hostname ${{ secrets.POSTGRESQL_ENDPOINT }} \
