@@ -109,12 +109,12 @@ class MetricsProcessor:
             }
 
             # Add requests or duration based on benchmark mode
-            if requests is not None:
-                metrics_dict["requests"] = int(requests)
-                metrics_dict["benchmark_mode"] = "requests"
-            elif duration is not None:
+            if duration is not None:
                 metrics_dict["duration"] = int(duration)
                 metrics_dict["benchmark_mode"] = "duration"
+            elif requests is not None:
+                metrics_dict["requests"] = int(requests)
+                metrics_dict["benchmark_mode"] = "requests"
             else:
                 logging.warning("Neither requests nor duration specified")
                 metrics_dict["benchmark_mode"] = "unknown"
