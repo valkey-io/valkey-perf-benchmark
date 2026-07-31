@@ -1216,6 +1216,10 @@ class ClientRunner:
             metrics["scenario_description"] = parent_scenario["description"]
         if self.config_name:
             metrics["config_name"] = self.config_name
+        if self.module_commit:
+            metrics["module_commit"] = self.module_commit
+        if self.module_commit_timestamp:
+            metrics["module_commit_timestamp"] = self.module_commit_timestamp
         if sub_cfg.get("dataset"):
             metrics["dataset"] = sub_cfg["dataset"]
         return metrics
