@@ -51,6 +51,10 @@ on:
         description: "Job timeout in minutes (default 600)"
         required: false
         default: "600"
+      module_branch:
+        description: "Module branch to benchmark (default: main)"
+        required: false
+        default: "main"
         type: string
   schedule:
     - cron: "0 */4 * * *"
@@ -76,7 +80,7 @@ jobs:
       # Module configuration
       MODULE_NAME: "search"
       MODULE_GITHUB_REPO: "valkey-io/valkey-search"
-      MODULE_BRANCH: "main"
+      MODULE_BRANCH: ${{ inputs.module_branch || 'main' }}
       MODULE_DIR: "valkey-search"
       MODULE_PATH: "${{ github.workspace }}/valkey-search"
       # Core configuration
