@@ -86,6 +86,7 @@ def pg_table(pg_conn):
         cur.execute(f"DROP TABLE IF EXISTS {table_name}")
     pg_conn.commit()
 
+
 # Make project root importable for all integration tests
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))

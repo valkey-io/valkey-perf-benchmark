@@ -15,7 +15,6 @@ Setup:
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 
@@ -77,15 +76,25 @@ class TestPushToPostgres:
         columns_before = get_existing_columns(conn, table)
         assert "p50_latency_ms" not in columns_before
         # Verify all expected columns from _sample_metrics
-        for col in ["id", "created_at", "timestamp", "commit", "command",
-                    "data_size", "pipeline", "clients", "rps",
-                    "avg_latency_ms", "p99_latency_ms"]:
-            assert col in columns_before, f"Expected column '{col}' missing after first push"
+        for col in [
+            "id",
+            "created_at",
+            "timestamp",
+            "commit",
+            "command",
+            "data_size",
+            "pipeline",
+            "clients",
+            "rps",
+            "avg_latency_ms",
+            "p99_latency_ms",
+        ]:
+            assert (
+                col in columns_before
+            ), f"Expected column '{col}' missing after first push"
 
         # Second push: adds p50_latency_ms
-        metrics_v2 = [
-            {**_sample_metrics(commit="def456"), "p50_latency_ms": 0.3}
-        ]
+        metrics_v2 = [{**_sample_metrics(commit="def456"), "p50_latency_ms": 0.3}]
         push_to_postgres(metrics_v2, conn, table)
 
         columns_after = get_existing_columns(conn, table)
@@ -177,7 +186,9 @@ class TestProcessCommitMetrics:
         commit_dir.mkdir()
         (commit_dir / "metrics.json").write_text(json.dumps([_sample_metrics()]))
 
-        count, skipped = process_commit_metrics(commit_dir, conn, table, test_type="fts")
+        count, skipped = process_commit_metrics(
+            commit_dir, conn, table, test_type="fts"
+        )
         assert count == 1
         assert skipped is False
 

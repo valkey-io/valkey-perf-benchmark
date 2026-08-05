@@ -16,7 +16,6 @@ Setup:
 import os
 
 import pytest
-from psycopg2.extras import Json
 
 from .conftest import requires_postgres, GitRepoFixture
 
