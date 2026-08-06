@@ -221,6 +221,8 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
     excluded_fields = {
         "timestamp",
         "commit",
+        "module_commit",
+        "module_commit_timestamp",
         "repository",
         "run_count",
         # Performance metrics
@@ -284,7 +286,12 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
                 if isinstance(value, (str, int, float, bool, type(None))):
                     config_keys.add(key)
 
-    return sorted(config_keys)
+    # Sort with test_id first (if present) for natural test ordering
+    sorted_keys = sorted(config_keys)
+    if "test_id" in sorted_keys:
+        sorted_keys.remove("test_id")
+        sorted_keys.insert(0, "test_id")
+    return sorted_keys
 
 
 def create_config_signature(item: Dict[str, Any], config_keys: List[str]) -> Tuple:
@@ -429,6 +436,13 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     0
                 ]  # Use first commit (should be same for all runs)
 
+            # Preserve module_commit information from any run
+            module_commits = [
+                run.get("module_commit") for run in runs if run.get("module_commit")
+            ]
+            if module_commits:
+                averaged_item["module_commit"] = module_commits[0]
+
             # Preserve repository information from any run
             repositories = [
                 run.get("repository") for run in runs if run.get("repository")
@@ -452,7 +466,10 @@ def create_config_sort_key(config_tuple: Tuple) -> Tuple[str, ...]:
     """
     Create a sorting key for configuration tuples that handles None values and mixed types.
 
-    Converts all values to strings for consistent comparison, with None values sorting first.
+    Groups by test scenario first (test_id is hoisted to the front of the
+    config keys). Converts all values to strings for consistent comparison,
+    with None values sorting first. Note: sorting is lexicographic, so numeric
+    values embedded in strings sort as text (e.g. "10_get" before "2_get").
     """
 
     def normalize_value(value):
@@ -465,14 +482,20 @@ def extract_version_identifier(data: List[Dict[str, Any]]) -> str:
     """
     Extract a version identifier from benchmark data.
 
-    Prioritizes commit hash, falls back to a short timestamp format, or returns "Unknown".
+    Prioritizes module_commit (for module benchmarks), then commit hash,
+    falls back to a short timestamp format, or returns "Unknown".
     """
     if not data:
         return "Unknown"
 
     first_item = data[0]
 
-    # Try commit hash first
+    # Try module_commit first (module benchmarks)
+    module_commit = first_item.get("module_commit")
+    if module_commit:
+        return module_commit if len(module_commit) <= 12 else module_commit[:8]
+
+    # Try commit hash (core benchmarks)
     commit = first_item.get("commit")
     if commit:
         # Return short hash if already short, otherwise truncate to 8 characters
@@ -970,6 +993,8 @@ def format_comparison_report(
     new_version: str,
     baseline_repo: Optional[str] = None,
     new_repo: Optional[str] = None,
+    core_commit_baseline: Optional[str] = None,
+    core_commit_new: Optional[str] = None,
 ) -> str:
     """
     Format the comparison data as a markdown report.
@@ -1132,6 +1157,17 @@ def format_comparison_report(
         report_lines.append("**Configuration:**")
         for key in sorted(common_config.keys()):
             report_lines.append(f"- {key}: {common_config[key]}")
+        report_lines.append("")
+
+    # Add core commit metadata
+    if core_commit_baseline or core_commit_new:
+        if core_commit_baseline == core_commit_new:
+            report_lines.append(f"**Core commit:** {core_commit_baseline}")
+        else:
+            report_lines.append(
+                f"**Core commit:** {core_commit_baseline} (baseline) → "
+                f"{core_commit_new} (new)"
+            )
         report_lines.append("")
 
     # Add legend
@@ -1916,8 +1952,22 @@ def main():
                 print(f"  - {file_path}")
 
     # Format the comparison report
+    # Extract core commit if module_commit is used as the version identifier
+    core_commit_baseline = None
+    core_commit_new = None
+    if baseline_data and baseline_data[0].get("module_commit"):
+        core_commit_baseline = baseline_data[0].get("commit")
+    if new_data and new_data[0].get("module_commit"):
+        core_commit_new = new_data[0].get("commit")
+
     comparison_table = format_comparison_report(
-        config_groups, baseline_version, new_version, baseline_repo, new_repo
+        config_groups,
+        baseline_version,
+        new_version,
+        baseline_repo,
+        new_repo,
+        core_commit_baseline=core_commit_baseline,
+        core_commit_new=core_commit_new,
     )
 
     # Create final report with metadata

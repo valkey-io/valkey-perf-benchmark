@@ -197,6 +197,35 @@ class TestAverageMultipleRuns:
     def test_empty_data(self):
         assert average_multiple_runs([]) == []
 
+    def test_preserves_module_commit(self):
+        data = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "data_size": 64,
+                "rps": 100000.0,
+                "avg_latency_ms": 1.0,
+                "p50_latency_ms": 0.8,
+                "p95_latency_ms": 1.5,
+                "p99_latency_ms": 2.0,
+                "module_commit": "mod12345",
+            },
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "data_size": 64,
+                "rps": 200000.0,
+                "avg_latency_ms": 0.5,
+                "p50_latency_ms": 0.4,
+                "p95_latency_ms": 0.8,
+                "p99_latency_ms": 1.0,
+                "module_commit": "mod12345",
+            },
+        ]
+        result = average_multiple_runs(data)
+        assert len(result) == 1
+        assert result[0]["module_commit"] == "mod12345"
+
     def test_different_configs_not_merged(self):
         data = [
             {
@@ -240,6 +269,7 @@ class TestDiscoverConfigKeys:
                 "p99_latency_ms": 1.2,
                 "timestamp": "2024-01-01",
                 "commit": "abc123",
+                "module_commit": "def456",
             }
         ]
         keys = discover_config_keys(data)
@@ -253,6 +283,12 @@ class TestDiscoverConfigKeys:
         assert "p99_latency_ms" not in keys
         assert "timestamp" not in keys
         assert "commit" not in keys
+        assert "module_commit" not in keys
+
+    def test_test_id_sorted_first(self):
+        data = [{"arch": "x86", "clients": 100, "test_id": "1_get"}]
+        keys = discover_config_keys(data)
+        assert keys[0] == "test_id"
 
     def test_returns_sorted_keys(self):
         data = [{"zebra": "z", "alpha": "a", "middle": "m"}]
@@ -382,6 +418,18 @@ class TestExtractVersionIdentifier:
     def test_no_commit_no_timestamp_returns_unknown(self):
         data = [{"command": "GET"}]
         assert extract_version_identifier(data) == "Unknown"
+
+    def test_module_commit_short_returned_as_is(self):
+        data = [{"module_commit": "mod12345"}]
+        assert extract_version_identifier(data) == "mod12345"
+
+    def test_module_commit_long_truncated_to_8(self):
+        data = [{"module_commit": "abcdef1234567890abcdef"}]
+        assert extract_version_identifier(data) == "abcdef12"
+
+    def test_module_commit_prioritized_over_commit(self):
+        data = [{"module_commit": "mod12345", "commit": "core6789"}]
+        assert extract_version_identifier(data) == "mod12345"
 
 
 # --- create_config_signature ---
