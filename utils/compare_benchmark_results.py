@@ -222,6 +222,7 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
         "timestamp",
         "commit",
         "module_commit",
+        "module_commit_timestamp",
         "repository",
         "run_count",
         # Performance metrics
@@ -465,7 +466,10 @@ def create_config_sort_key(config_tuple: Tuple) -> Tuple[str, ...]:
     """
     Create a sorting key for configuration tuples that handles None values and mixed types.
 
-    Converts all values to strings for consistent comparison, with None values sorting first.
+    Groups by test scenario first (test_id is hoisted to the front of the
+    config keys). Converts all values to strings for consistent comparison,
+    with None values sorting first. Note: sorting is lexicographic, so numeric
+    values embedded in strings sort as text (e.g. "10_get" before "2_get").
     """
 
     def normalize_value(value):
@@ -989,7 +993,8 @@ def format_comparison_report(
     new_version: str,
     baseline_repo: Optional[str] = None,
     new_repo: Optional[str] = None,
-    core_commit: Optional[str] = None,
+    core_commit_baseline: Optional[str] = None,
+    core_commit_new: Optional[str] = None,
 ) -> str:
     """
     Format the comparison data as a markdown report.
@@ -1152,8 +1157,17 @@ def format_comparison_report(
         report_lines.append("**Configuration:**")
         for key in sorted(common_config.keys()):
             report_lines.append(f"- {key}: {common_config[key]}")
-        if core_commit:
-            report_lines.append(f"- core_commit: {core_commit}")
+        report_lines.append("")
+
+    # Add core commit metadata
+    if core_commit_baseline or core_commit_new:
+        if core_commit_baseline == core_commit_new:
+            report_lines.append(f"**Core commit:** {core_commit_baseline}")
+        else:
+            report_lines.append(
+                f"**Core commit:** {core_commit_baseline} (baseline) → "
+                f"{core_commit_new} (new)"
+            )
         report_lines.append("")
 
     # Add legend
@@ -1939,9 +1953,12 @@ def main():
 
     # Format the comparison report
     # Extract core commit if module_commit is used as the version identifier
-    core_commit = None
+    core_commit_baseline = None
+    core_commit_new = None
     if baseline_data and baseline_data[0].get("module_commit"):
-        core_commit = baseline_data[0].get("commit")
+        core_commit_baseline = baseline_data[0].get("commit")
+    if new_data and new_data[0].get("module_commit"):
+        core_commit_new = new_data[0].get("commit")
 
     comparison_table = format_comparison_report(
         config_groups,
@@ -1949,7 +1966,8 @@ def main():
         new_version,
         baseline_repo,
         new_repo,
-        core_commit=core_commit,
+        core_commit_baseline=core_commit_baseline,
+        core_commit_new=core_commit_new,
     )
 
     # Create final report with metadata

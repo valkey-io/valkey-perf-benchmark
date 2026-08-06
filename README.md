@@ -173,6 +173,16 @@ python utils/compare_benchmark_results.py --baseline results/commit1/metrics.jso
   - RPS-focused filtering for integration purposes
 - **Metrics Filtering**: Supports filtering by metric type (all, rps, latency)
 - **Standardized Output**: Generates markdown reports with statistical information including CV
+- **Module Benchmark Support**: Uses the module commit as the version identifier and reports the underlying core engine commit (see below)
+
+### Module Benchmark Comparisons
+
+When comparing module benchmarks (e.g. `valkey-search`), each result record carries both a `module_commit` (the module build under test) and a `commit` (the core Valkey engine it ran against). The comparison tool handles these as follows:
+
+- **Version identifier**: If `module_commit` is present it is used as the version shown in the report title, table headers, and graph legends. Otherwise the tool falls back to `commit`, then to the run timestamp.
+- **Core commit line**: For module comparisons the report adds a `**Core commit:**` line so the core engine version is visible alongside the module version:
+  - `**Core commit:** <sha>` when both sides ran against the same core commit
+  - `**Core commit:** <baseline-sha> (baseline) → <new-sha> (new)` when they differ
 
 ### Statistical Display Format
 
