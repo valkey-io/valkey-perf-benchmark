@@ -36,6 +36,8 @@ def apply_config_to_servers(
         if valkey_dir is None:
             raise ValueError("valkey_dir is required when tls_mode is True")
         tls_cert_path = Path(valkey_dir) / "tests" / "tls"
+        if not tls_cert_path.exists():
+            raise FileNotFoundError(f"TLS certificates not found at {tls_cert_path}")
         kwargs_base.update(
             {
                 "ssl": True,
@@ -490,6 +492,8 @@ class ServerLauncher:
         """Launch Valkey server and setup cluster if needed."""
         self.config = config
         self.module_path = module_path
+        # Reset node tracking so a restart doesn't accumulate stale entries
+        self.cluster_nodes = []
 
         # Setup modules: CLI overrides config path
         if module_path:
