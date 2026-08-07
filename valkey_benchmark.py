@@ -351,9 +351,7 @@ class ClientRunner:
         When profiling is enabled we only run once.
         """
         if self.current_profiling_set.get("enabled", False) and self.runs > 1:
-            logging.info(
-                "Profiling enabled: forcing runs=1 (profiling runs only once)"
-            )
+            logging.info("Profiling enabled: forcing runs=1 (profiling runs only once)")
             return 1
         return self.runs
 
