@@ -14,8 +14,9 @@ A benchmarking tool for [Valkey](https://github.com/valkey-io/valkey), an in-mem
 - Runs continuous benchmarking via GitHub Actions workflow
 - Tracks commits and manages progress automatically
 - Includes Grafana dashboards for visualizing performance metrics
-- **FTS (Full-Text Search) performance testing** with valkey-search module
+- **Search module performance testing** with valkey search, adaptable to other modules
 - **Performance profiling** with flamegraph generation via `perf`
+- **Regression detection** comparing the latest benchmarked commits in PostgreSQL
 
 ## Prerequisites
 
@@ -49,9 +50,9 @@ To update dependencies, edit `requirements.in` and regenerate the lock file:
 pip-compile --generate-hashes requirements.in -o requirements.txt
 ```
 
-### Additional Prerequisites for FTS Tests
+### Additional Prerequisites for Search Tests
 
-- [valkey-search](https://github.com/valkey-io/valkey-search) module (fulltext branch)
+- [valkey-search](https://github.com/valkey-io/valkey-search) module
 - `perf` tool for profiling (optional: `sudo yum install perf` or `sudo apt-get install linux-tools-generic`)
 - `bunzip2` for dataset extraction (`sudo yum install bzip2` or `sudo apt-get install bzip2`)
 
@@ -59,14 +60,27 @@ pip-compile --generate-hashes requirements.in -o requirements.txt
 
 ```
 valkey-perf-benchmark/
-├── .github/workflows/        # GitHub Actions workflows
-│   ├── valkey_benchmark.yml  # Continuous benchmarking workflow
-│   ├── basic.yml            # Basic validation tests
-│   ├── check_format.yml     # Code formatting checks
-│   └── cluster_tls.yml      # Cluster and TLS specific tests
+├── .github/
+│   ├── workflows/                    # GitHub Actions workflows
+│   │   ├── valkey_benchmark.yml      # Continuous core benchmarking (self-hosted runners)
+│   │   ├── search_benchmark.yml      # Continuous valkey-search module benchmarking
+│   │   ├── benchmark_release_tags.yml # Benchmark specific Valkey release tags
+│   │   ├── module-benchmark.yml      # Module framework smoke test (CI)
+│   │   ├── basic.yml                 # Basic benchmark validation
+│   │   ├── cluster_tls.yml           # Cluster and TLS specific tests
+│   │   ├── tests.yml                 # Unit test suite (pytest)
+│   │   ├── check_format.yml          # Code formatting checks (black)
+│   │   └── sync-dashboards.yml       # Sync Grafana dashboards to the deployment
+│   └── workflow-templates/
+│       └── pr-benchmark-template.yml # Reusable PR-triggered benchmark template
 ├── configs/                  # Benchmark configuration files
-│   ├── benchmark-configs.json
-│   └── benchmark-configs-cluster-tls.json
+│   ├── benchmark-configs.json           # Standard core benchmark configs
+│   ├── benchmark-config-arm.json        # Core configs tuned for arm hosts
+│   ├── benchmark-configs-cluster-tls.json # Cluster + TLS core configs
+│   ├── benchmark-config-tag-arm.json    # Tag-index benchmark configs (arm)
+│   ├── fts-benchmarks-arm.json          # Full search test suite (16 groups, arm)
+│   ├── fts-benchmarks-shortened-arm.json # Shortened search suite (4 groups, arm)
+│   └── module-test-arm.json             # Minimal module framework smoke test
 ├── dashboards/              # Grafana dashboards and AWS infrastructure
 │   ├── grafana/            # Grafana dashboard definitions and Helm config
 │   ├── kubernetes/         # Kubernetes manifests (ALB Ingress)
@@ -74,26 +88,29 @@ valkey-perf-benchmark/
 │   ├── scripts/            # Phase-based deployment scripts (00-06)
 │   ├── schema.sql          # PostgreSQL database schema
 │   └── README.md           # Deployment documentation
-├── utils/                   # Utility scripts
-│   ├── postgres_track_commits.py  # Commit tracking and management
-│   └── compare_benchmark_results.py  # Result comparison utilities
-├── benchmark.py             # Main entry point (core and search modules)
-├── valkey_build.py          # Handles building Valkey from source
-├── valkey_server.py         # Manages Valkey server instances
-├── valkey_benchmark.py      # Runs benchmark tests
-├── search_benchmark.py      # Search module benchmark execution (FTS, vector, numeric, tag)
+├── utils/                   # Utility scripts (Python package)
+│   ├── compare_benchmark_results.py # Result comparison, statistics, and graphs
+│   ├── postgres_track_commits.py    # Commit tracking and management (PostgreSQL)
+│   ├── push_to_postgres.py          # Push metrics to PostgreSQL
+│   ├── detect_regression.py         # Detect regressions between latest commits
+│   ├── cpu_utils.py                 # CPU core range parsing and allocation
+│   └── git_utils.py                 # Git ref resolution and commit fetching
+├── benchmark.py             # Main entry point (core and modules)
+├── valkey_build.py          # Builds Valkey server from source (ServerBuilder)
+├── benchmark_build.py       # Builds valkey-benchmark from unstable (BenchmarkBuilder)
+├── module_build.py          # Builds Valkey module .so files (ModuleBuilder)
+├── valkey_server.py         # Manages Valkey server instances (ServerLauncher)
+├── valkey_benchmark.py      # Client-side benchmark execution (ClientRunner) — core + modules
 ├── profiler.py              # Generic performance profiler (flamegraphs)
-├── cpu_monitor.py           # Generic CPU monitoring
-├── process_metrics.py       # Processes and formats benchmark results
+├── cpu_monitor.py           # CPU monitoring during tests
+├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
+├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
-│   ├── integration/        # Integration tests
+│   ├── integration/        # Integration tests (+ README)
 │   └── test_*.py           # Unit tests (pytest)
 ├── scripts/                 # Helper scripts
-│   ├── setup_datasets.py   # FTS dataset generator
-│   ├── flamegraph.pl       # Flamegraph visualization
-│   └── stackcollapse-perf.pl  # Stack trace processor
-├── datasets/                # FTS test datasets (auto-generated)
-│   ├── field_explosion_50k.xml
+│   └── setup_datasets.py   # Search dataset + query generator
+├── datasets/                # Search test datasets and queries (auto-generated)
 │   ├── search_terms.csv
 │   └── proximity_phrases.csv
 ├── requirements.in          # Direct dependencies (human-editable)
@@ -107,19 +124,16 @@ Each benchmark run clones a fresh copy of the Valkey repository for the target c
 ### Basic Usage
 
 ```bash
-# Run both server and client benchmarks with default configuration
+# Run server and client benchmarks together with default configuration
 python benchmark.py
 
-# Run only the server component
-python benchmark.py --mode server
-
-# Run only the client component against a specific server
+# Run only the client component against an existing server
 python benchmark.py --mode client --target-ip 192.168.1.100
 
 # Use a specific configuration file
 python benchmark.py --config ./configs/my-custom-config.json
 
-# Benchmark a specific commit
+# Benchmark specific commit(s) or ref(s)
 python benchmark.py --commits 1a2b3c4d
 
 # Use a pre-existing Valkey dir
@@ -128,14 +142,21 @@ python benchmark.py --valkey-path /path/to/valkey
 # Without --valkey-path a directory named valkey_<commit> is cloned and later removed
 
 # Use a custom valkey-benchmark executable
+# (when omitted, the latest valkey-benchmark is cloned and built from unstable)
 python benchmark.py --valkey-benchmark-path /path/to/custom/valkey-benchmark
 
-# Use a pre-running Valkey Server
+# Use a pre-running Valkey server (skips build / launch / cleanup)
 python benchmark.py --valkey-path /path/to/valkey --use-running-server
+```
+
+`--mode` accepts `both` (default — run server and client on the same host) or
+`client` (run only the client against an existing server). There is no separate
+server-only mode.
 
 ### Comparison Mode
 
-# Compare with baseline
+```bash
+# Compare against a baseline ref
 python benchmark.py --commits HEAD --baseline unstable
 
 # Run multiple benchmark runs for statistical reliability
@@ -234,6 +255,18 @@ python benchmark.py --log-level DEBUG
 
 # Use a custom valkey-benchmark executable (useful for testing modified versions)
 python benchmark.py --valkey-benchmark-path /path/to/custom/valkey-benchmark
+
+# Run only a subset of test groups / scenarios (test_groups configs)
+python benchmark.py --config configs/fts-benchmarks-arm.json --module search --groups 1,2 --scenarios a,b
+
+# Run a single cluster mode from a config that lists both [false, true]
+python benchmark.py --config configs/fts-benchmarks-arm.json --cluster-mode-filter true
+
+# Skip profiling passes and config_sets for a quick single pass
+python benchmark.py --skip-profiling --skip-config-set
+
+# Provide the repository so comparison reports link to commits
+python benchmark.py --commits HEAD --baseline unstable --repository valkey-io/valkey
 ```
 
 ### Benchmarking Remote Servers and Pre-Running Servers
@@ -248,14 +281,15 @@ The `--valkey-benchmark-path` option specifies a custom path to the `valkey-benc
 - Using a pre-built binary from a different location
 - Benchmarking with a specific version of the tool
 
-When not specified, the tool uses the default `src/valkey-benchmark` relative to the Valkey source directory.
+When not specified, the tool clones and builds the latest `valkey-benchmark` from the Valkey `unstable` branch, so the benchmark client stays independent of the server commit under test.
 
-````bash
+```bash
 # Example: Use a custom benchmark tool
 python benchmark.py --valkey-benchmark-path /usr/local/bin/valkey-benchmark
 
 # Example: Use with custom Valkey path
 python benchmark.py --valkey-path /custom/valkey --valkey-benchmark-path /custom/valkey/src/valkey-benchmark
+```
 
 ## Configuration
 
@@ -301,7 +335,7 @@ Combine with a baseline `.conf` file:
   "hz": "100",
   "tcp-keepalive": "60"
 }
-````
+```
 
 ### Configuration Parameters
 
@@ -423,15 +457,20 @@ The project includes several GitHub Actions workflows for automated testing and 
   - Manages commit tracking via PostgreSQL
   - Uploads results to S3 and pushes metrics to PostgreSQL
   - Supports manual triggering with configurable commit limits
-
-  - **`module-benchmark.yml`**: Module framework CI test on GitHub runners
-  - Validates module benchmarking framework with minimal test
-  - Uses configs/module-test-arm.json (4-core, 1000 docs)
-  - Builds valkey-server + valkey-search, runs quick smoke test
-
-- **`basic.yml`**: Basic validation and testing
-- **`check_format.yml`**: Code formatting validation
+- **`search_benchmark.yml`**: Continuous valkey-search module benchmarking
+  - Runs on a schedule (every 4 hours) and on manual dispatch
+  - Determines core and module commits, builds valkey-server + valkey-search, and benchmarks
+  - Configurable module branch (default `main`), repeat count, cluster mode, and profiling
+- **`benchmark_release_tags.yml`**: Benchmarks a specified list of Valkey release tags
+- **`module-benchmark.yml`**: Module framework smoke test on GitHub runners
+  - Validates the module benchmarking framework with a minimal test
+  - Uses `configs/module-test-arm.json` (small, quick)
+  - Builds valkey-server + valkey-search and runs a quick smoke test
+- **`basic.yml`**: Basic benchmark validation
 - **`cluster_tls.yml`**: Tests for cluster and TLS configurations
+- **`tests.yml`**: Runs the unit test suite (pytest)
+- **`check_format.yml`**: Code formatting validation (black)
+- **`sync-dashboards.yml`**: Syncs Grafana dashboard JSON changes to the deployment
 
 ### Commit Tracking
 
@@ -477,7 +516,10 @@ See `dashboards/README.md` for complete deployment guide and architecture detail
 
 - `utils/postgres_track_commits.py`: Manages commit tracking, status updates, and cleanup operations using PostgreSQL
 - `utils/push_to_postgres.py`: Pushes benchmark metrics to PostgreSQL with dynamic schema support
-- `utils/compare_benchmark_results.py`: Compares benchmarparing benchmark results across commits
+- `utils/compare_benchmark_results.py`: Compares benchmark results across commits (statistics + graphs)
+- `utils/detect_regression.py`: Detects performance regressions between the latest two benchmarked commits in PostgreSQL
+- `utils/cpu_utils.py`: CPU core range parsing and per-node allocation for servers/clients
+- `utils/git_utils.py`: Resolves git refs and fetches commits (handles shallow clones)
 
 ### Configuration Files
 
@@ -533,47 +575,54 @@ The integration tests (`tests/integration/`) validate benchmark workflows end-to
 
 Create new JSON configuration files in the `configs/` directory following the existing format. Each configuration object represents a benchmark scenario.
 
-### Extending for New Modules
+### Adapting the Framework for a New Module
 
-The framework supports module-specific testing through a unified entry point (`benchmark.py`) with `--module` flag:
+The framework is module-agnostic: it never hard-codes anything about
+valkey-search. All modules run through the same path — `benchmark.py` builds and
+launches the server (loading the module `.so`), and `ClientRunner` in
+`valkey_benchmark.py` executes the scenarios described by the config's
+`test_groups`. `--module` is simply a label that routes results to
+`results/{module}_tests/`. **No Python code changes are required** to add a module.
 
-**For new modules (e.g., JSON, TimeSeries):**
+To benchmark a new module (JSON, Bloom, TimeSeries, a custom module, …) you
+supply three things and reuse everything else (server lifecycle, CPU pinning,
+profiling, metrics, PostgreSQL upload, PR workflow):
 
-1. **Create module benchmark class** extending `ClientRunner`:
-   ```python
-   # my_module_benchmark.py
-   from valkey_benchmark import ClientRunner
-   
-   class MyModuleBenchmarkRunner(ClientRunner):
-       def run_module_specific_tests(self, config):
-           # Module-specific test logic
-           pass
+1. **Build the module `.so`** with its native build system, and note the path:
+   ```bash
+   cd ../valkey-json && make      # or ./build.sh / cmake — whatever the module uses
+   ls -lh .build-release/libjson.so
    ```
 
-2. **Add module dispatch** in `benchmark.py`:
-   ```python
-   # In benchmark.py main()
-   elif args.module == "my_module":
-       from my_module_benchmark import run_my_module_benchmarks
-       run_my_module_benchmarks(...)
+2. **Author a config** using the `test_groups` / `scenarios` structure (copy the
+   shape of `configs/fts-benchmarks-arm.json` or the smaller
+   `configs/module-test-arm.json`). Point the server at your module via the
+   `modules` array and describe the workload:
+   - `setup_commands` — your module's index/schema setup (search uses `FT.CREATE`;
+     JSON might need none).
+   - `command` — any command string your module accepts. Placeholders
+     (`__rand_int__`, `__field:NAME__`, `{tag}`) work regardless of module.
+   - `dataset` / `dataset_generation` — optional; add generated data if your
+     workload needs it (the transforms in `scripts/setup_datasets.py` are generic
+     and extensible).
+
+3. **Run it** through the same entry point search uses:
+   ```bash
+   python benchmark.py \
+     --module json \
+     --module-path ../valkey-json/.build-release/libjson.so \
+     --valkey-path ../valkey \
+     --config configs/json-benchmarks.json \
+     --groups 1
    ```
 
-3. **Create convenience wrapper** (optional):
-   ```python
-   # run_my_module_tests.py
-   subprocess.run(["python3", "benchmark.py", "--module", "my_module"] + sys.argv[1:])
-   ```
+Results land in `results/json_tests/` and can be compared with
+`utils/compare_benchmark_results.py` and pushed to PostgreSQL with
+`utils/push_to_postgres.py` exactly like search results. The generic
+infrastructure (`profiler.py`, `cpu_monitor.py` / `per_cpu_monitor.py`,
+`process_metrics.py`) applies automatically.
 
-4. **Reuse generic infrastructure**:
-   - `profiler.py` - Performance profiling
-   - `cpu_monitor.py` - CPU monitoring
-   - `process_metrics.py` - Metrics processing
-   - `push_to_postgres.py` - Database integration (use `--test-type my_module`)
-
-**Example: Search module (FTS, vector, numeric, tag)**
-- Module class: `search_benchmark.py::SearchBenchmarkRunner`
-- Dispatch: `benchmark.py` detects `--module search`
-- Usage: `python benchmark.py --module search --config configs/fts-benchmarks.json --groups 1`
+To wire a module into continuous CI benchmarking, see [Onboarding a New Module to Continuous Benchmarking](#onboarding-a-new-module-to-continuous-benchmarking).
 
 ## Module Testing (FTS, JSON, etc.)
 
@@ -683,6 +732,73 @@ Module tests use structured `test_groups` with `scenarios`:
 **Filter modes:** `--cluster-mode-filter [false|true]` runs specific mode only.  
 **Key pattern:** Use `{tag}` in HSET for cluster routing: `HSET rd0-{tag}:__rand_int__`
 
+### Onboarding a New Module to Continuous Benchmarking
+
+A module team (valkey-json, valkey-bloom, a custom module, …) can reuse this
+framework's continuous benchmarking workflow without forking it. The reference
+implementation is `.github/workflows/search_benchmark.yml`: it runs on a schedule
+(and manual dispatch), benchmarks new module commits over time, stores results in
+PostgreSQL, and surfaces them in Grafana. Model your module's workflow on it.
+
+**What the workflow does, step by step** (adapt each to your module):
+
+1. **Checks out** the module repo, valkey core (`unstable`), and this benchmark repo.
+2. **Builds** valkey-server, the `valkey-benchmark` client, and the module `.so`
+   (search uses `./build.sh` → `.build-release/libsearch.so`; use your module's
+   build system and `.so` path).
+3. **Determines which module commits still need benchmarking** via
+   `utils/postgres_track_commits.py determine` and marks them `in_progress`.
+4. **For each commit**: checkout + build the module, then run
+   `python benchmark.py --module <name> --module-path <.so> --valkey-path <core> --config <config> ...`.
+5. **Pushes results** to PostgreSQL with `utils/push_to_postgres.py` and marks the
+   commits `complete`.
+
+**Infrastructure it needs:**
+
+- **A self-hosted runner** (the search workflow uses `[self-hosted, valkey-search-arm]`)
+  sized for your benchmark, with build tools and `perf` installed.
+- **PostgreSQL + AWS creds** (RDS with IAM auth in the search setup) provided as
+  repo secrets.
+- **A config** using the `test_groups` / `scenarios` structure with your module's
+  `setup_commands`, `command` templates, and datasets — see
+  [Adapting the Framework for a New Module](#adapting-the-framework-for-a-new-module).
+- **A Grafana dashboard** (optional) — add a JSON under `dashboards/grafana/` and
+  it is picked up by `sync-dashboards.yml`.
+
+#### PostgreSQL Table Selection (`--table`)
+
+Both `utils/push_to_postgres.py` and `utils/postgres_track_commits.py` take a
+`--table` identifier that decides **which metrics table your results go into** —
+this is how each module keeps its data separate. `resolve_table_name()` maps it:
+
+| `--table` value | Resulting table |
+| --------------- | --------------- |
+| `core` (default) | `benchmark_metrics` |
+| `tag` | `benchmark_tags_metrics` |
+| any other id (e.g. `search`, `json`) | `benchmark_metrics_{table}` (e.g. `benchmark_metrics_search`) |
+
+The identifier must match `^[a-z][a-z0-9_]{0,30}$`. So a new module typically
+passes its own name, e.g. `--table json` → results land in `benchmark_metrics_json`.
+
+A separate `--test-type` flag (e.g. `core`, `fts`) is **not** used for table
+naming — it is stored on each row as a tag for filtering/grouping in dashboards.
+
+```bash
+python utils/push_to_postgres.py \
+  --results-dir ./results/<core_sha>_<module_sha> \
+  --table json --test-type json \
+  --host <rds-endpoint> --port 5432 \
+  --database <db> --username <user> --password "$PGPASSWORD"
+```
+
+Use the **same** `--table` value in `postgres_track_commits.py` (for commit
+tracking) and `push_to_postgres.py` (for results) so tracking and metrics stay
+aligned.
+
+A module that only wants local/manual runs needs none of this CI infrastructure —
+just build the `.so` and run `benchmark.py` as shown in
+[Running Module Tests Locally](#running-module-tests-locally).
+
 ### Setting Up PR Benchmarks
 
 Both valkey core and module repositories can set up automated PR benchmarking using our unified workflow template.
@@ -745,7 +861,7 @@ python benchmark.py \
   --module search \
   --module-path ../valkey-search/.build-release/libsearch.so \
   --valkey-path ../valkey \
-  --config configs/fts-benchmarks.json \
+  --config configs/fts-benchmarks-arm.json \
   --groups 1
 ```
 
@@ -764,21 +880,21 @@ Use `benchmark.py` with `--module search`:
 python benchmark.py \
   --module search \
   --valkey-path /path/to/valkey \
-  --config configs/fts-benchmarks.json \
+  --config configs/fts-benchmarks-arm.json \
   --groups 1
 
 # Run specific scenarios within groups
 python benchmark.py \
   --module search \
   --valkey-path /path/to/valkey \
-  --config configs/fts-benchmarks.json \
+  --config configs/fts-benchmarks-arm.json \
   --scenarios a,b
 
 # Filter by groups (works with any config using test_groups structure)
 python benchmark.py \
   --module search \
   --valkey-path /path/to/valkey \
-  --config configs/fts-benchmarks.json \
+  --config configs/fts-benchmarks-arm.json \
   --groups 1,2
 ```
 
@@ -805,7 +921,7 @@ python benchmark.py \
   --module search \
   --module-path ../valkey-search/.build-release/libsearch.so \
   --valkey-path ../valkey \
-  --config configs/fts-benchmarks.json \
+  --config configs/fts-benchmarks-arm.json \
   --groups 1
 ```
 
@@ -821,7 +937,7 @@ python benchmark.py \
   --module search \
   --valkey-path /path/to/valkey \
   --use-running-server \
-  --config configs/fts-benchmarks.json \
+  --config configs/fts-benchmarks-arm.json \
   --groups 1
 ```
 
@@ -865,6 +981,10 @@ The framework uses a **transform-based dataset generation system** that supports
     variants ≥1 apply `target_distance` Levenshtein edits (insert/delete/substitute)
 - `numeric_range`: Random numeric value in `[min, max]` (for NUMERIC index tests)
 - `tag_list`: Pipe-separated random tags from a supplied list (for TAG index tests)
+- `vector`: Marks a vector field. Vector data lives in a structured `.npy` file
+  (not CSV); the presence of this transform routes generation to the structured
+  NPY writer. Used for KNN / HNSW vector-search tests, including hybrid configs
+  that combine a vector field with text/numeric/tag fields.
 
 
 **Compact Format (for field explosion):**
@@ -901,57 +1021,85 @@ Supported query types:
   `max_word_length`)
 - `tag_only` — rotates through a supplied `tags` list to produce category filters
   for composed TAG queries
+- `vector` — generates a structured `.npy` of `(search_term, query_vector)` pairs
+  (L2-normalized random vectors, filename-seeded for reproducibility) plus a
+  companion CSV of the search terms, for KNN / hybrid vector queries. Parameter:
+  `dimensions` (default 256)
 
 
-### FTS Test Groups
+### Search Test Groups
 
-**Group 1: Multi-field comprehensive (NOSTEM)**
-- 50-field index, 50K documents, 1000 chars per field
-- Tests: Single term, 2-term composed AND, 2-term proximity phrase
-- Scenarios: 1a-1g (with/without NOCONTENT variants)
-  - 1a / 1a_nocontent: Single term all fields
-  - 1b / 1b_nocontent: Single term @field1
-  - 1c / 1c_nocontent: Composed AND all fields
-  - 1d / 1d_nocontent: Composed AND @field1
-  - 1e / 1e_nocontent: Mixed pattern @field1
-  - 1f / 1f_nocontent: Proximity phrase all fields
-  - 1g / 1g_nocontent: Proximity phrase @field1
+`configs/fts-benchmarks-arm.json` (the `FTS Performance Benchmarks` suite)
+defines the full search suite of **16 groups**. Groups are selected with
+`--groups` and individual scenarios within a group with `--scenarios`. Each group
+begins with a `write` scenario that ingests its dataset, followed by the read (and
+occasionally mixed) scenarios that query it.
 
-**Group 2: Proximity queries - 5-term best case (1 combination)**
-- 100K documents, 1 field, 100 queries × 1000 matches
-- Adjacent terms → 1 position tuple check (best case)
-- Tests: Default field and specific field queries with SLOP 0 INORDER
+| Group | Focus |
+| ----- | ----- |
+| 1 | Multi-field comprehensive (STEM enabled) |
+| 2 | Proximity queries — 5-term best case (1 combination) |
+| 3 | Proximity queries — 5-term worst case (100 combinations) |
+| 4 | Proximity queries — 25-term worst case (100 combinations) |
+| 5 | Prefix (wildcard) expansion — best case |
+| 6 | Prefix (wildcard) expansion — worst case |
+| 7 | Suffix expansion — best case |
+| 8 | Suffix expansion — worst case |
+| 9 | Hybrid queries (TEXT + NUMERIC + TAG) |
+| 10 | Fuzzy matching — best case (distance 1) |
+| 11 | Fuzzy matching — worst case (distance 3) |
+| 12 | Posting tests — position map partitions and byte size |
+| 13 | Radix tests — node growth and prefix locality |
+| 14 | Misc tests — string intern, schema options, extreme case |
+| 15 | Vector + text hybrid (KNN with filters) |
+| 16 | Composed queries — nominal case (entries fetcher test) |
 
-**Group 3: Proximity queries - 5-term worst case (100 combinations)**
-- 100K documents, 1 field, 100 queries × 1000 matches
-- Repeated terms with noise → ~100 position tuple checks before match
-- Tests: SLOP 0 and SLOP 3 variations
+### Shortened Search Suite
 
-**Group 4: Proximity queries - 25-term worst case (100 combinations)**
-- 100K documents, 1 field, 100 queries × 1000 matches
-- 25-term phrases with complexity testing
-- Tests: SLOP 3 INORDER
+`configs/fts-benchmarks-shortened-arm.json` (the `FTS Shortened Performance
+Benchmarks` suite) is a smaller, CI-sized version of the full suite. It is the
+**default config for the continuous `search_benchmark.yml` workflow** and is sized
+to finish quickly while still exercising every major search path (text, hybrid,
+and both vector index types), across 4 groups:
 
-### FTS Results
+| Group | Focus |
+| ----- | ----- |
+| P1 | Text single-field baseline |
+| P2 | Multi-index hybrid (TEXT + NUMERIC + TAG) |
+| P3 | Vector FLAT (prefilter path) |
+| P4 | Vector HNSW (`UsePreFiltering` ratio branch) |
+
+### Search Results
 
 Results are saved to `results/search_tests/`:
 - `metrics.json` - Performance metrics
 - `flamegraphs/` - Profiling data (if enabled)
 
-Sample metrics structure:
+Sample metrics structure (module runs add `test_id`, `group`/`scenario`, their
+descriptions, and — when supplied — `module_commit` / `module_commit_timestamp`):
 ```json
 {
-  "test_id": "1a",
-  "test_phase": "search",
+  "test_id": "1_b",
+  "test_phase": "read",
+  "group": 1,
+  "scenario": "b",
+  "group_description": "Multi-field comprehensive (STEM enabled)",
+  "scenario_description": "Single term all fields",
+  "status": "success",
   "rps": 6596.42,
   "avg_latency_ms": 7.535,
   "p50_latency_ms": 5.367,
   "p95_latency_ms": 20.975,
   "cpu_avg_percent": 692.84,
   "cpu_peak_percent": 751.10,
-  "memory_mb": 4469.87
+  "memory_mb": 4469.87,
+  "dataset": "field_explosion_50k.xml",
+  "module_commit": "..."
 }
 ```
+
+`test_id` is `{group}_{scenario}` and `test_phase` is the scenario type
+(`read`, `write`, or `mixed_read` / `mixed_write` for mixed scenarios).
 
 ## Performance Profiling
 
