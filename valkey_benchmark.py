@@ -345,6 +345,16 @@ class ClientRunner:
         # Finalize and write results
         self._finalize_metrics(metrics_processor, metric_json, profiling_enabled)
 
+    def _get_effective_runs(self) -> int:
+        """Return the number of runs to execute.
+
+        When profiling is enabled we only run once.
+        """
+        if self.current_profiling_set.get("enabled", False) and self.runs > 1:
+            logging.info("Profiling enabled: forcing runs=1 (profiling runs only once)")
+            return 1
+        return self.runs
+
     def _iterate_scenarios(self):
         """Generate scenario execution data from either config format."""
         if self.uses_test_groups:
@@ -375,8 +385,8 @@ class ClientRunner:
                 )
                 continue
 
-            # Run multiple times if requested
-            for run_num in range(self.runs):
+            # Run multiple times if requested (profiling forces a single run)
+            for run_num in range(self._get_effective_runs()):
                 seed_val = random.randint(0, 1000000)
 
                 yield {
@@ -399,7 +409,9 @@ class ClientRunner:
         """Generate scenarios from test_groups configuration.
 
         When ``self.runs > 1``, the entire group is repeated multiple times.
+        Profiling mode forces a single run (see ``_get_effective_runs``).
         """
+        effective_runs = self._get_effective_runs()
         groups_to_run = self.config.get("groups_to_run")
         scenario_filter = self.config.get("scenario_filter")
 
@@ -414,11 +426,11 @@ class ClientRunner:
                 )
                 continue
 
-            for run_num in range(self.runs):
-                if self.runs > 1:
+            for run_num in range(effective_runs):
+                if effective_runs > 1:
                     logging.info(
                         f"=== Group {group_id}: {group_description or ''} "
-                        f"(run {run_num + 1}/{self.runs}) ==="
+                        f"(run {run_num + 1}/{effective_runs}) ==="
                     )
                 else:
                     logging.info(f"=== Group {group_id}: {group_description or ''} ===")
