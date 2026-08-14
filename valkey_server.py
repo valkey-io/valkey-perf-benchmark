@@ -5,7 +5,7 @@ import subprocess
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, List, Optional
 
 import valkey
 
@@ -13,6 +13,48 @@ import valkey
 VALKEY_SERVER = "src/valkey-server"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 15
+
+
+def apply_config_to_servers(
+    config_set: dict,
+    ports: List[int],
+    target_ip: str,
+    tls_mode: bool = False,
+    valkey_dir: Optional[Path] = None,
+) -> None:
+    """Apply CONFIG SET commands to all server nodes.
+
+    Args:
+        config_set: Dict of config key-value pairs to set.
+        ports: List of server ports to apply config to.
+        target_ip: Host IP of the server(s).
+        tls_mode: Whether to connect with TLS.
+        valkey_dir: Path to valkey directory (needed for TLS cert paths).
+    """
+    kwargs_base = {"decode_responses": True, "socket_timeout": 10}
+    if tls_mode:
+        if valkey_dir is None:
+            raise ValueError("valkey_dir is required when tls_mode is True")
+        tls_cert_path = Path(valkey_dir) / "tests" / "tls"
+        if not tls_cert_path.exists():
+            raise FileNotFoundError(f"TLS certificates not found at {tls_cert_path}")
+        kwargs_base.update(
+            {
+                "ssl": True,
+                "ssl_certfile": str(tls_cert_path / "valkey.crt"),
+                "ssl_keyfile": str(tls_cert_path / "valkey.key"),
+                "ssl_ca_certs": str(tls_cert_path / "ca.crt"),
+            }
+        )
+
+    for port in ports:
+        client = valkey.Valkey(host=target_ip, port=port, **kwargs_base)
+        try:
+            for k, v in config_set.items():
+                client.execute_command("CONFIG", "SET", k, str(v))
+                logging.info(f"Set {k} = {v} on port {port}")
+        finally:
+            client.close()
 
 
 class ServerLauncher:
@@ -450,6 +492,8 @@ class ServerLauncher:
         """Launch Valkey server and setup cluster if needed."""
         self.config = config
         self.module_path = module_path
+        # Reset node tracking so a restart doesn't accumulate stale entries
+        self.cluster_nodes = []
 
         # Setup modules: CLI overrides config path
         if module_path:
