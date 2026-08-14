@@ -1,4 +1,15 @@
-"""Fixtures and utilities for integration tests."""
+"""Fixtures and utilities for integration tests.
+
+PostgreSQL fixtures (pg_conn, requires_postgres) expect a local Postgres instance.
+See test_postgres_track_commits.py or test_postgres_push_metrics.py for Docker setup.
+
+Connection defaults can be overridden via environment variables:
+    TEST_PG_HOST (default: localhost)
+    TEST_PG_PORT (default: 5433)
+    TEST_PG_USER (default: testuser)
+    TEST_PG_PASSWORD (default: valkey-search)
+    TEST_PG_DATABASE (default: testdb)
+"""
 
 import json
 import os
@@ -11,6 +22,70 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# PostgreSQL fixtures (for DB integration tests)
+# ---------------------------------------------------------------------------
+
+PG_HOST = os.environ.get("TEST_PG_HOST", "localhost")
+PG_PORT = int(os.environ.get("TEST_PG_PORT", "5433"))
+PG_USER = os.environ.get("TEST_PG_USER", "testuser")
+PG_PASSWORD = os.environ.get("TEST_PG_PASSWORD", "valkey-search")
+PG_DATABASE = os.environ.get("TEST_PG_DATABASE", "testdb")
+
+
+def _pg_available() -> bool:
+    """Check if test PostgreSQL is reachable."""
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(
+            host=PG_HOST,
+            port=PG_PORT,
+            user=PG_USER,
+            password=PG_PASSWORD,
+            database=PG_DATABASE,
+            connect_timeout=3,
+        )
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+requires_postgres = pytest.mark.skipif(
+    not _pg_available(),
+    reason=f"PostgreSQL not available at {PG_HOST}:{PG_PORT} "
+    "(set TEST_PG_* env vars or see integration README).",
+)
+
+
+@pytest.fixture
+def pg_conn():
+    """Provide a real PostgreSQL connection. Rolls back after each test."""
+    import psycopg2
+
+    conn = psycopg2.connect(
+        host=PG_HOST,
+        port=PG_PORT,
+        user=PG_USER,
+        password=PG_PASSWORD,
+        database=PG_DATABASE,
+    )
+    yield conn
+    conn.rollback()
+    conn.close()
+
+
+@pytest.fixture
+def pg_table(pg_conn):
+    """Create a uniquely-named test table and drop it after the test."""
+    table_name = f"test_bench_{os.getpid()}_{id(pg_conn)}"
+    yield table_name, pg_conn
+    with pg_conn.cursor() as cur:
+        cur.execute(f"DROP TABLE IF EXISTS {table_name}")
+    pg_conn.commit()
+
 
 # Make project root importable for all integration tests
 PROJECT_ROOT = Path(__file__).parent.parent.parent
