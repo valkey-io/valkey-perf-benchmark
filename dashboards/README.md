@@ -55,6 +55,21 @@ Two IAM-enabled users:
 1. **`postgres`** - Admin with full access
 2. **`github_actions`** - CI/CD user with IAM-only authentication
 
+### Grafana Dashboards
+
+Dashboard definitions live in `grafana/` and are provisioned into Grafana:
+
+| File | Purpose |
+|------|---------|
+| `valkey-throughput-comparison.json` | Throughput (RPS) comparison across commits |
+| `valkey-performance-per-command.json` | Per-command latency/throughput breakdown |
+| `valkey-module-perf.json` | Module (e.g. valkey-search) performance metrics |
+| `grafana-values.yaml` | Helm values for the Grafana deployment |
+
+Changes to `grafana/*.json` on `main` are automatically synced to the running
+Grafana instance by the `sync-dashboards.yml` workflow (also manually
+dispatchable).
+
 ## Prerequisites
 
 - **AWS CLI** - Configured with credentials
