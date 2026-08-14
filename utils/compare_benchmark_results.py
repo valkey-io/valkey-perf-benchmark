@@ -281,7 +281,13 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
 
     for item in data:
         for key, value in item.items():
-            if key not in excluded_fields:
+            # env_-prefixed keys are reproducibility metadata (upstream PR #55,
+            # flattened from environment_metadata), not configuration. Some are
+            # live host readings (e.g. env_cpu_freq_mhz_at_setup) that differ
+            # between an otherwise-identical baseline and new run, which would
+            # shatter config signatures and empty the comparison. Exclude the
+            # whole prefix so future env fields are covered automatically.
+            if key not in excluded_fields and not key.startswith("env_"):
                 # Only include keys with hashable values for grouping
                 if isinstance(value, (str, int, float, bool, type(None))):
                     config_keys.add(key)
@@ -336,20 +342,40 @@ def summarize_benchmark_results(data_items: List[Dict[str, Any]]) -> Dict[str, f
     }
 
 
-def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def average_multiple_runs(
+    data: List[Dict[str, Any]],
+    shared_config_keys: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Automatically average multiple benchmark runs with identical configurations.
 
     Groups runs by configuration parameters and calculates means and standard deviations
     for performance metrics. Always applied to ensure consistent comparisons.
+
+    Args:
+        data: Benchmark rows to average.
+        shared_config_keys: Optional pre-discovered config key list, computed over
+            the union of both datasets being compared (see
+            ``create_comparison_table_data``). When provided, grouping uses this
+            shared list instead of keys discovered from ``data`` alone, so a field
+            present in only one of the two datasets cannot shift this dataset's key
+            list and desynchronize signatures across datasets. When omitted, keys
+            are discovered from ``data`` (the standalone behavior, unchanged).
     """
     if not data:
         return []
 
-    # Get configuration keys (excluding metrics and metadata)
+    # Get configuration keys (excluding metrics and metadata). Prefer the shared
+    # union key list when supplied so both datasets average over an identical key
+    # space; otherwise fall back to per-dataset discovery.
+    base_keys = (
+        shared_config_keys
+        if shared_config_keys is not None
+        else discover_config_keys(data)
+    )
     config_keys = [
         key
-        for key in discover_config_keys(data)
+        for key in base_keys
         if key not in ["timestamp", "run_count"] and not key.endswith("_stdev")
     ]
 
@@ -548,20 +574,34 @@ def format_version_link(version: str, repository: Optional[str]) -> str:
 
 def group_by_static_configuration(
     data: List[Dict[str, Any]],
+    shared_config_keys: Optional[List[str]] = None,
 ) -> Dict[Tuple, Dict[str, Any]]:
     """
     Group benchmark results by static configuration parameters.
 
     Excludes table-level parameters (command, pipeline, io_threads) that vary
     within the same test configuration.
+
+    Args:
+        data: Benchmark rows to group.
+        shared_config_keys: Optional pre-discovered config key list computed over
+            the union of both datasets being compared. When provided, grouping
+            uses this shared list (minus the table parameters) so both datasets
+            build signatures over an identical key space; a field present in only
+            one dataset therefore cannot change the other's signature layout. When
+            omitted, keys are discovered from ``data`` alone (unchanged behavior).
     """
     # Parameters that appear in the comparison table, not in config sections
     table_parameters = {"command", "pipeline", "io_threads"}
 
-    # Get configuration keys excluding table parameters
-    config_keys = [
-        key for key in discover_config_keys(data) if key not in table_parameters
-    ]
+    # Get configuration keys excluding table parameters. Prefer the shared union
+    # key list when supplied so signatures line up across datasets.
+    base_keys = (
+        shared_config_keys
+        if shared_config_keys is not None
+        else discover_config_keys(data)
+    )
+    config_keys = [key for key in base_keys if key not in table_parameters]
 
     grouped_configs = {}
     for item in data:
@@ -574,6 +614,211 @@ def group_by_static_configuration(
         grouped_configs[config_signature]["items"].append(item)
 
     return grouped_configs
+
+
+# Performance metric fields that a comparable benchmark row is expected to carry.
+# A row missing every one of these is not numerically comparable (e.g. a failure
+# marker), but a row that merely holds a zero value still counts as comparable.
+_PERFORMANCE_METRIC_KEYS = (
+    "rps",
+    "avg_latency_ms",
+    "p50_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+)
+
+
+def is_failed_row(item: Dict[str, Any]) -> bool:
+    """
+    Return True when a benchmark row must be excluded from numeric comparison.
+
+    A row is non-comparable when it is an explicit failure marker
+    (``status == "failed"``, written by ``ClientRunner._create_failure_marker``)
+    or when it carries none of the performance metric fields at all. A row that
+    merely reports a zero value (e.g. ``rps == 0``) still has the key present and
+    remains comparable, so legitimate zero readings are never dropped.
+    """
+    if item.get("status") == "failed":
+        return True
+    return not any(key in item for key in _PERFORMANCE_METRIC_KEYS)
+
+
+def partition_failed_rows(
+    data: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split rows into ``(comparable, failed)`` using :func:`is_failed_row`."""
+    comparable: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for item in data:
+        (failed if is_failed_row(item) else comparable).append(item)
+    return comparable, failed
+
+
+def _make_hashable(value: Any) -> Any:
+    """
+    Return a deterministic, hashable representation of ``value``.
+
+    ``config_set`` is a DICT in metrics rows, so it cannot go straight into a
+    hashable identity tuple. Dicts become a sorted tuple of ``(key, frozen
+    value)`` pairs (order-independent) and lists/tuples are frozen element-wise;
+    scalars pass through unchanged. Two equal configs therefore always produce
+    the same key regardless of insertion order.
+    """
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _make_hashable(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_make_hashable(v) for v in value)
+    return value
+
+
+def _scenario_identity(item: Dict[str, Any]) -> Optional[Tuple]:
+    """
+    Return the identity used to pair a scenario across the two datasets.
+
+    ``test_id`` (e.g. ``"1_a"``) names a scenario in the unified scenario/module
+    format, but it is NOT unique on its own: a ``config_sets`` sweep (a sweep of
+    server ``CONFIG SET`` values) or ``cluster_mode: [false, true]`` re-runs the
+    SAME scenario several times, emitting multiple rows that share one
+    ``test_id`` and differ only by their ``config_set`` dict and ``cluster_mode``
+    value. Pairing on ``test_id`` alone would (1) over-exclude a healthy sibling
+    row when a different config_set of the same scenario failed, and (2) smear
+    the counterpart value across unrelated config_sets. The identity therefore
+    combines all three axes::
+
+        (test_id, frozen(config_set), cluster_mode)
+
+    Keying on these three axes rather than the full static config signature is
+    deliberate:
+
+    * It preserves the legacy contract that a row with NO ``test_id`` yields an
+      identity that is never used for exclusion (returns ``None`` -> callers
+      filter it out, so legacy basic-format rows are never dropped). A
+      full-signature join would hand those rows a non-``None`` signature and
+      could exclude them.
+    * Failure markers do not always carry every config field a successful row
+      does, so joining on the full signature risks *under*-matching a failure to
+      its healthy counterpart - which would reintroduce the fabricated ±100%
+      regression this exclusion exists to prevent. ``config_set`` and
+      ``cluster_mode`` are precisely the axes that multiply a scenario, so they
+      are the minimal, reliable discriminators.
+
+    ``config_set`` is frozen via :func:`_make_hashable`. An absent OR empty
+    ``config_set`` collapses to the same ``None`` component, so the common
+    single-config_set run stays keyed on ``test_id`` (+ ``cluster_mode``) alone -
+    behavior unchanged for the typical PR case, which is why existing tests and
+    golden fixtures are unaffected. Returns ``None`` when ``test_id`` is absent.
+    """
+    test_id = item.get("test_id")
+    if test_id is None:
+        return None
+    config_set = item.get("config_set")
+    frozen_config_set = _make_hashable(config_set) if config_set else None
+    return (test_id, frozen_config_set, item.get("cluster_mode"))
+
+
+def _failed_scenario_ids(failed_rows: List[Dict[str, Any]]) -> set:
+    """Collect the non-None scenario identities from a list of failed rows."""
+    return {
+        identity
+        for identity in (_scenario_identity(row) for row in failed_rows)
+        if identity is not None
+    }
+
+
+def _primary_failed_metric(metrics_filter: str) -> Tuple[str, str]:
+    """
+    Return the ``(metric_key, metric_display)`` used to show a survivor's value.
+
+    Mirrors the metric selection in :func:`create_comparison_table_data`: the
+    ``latency`` filter surfaces average latency, while ``rps`` and ``all`` both
+    surface throughput (the primary headline metric). The display name matches
+    the labels the comparison tables use (e.g. ``"rps"``, ``"avg_latency"``) so
+    the failed section speaks the same vocabulary as the rest of the report.
+    """
+    if metrics_filter == "latency":
+        return ("avg_latency_ms", "avg_latency")
+    return ("rps", "rps")
+
+
+def collect_failed_scenarios(
+    baseline_data: List[Dict[str, Any]],
+    new_data: List[Dict[str, Any]],
+    metrics_filter: str = "all",
+) -> List[Dict[str, Any]]:
+    """
+    Build descriptors for every failed/non-comparable scenario on either side.
+
+    Each descriptor records the scenario identity (``test_id``/``test_phase``),
+    the ``side`` it failed on ("baseline" or "new"), and the recorded ``error``
+    text, so the report can name failures honestly instead of rendering them as
+    fabricated ±100% changes.
+
+    Each descriptor additionally carries the *counterpart* reading from the OTHER
+    dataset, looked up by the same scenario identity (see
+    :func:`_scenario_identity`) used to exclude the scenario from the numeric
+    comparison, so exclusion and value-lookup agree:
+
+    * ``counterpart_value`` - mean of the primary metric
+      (see :func:`_primary_failed_metric`) across the counterpart's comparable
+      rows, or ``None`` when the counterpart is absent or itself failed;
+    * ``counterpart_present`` - whether the other dataset holds *any* row for
+      this scenario (distinguishes "the other side failed too" from "the other
+      side never ran this scenario");
+    * ``metric_key`` / ``metric_label`` - the metric captured, for formatting.
+
+    This lets the report show the healthy side's actual measured value beside a
+    ``FAILED`` marker for the side that failed, without fabricating a percentage
+    change (there is nothing to compare a failure against).
+    """
+    metric_key, metric_label = _primary_failed_metric(metrics_filter)
+
+    def index(data: List[Dict[str, Any]]) -> Tuple[Dict[str, List[Dict]], set]:
+        """Map scenario identity -> comparable rows, plus the set of all ids."""
+        comparable_by_id: Dict[str, List[Dict[str, Any]]] = {}
+        present_ids: set = set()
+        for row in data:
+            identity = _scenario_identity(row)
+            if identity is None:
+                continue
+            present_ids.add(identity)
+            if not is_failed_row(row):
+                comparable_by_id.setdefault(identity, []).append(row)
+        return comparable_by_id, present_ids
+
+    baseline_comparable, baseline_ids = index(baseline_data)
+    new_comparable, new_ids = index(new_data)
+
+    descriptors: List[Dict[str, Any]] = []
+    for side, data, other_comparable, other_ids in (
+        ("baseline", baseline_data, new_comparable, new_ids),
+        ("new", new_data, baseline_comparable, baseline_ids),
+    ):
+        _, failed = partition_failed_rows(data)
+        for row in failed:
+            identity = _scenario_identity(row)
+            counterpart_rows = (
+                other_comparable.get(identity, []) if identity is not None else []
+            )
+            counterpart_present = identity is not None and identity in other_ids
+            counterpart_value = (
+                calculate_mean([r.get(metric_key) for r in counterpart_rows])
+                if counterpart_rows
+                else None
+            )
+            descriptors.append(
+                {
+                    "test_id": row.get("test_id"),
+                    "test_phase": row.get("test_phase"),
+                    "command": row.get("command"),
+                    "side": side,
+                    "error": row.get("error"),
+                    "counterpart_value": counterpart_value,
+                    "counterpart_present": counterpart_present,
+                    "metric_key": metric_key,
+                    "metric_label": metric_label,
+                }
+            )
+    return descriptors
 
 
 def create_comparison_table_data(
@@ -590,9 +835,46 @@ def create_comparison_table_data(
     baseline_version, baseline_repo = extract_version_with_repo(baseline_data)
     new_version, new_repo = extract_version_with_repo(new_data)
 
-    # Group data by static configuration
-    baseline_configs = group_by_static_configuration(baseline_data)
-    new_configs = group_by_static_configuration(new_data)
+    # Partition out non-comparable rows (failure markers / rows with no metrics)
+    # before any numeric grouping so a failed scenario cannot pollute the
+    # comparison of unrelated healthy scenarios.
+    baseline_comparable, baseline_failed = partition_failed_rows(baseline_data)
+    new_comparable, new_failed = partition_failed_rows(new_data)
+
+    # A scenario that failed on EITHER side must be dropped from the numeric
+    # comparison on BOTH sides: otherwise the surviving healthy row (e.g. a
+    # baseline that succeeded while the new run failed) would be summarized
+    # against an absent counterpart and render as a fabricated -100% regression.
+    # Failures are surfaced separately via collect_failed_scenarios() /
+    # format_comparison_report(failed_scenarios=...).
+    failed_ids = _failed_scenario_ids(baseline_failed) | _failed_scenario_ids(
+        new_failed
+    )
+    if failed_ids:
+        baseline_comparable = [
+            row
+            for row in baseline_comparable
+            if _scenario_identity(row) not in failed_ids
+        ]
+        new_comparable = [
+            row for row in new_comparable if _scenario_identity(row) not in failed_ids
+        ]
+
+    # Union-based key discovery: derive the config key list ONCE over both
+    # comparable datasets so every signature tuple - in both group_by_static_
+    # configuration calls below - is built over an identical, dataset-independent
+    # key space. Discovering per-dataset would let a field present in only one
+    # dataset shift that dataset's key list and desynchronize all its signatures
+    # from the other's, emptying the comparison. When both datasets already share
+    # the same field set (the normal case) the union equals each dataset's own
+    # keys, so behavior is unchanged.
+    shared_config_keys = discover_config_keys(baseline_comparable + new_comparable)
+
+    # Group data by static configuration using the shared key list
+    baseline_configs = group_by_static_configuration(
+        baseline_comparable, shared_config_keys
+    )
+    new_configs = group_by_static_configuration(new_comparable, shared_config_keys)
 
     # Define available metrics with their display names
     available_metrics = [
@@ -987,6 +1269,164 @@ def _generate_summary(
     return improvements, regressions, no_change_count, insufficient_data_count
 
 
+def _sanitize_table_cell(text: Optional[str]) -> str:
+    """
+    Make free text safe and inert for a single markdown table cell.
+
+    The failed-scenarios table is posted verbatim as a GitHub PR comment, and
+    the ``command``/``error`` values it renders originate from config files and
+    exception text that a fork-PR author can influence. Beyond breaking table
+    layout with a raw ``|`` or newline, unescaped markdown/HTML would let that
+    text inject a rendered link (``[x](url)``), an image or raw HTML
+    (``<img src=...>``), or a stray backtick that opens a code span into a
+    trusted bot comment (phishing / tracking-pixel / layout-break vectors). This
+    escapes every such construct so the value renders as literal, inert text:
+
+    * ``\\r`` and ``\\n`` collapse to spaces and ``|`` is backslash-escaped
+      (table integrity - unchanged from the original behavior);
+    * ``&``, ``<``, ``>`` are HTML-escaped, neutralizing raw HTML such as
+      ``<img src=x>`` or ``<script>``;
+    * markdown link / code-span / emphasis punctuation (`` ` ``, ``[``, ``]``,
+      ``(``, ``)``) is backslash-escaped so no link or code span can form.
+
+    Clean text (no active characters) passes through unchanged so ordinary
+    values, commands, and version labels stay readable. Returns ``""`` for
+    ``None``.
+    """
+    if text is None:
+        return ""
+    # Collapse carriage returns / newlines so a value cannot break out of its row.
+    s = str(text).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    # Table integrity: a literal pipe would open a new column.
+    s = s.replace("|", "\\|")
+    # Neutralize raw HTML. Escape "&" first so already-escaped entities are not
+    # produced by the "<"/">" replacements below.
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Neutralize markdown links, code spans, and emphasis by backslash-escaping
+    # their active punctuation, which renders the literal character instead.
+    for ch in ("`", "[", "]", "(", ")"):
+        s = s.replace(ch, "\\" + ch)
+    return s.strip()
+
+
+def _failed_side_cell(
+    own_entry: Optional[Dict[str, Any]],
+    other_entry: Optional[Dict[str, Any]],
+) -> str:
+    """
+    Render one side's cell for a failed scenario row.
+
+    ``own_entry`` is this side's failure descriptor when this side failed
+    (``None`` when this side succeeded). ``other_entry`` is the opposite side's
+    failure descriptor; its ``counterpart_value`` is precisely THIS side's
+    measured reading (the counterpart was looked up in this side's dataset).
+
+    Returns a bold ``FAILED`` marker when this side failed, the humanized metric
+    value (reusing :func:`_format_with_sig_figs`) when this side succeeded and a
+    reading exists, or an ``n/a`` marker when this side never ran the scenario.
+    """
+    if own_entry is not None:
+        return "**FAILED**"
+    if other_entry is None:
+        return "n/a"
+    value = other_entry.get("counterpart_value")
+    if value is None:
+        return "n/a"
+    formatted = _format_with_sig_figs(value)
+    label = other_entry.get("metric_label", "")
+    return _sanitize_table_cell(f"{formatted} {label}".strip())
+
+
+def _failed_error_cell(
+    baseline_entry: Optional[Dict[str, Any]],
+    new_entry: Optional[Dict[str, Any]],
+) -> str:
+    """
+    Render the error cell, attributing text to each side that failed.
+
+    A single failing side shows its error verbatim; when both sides failed the
+    errors are prefixed with the side name so the reader can tell them apart.
+    """
+    parts = []
+    if baseline_entry is not None:
+        parts.append(("baseline", baseline_entry.get("error")))
+    if new_entry is not None:
+        parts.append(("new", new_entry.get("error")))
+
+    def clean(err: Optional[str]) -> str:
+        return _sanitize_table_cell(err) or "no error recorded"
+
+    if len(parts) == 1:
+        return clean(parts[0][1])
+    return "; ".join(f"{side}: {clean(err)}" for side, err in parts)
+
+
+def _format_failed_scenarios_section(
+    failed_scenarios: List[Dict[str, Any]],
+    baseline_version: str,
+    new_version: str,
+) -> List[str]:
+    """
+    Render the 'Failed scenarios' markdown block as a two-sided table.
+
+    Failure descriptors (from :func:`collect_failed_scenarios`) are grouped by
+    scenario identity (``test_id``) so each scenario is one row showing BOTH
+    sides: the measured value where a side succeeded and a ``FAILED`` marker
+    where it did not, plus the recorded error. The version columns reuse the
+    same ``baseline_version`` / ``new_version`` labels as the comparison tables.
+
+    These scenarios are excluded from the numeric comparison because a failure
+    has nothing to compare against - they are surfaced here and never rendered
+    as a fabricated ±100% change.
+    """
+    # Group per-side descriptors by scenario identity. Descriptors with no
+    # test_id (e.g. legacy basic-format rows) get a unique key so they each
+    # render as their own row rather than collapsing together.
+    grouped: Dict[Any, List[Dict[str, Any]]] = {}
+    order: List[Any] = []
+    for failure in failed_scenarios:
+        key = failure.get("test_id")
+        if key is None:
+            key = ("__no_id__", id(failure))
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(failure)
+
+    lines = [
+        f"## ⚠️ {len(order)} failed scenario(s)",
+        "",
+        "Excluded from the numeric comparison (a failure has nothing to compare "
+        "against); the measured value is shown for whichever side succeeded:",
+        "",
+        f"| Scenario | Phase | Command | "
+        f"{_sanitize_table_cell(baseline_version)} | "
+        f"{_sanitize_table_cell(new_version)} | Error |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+
+    for key in order:
+        entries = grouped[key]
+        baseline_entry = next((e for e in entries if e["side"] == "baseline"), None)
+        new_entry = next((e for e in entries if e["side"] == "new"), None)
+        sample = entries[0]
+
+        test_id = _sanitize_table_cell(sample.get("test_id")) or "unknown"
+        phase = _sanitize_table_cell(sample.get("test_phase"))
+        command = _sanitize_table_cell(sample.get("command"))
+        baseline_cell = _failed_side_cell(baseline_entry, new_entry)
+        new_cell = _failed_side_cell(new_entry, baseline_entry)
+        error_cell = _failed_error_cell(baseline_entry, new_entry)
+
+        lines.append(
+            f"| {test_id} | {phase} | {command} | "
+            f"{baseline_cell} | {new_cell} | {error_cell} |"
+        )
+
+    lines.append("")
+    return lines
+
+
 def format_comparison_report(
     config_groups: List[Dict],
     baseline_version: str,
@@ -995,15 +1435,21 @@ def format_comparison_report(
     new_repo: Optional[str] = None,
     core_commit_baseline: Optional[str] = None,
     core_commit_new: Optional[str] = None,
+    failed_scenarios: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     Format the comparison data as a markdown report.
 
     Structure:
     - Summary at top (significant findings)
+    - Failed scenarios section (non-comparable rows, if any)
     - Collapsible details section with full tables
+
+    ``failed_scenarios`` (from :func:`collect_failed_scenarios`) lists scenarios
+    that failed on either side; they are rendered in their own labeled section
+    and never as ±100% comparison rows.
     """
-    if not config_groups:
+    if not config_groups and not failed_scenarios:
         return "No data to compare."
 
     # Format version headers with links if repositories available
@@ -1055,6 +1501,15 @@ def format_comparison_report(
     if summary_parts:
         report_lines.append(f"*{', '.join(summary_parts)}*")
         report_lines.append("")
+
+    # Surface failed / non-comparable scenarios explicitly, above the collapsible
+    # tables, so a failure is never silently rendered as a ±100% change.
+    if failed_scenarios:
+        report_lines.extend(
+            _format_failed_scenarios_section(
+                failed_scenarios, baseline_version, new_version
+            )
+        )
 
     # Collapsible details section
     report_lines.append("<details>")
@@ -1922,9 +2377,18 @@ def main():
     baseline_data = load_benchmark_data(baseline_file)
     new_data = load_benchmark_data(new_file)
 
+    # Collect failed / non-comparable scenarios from the RAW rows (before
+    # averaging) so their recorded error text is preserved for the report. The
+    # metrics_filter selects which surviving-side metric to surface.
+    failed_scenarios = collect_failed_scenarios(baseline_data, new_data, metrics_filter)
+
+    # Union-based key discovery over both raw datasets, threaded into the
+    # run-averaging path so both sides group runs over an identical key space.
+    shared_config_keys = discover_config_keys(baseline_data + new_data)
+
     # Always apply dynamic averaging for consistent comparisons
-    baseline_data = average_multiple_runs(baseline_data)
-    new_data = average_multiple_runs(new_data)
+    baseline_data = average_multiple_runs(baseline_data, shared_config_keys)
+    new_data = average_multiple_runs(new_data, shared_config_keys)
 
     # Generate comparison data
     config_groups, baseline_version, new_version, baseline_repo, new_repo = (
@@ -1968,6 +2432,7 @@ def main():
         new_repo,
         core_commit_baseline=core_commit_baseline,
         core_commit_new=core_commit_new,
+        failed_scenarios=failed_scenarios,
     )
 
     # Create final report with metadata

@@ -231,65 +231,91 @@ class TestShouldUseParallel:
 
 
 # ---------------------------------------------------------------------------
-# _generate_combinations
+# compile_simple_config (benchmark.py) replaces _generate_combinations:
+# the basic 'commands' format now compiles into generated test_groups.
 # ---------------------------------------------------------------------------
 
 
-class TestGenerateCombinations:
-    """Tests for ClientRunner._generate_combinations."""
+class TestCompileSimpleConfig:
+    """Tests for benchmark.compile_simple_config."""
 
-    def test_default_config(self, minimal_client_runner):
-        combos = minimal_client_runner._generate_combinations()
+    def test_default_config(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+
+        compile_simple_config(minimal_valid_config)
         # requests=[1000], keyspacelen=[1000], data_sizes=[64], pipelines=[1],
-        # clients=[50], commands=["GET","SET"], warmup=0, duration=None
-        assert len(combos) == 2  # 1*1*1*1*1*2*1*1
+        # clients=[50], commands=["GET","SET"] -> one group per combination
+        groups = minimal_valid_config["test_groups"]
+        assert len(groups) == 2  # 1*1*1*1*1*2
+        assert all(len(g["scenarios"]) == 1 for g in groups)
 
     def test_cartesian_product_count(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+
         minimal_valid_config["data_sizes"] = [64, 128]
         minimal_valid_config["pipelines"] = [1, 10]
-        runner = ClientRunner(
-            commit_id="abc",
-            config=minimal_valid_config,
-            cluster_mode=False,
-            tls_mode=False,
-            target_ip="127.0.0.1",
-            results_dir=Path("/tmp"),
-            valkey_path="/tmp/valkey",
-            valkey_benchmark_path="src/valkey-benchmark",
-        )
-        combos = runner._generate_combinations()
-        # 1 * 1 * 2 * 2 * 1 * 2 * 1 * 1 = 8
-        assert len(combos) == 8
+        compile_simple_config(minimal_valid_config)
+        # 1 * 1 * 2 * 2 * 1 * 2 = 8
+        assert len(minimal_valid_config["test_groups"]) == 8
 
-    def test_tuple_structure(self, minimal_client_runner):
-        combos = minimal_client_runner._generate_combinations()
-        first = combos[0]
-        # (requests, keyspacelen, data_size, pipeline, clients, command, warmup, duration)
-        assert len(first) == 8
-        assert first[0] == 1000  # requests
-        assert first[1] == 1000  # keyspacelen
-        assert first[2] == 64  # data_size
-        assert first[3] == 1  # pipeline
-        assert first[4] == 50  # clients
-        assert first[5] in ("GET", "SET")
-        assert first[6] == 0  # warmup
-        assert first[7] is None  # duration
+    def test_generated_scenario_structure(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+        from valkey_benchmark import ORIGIN_FIELD, ORIGIN_SIMPLE
 
-    def test_no_requests_key(self, minimal_valid_config):
+        compile_simple_config(minimal_valid_config)
+        first = minimal_valid_config["test_groups"][0]["scenarios"][0]
+
+        assert first[ORIGIN_FIELD] == ORIGIN_SIMPLE
+        assert first["test"] == "GET"
+        assert first["requests"] == 1000
+        assert first["keyspacelen"] == 1000
+        assert first["data_size"] == 64
+        assert first["pipeline"] == 1
+        assert first["clients"] == 50
+        assert first["warmup_inline"] == 0
+        assert first["restart_before"] is True
+        # GET is a read command -> populated via SET
+        assert first["populate_with"] == "SET"
+        # SET is a write command -> no populate
+        second = minimal_valid_config["test_groups"][1]["scenarios"][0]
+        assert second["test"] == "SET"
+        assert "populate_with" not in second
+
+    def test_duration_mode(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+
         del minimal_valid_config["requests"]
-        runner = ClientRunner(
-            commit_id="abc",
-            config=minimal_valid_config,
-            cluster_mode=False,
-            tls_mode=False,
-            target_ip="127.0.0.1",
-            results_dir=Path("/tmp"),
-            valkey_path="/tmp/valkey",
-            valkey_benchmark_path="src/valkey-benchmark",
-        )
-        combos = runner._generate_combinations()
-        # requests defaults to [None]
-        assert combos[0][0] is None
+        minimal_valid_config["duration"] = 30
+        compile_simple_config(minimal_valid_config)
+
+        first = minimal_valid_config["test_groups"][0]["scenarios"][0]
+        assert first["duration"] == 30
+        assert "requests" not in first
+
+    def test_unsupported_command_dropped(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+
+        minimal_valid_config["commands"] = ["GET", "XRANGE"]
+        compile_simple_config(minimal_valid_config)
+
+        tests = [
+            s["test"]
+            for g in minimal_valid_config["test_groups"]
+            for s in g["scenarios"]
+        ]
+        assert tests == ["GET"]
+
+    def test_groups_numbered_sequentially(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+
+        compile_simple_config(minimal_valid_config)
+        assert [g["group"] for g in minimal_valid_config["test_groups"]] == [1, 2]
+
+    def test_compiled_config_passes_validation(self, minimal_valid_config):
+        from benchmark import compile_simple_config, validate_test_groups
+
+        compile_simple_config(minimal_valid_config)
+        validate_test_groups(minimal_valid_config)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -488,38 +514,75 @@ class TestIterateTestGroupsScenarios:
 
 
 # ---------------------------------------------------------------------------
-# _iterate_simple_scenarios — regression: simple (non-test_groups) format
-# must not pick up group_description / group_id / scenario fields.
+# Compiled basic-format scenarios through _iterate_test_groups_scenarios:
+# replaces the deleted _iterate_simple_scenarios path.
 # ---------------------------------------------------------------------------
 
 
-class TestIterateSimpleScenarios:
-    """Tests for ClientRunner._iterate_simple_scenarios.
+class TestIterateCompiledScenarios:
+    """Compiled basic-format groups flow through the unified iterator."""
 
-    The simple/core config format (commands + data_sizes + ... cartesian)
-    does not have groups or descriptions. These tests lock in that the
-    new group/scenario_description plumbing did not leak into the simple
-    path.
-    """
+    def _compiled_runner(self, config, cluster_mode=False):
+        from benchmark import compile_simple_config
 
-    def test_simple_yields_no_group_fields(self, minimal_client_runner):
-        items = list(minimal_client_runner._iterate_simple_scenarios())
+        compile_simple_config(config)
+        return ClientRunner(
+            commit_id="abc123",
+            config=config,
+            cluster_mode=cluster_mode,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp/test_results"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+        )
 
-        assert len(items) > 0
-        for item in items:
-            assert item["format"] == "simple"
-            assert "group_description" not in item
-            assert "group_id" not in item
-            assert "scenario" not in item
+    def test_compiled_scenarios_yielded_per_group(self, minimal_valid_config):
+        runner = self._compiled_runner(minimal_valid_config)
 
-    def test_simple_format_has_combination_keys(self, minimal_client_runner):
-        # Sanity: simple-format dicts carry the per-run combination keys
-        # (command, data_size, pipeline, ...) instead of group/scenario.
-        items = list(minimal_client_runner._iterate_simple_scenarios())
+        items = list(runner._iterate_test_groups_scenarios())
 
-        first = items[0]
-        for key in ("command", "data_size", "pipeline", "clients", "requests"):
-            assert key in first
+        assert len(items) == 2  # GET, SET
+        assert [i["scenario"]["test"] for i in items] == ["GET", "SET"]
+        assert [i["group_id"] for i in items] == [1, 2]
+        assert all(i["group_description"] is None for i in items)
+
+    def test_mset_mget_skipped_in_cluster_mode(self, minimal_valid_config):
+        minimal_valid_config["commands"] = ["MSET", "MGET", "SET"]
+        runner = self._compiled_runner(minimal_valid_config, cluster_mode=True)
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        assert [i["scenario"]["test"] for i in items] == ["SET"]
+
+    def test_mset_mget_kept_outside_cluster_mode(self, minimal_valid_config):
+        minimal_valid_config["commands"] = ["MSET", "MGET", "SET"]
+        runner = self._compiled_runner(minimal_valid_config, cluster_mode=False)
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        assert [i["scenario"]["test"] for i in items] == ["MSET", "MGET", "SET"]
+
+    def test_runs_repeat_each_compiled_group_consecutively(self, minimal_valid_config):
+        from benchmark import compile_simple_config
+
+        compile_simple_config(minimal_valid_config)
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp/test_results"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            runs=2,
+        )
+
+        items = list(runner._iterate_test_groups_scenarios())
+
+        # One group per combination + group-level runs loop -> A,A then B,B
+        assert [i["scenario"]["test"] for i in items] == ["GET", "GET", "SET", "SET"]
 
 
 # ---------------------------------------------------------------------------
@@ -843,3 +906,520 @@ class TestCreateMixedMetricRealProcessor:
         assert metric["test_id"] == "1_j_read_r1"
         assert metric["test_phase"] == "mixed_read"
         assert metric["rps"] == 1000.0
+
+
+# ---------------------------------------------------------------------------
+# Shared-seed behavior for populate_with scenarios (finding 3)
+# ---------------------------------------------------------------------------
+
+
+class TestPopulateWithSharedSeed:
+    """A hand-written ``test:`` scenario using ``populate_with`` must run its
+    populate pass and its main run with the SAME ``--seed``, matching the
+    documented "shares the main run's seed" behavior."""
+
+    @staticmethod
+    def _seed_of(command):
+        """Return the value following --seed in a benchmark command list."""
+        assert "--seed" in command, f"no --seed in command: {command}"
+        return command[command.index("--seed") + 1]
+
+    def test_populate_and_main_share_one_seed(self, minimal_client_runner):
+        runner = minimal_client_runner
+        # No _origin marker -> this is a hand-written scenario, the path that
+        # previously drew two independent lazy seeds.
+        scenario = {
+            "id": "s1",
+            "test": "GET",
+            "populate_with": "SET",
+            "requests": 100,
+            "keyspacelen": 100,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+        }
+
+        captured = []
+
+        def fake_run(command=None, *args, **kwargs):
+            # metrics_processor=None below means the returned proc is only
+            # checked for truthiness, so a bare MagicMock is sufficient.
+            captured.append(command)
+            return MagicMock()
+
+        # Distinct values per draw: a single shared draw yields identical
+        # seeds on both invocations; separate lazy draws would differ.
+        with (
+            patch.object(runner, "_run", side_effect=fake_run),
+            patch("valkey_benchmark.random.randint", side_effect=[111, 222, 333]),
+        ):
+            runner._run_single_scenario(
+                scenario,
+                group_id=1,
+                profiler=None,
+                metrics_processor=None,
+                profiling_enabled=False,
+                commit_time="2026-01-01T00:00:00Z",
+                config_set={},
+                config_suffix="default",
+            )
+
+        assert len(captured) == 2  # populate invocation + main invocation
+        populate_seed = self._seed_of(captured[0])
+        main_seed = self._seed_of(captured[1])
+        assert populate_seed == main_seed == "111"
+
+
+class TestPopulateWithArbitraryCommand:
+    """A ``command:`` scenario using ``populate_with`` must run its populate
+    pass as the arbitrary write command (after ``--``), sequentially, sharing
+    the main run's ``--seed``. Before the fix this path raised
+    ``KeyError: 'test'`` because the populate helper read ``scenario["test"]``.
+    """
+
+    @staticmethod
+    def _seed_of(command):
+        assert "--seed" in command, f"no --seed in command: {command}"
+        return command[command.index("--seed") + 1]
+
+    def test_arbitrary_command_populate_argv(self, minimal_client_runner):
+        runner = minimal_client_runner
+        # command: (no test:) -> populate_with is an arbitrary write command
+        # string. This is the exact shape that raised KeyError before the fix.
+        scenario = {
+            "id": "s1",
+            "command": "GET key:__rand_int__",
+            "populate_with": "SET key:__rand_int__ __data__",
+            "requests": 100,
+            "keyspacelen": 100,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+        }
+
+        captured = []
+
+        def fake_run(command=None, *args, **kwargs):
+            captured.append(command)
+            return MagicMock()
+
+        with (
+            patch.object(runner, "_run", side_effect=fake_run),
+            patch("valkey_benchmark.random.randint", side_effect=[111, 222, 333]),
+        ):
+            runner._run_single_scenario(
+                scenario,
+                group_id=1,
+                profiler=None,
+                metrics_processor=None,
+                profiling_enabled=False,
+                commit_time="2026-01-01T00:00:00Z",
+                config_set={},
+                config_suffix="default",
+            )
+
+        assert len(captured) == 2  # populate invocation + main invocation
+        populate_cmd = captured[0]
+
+        # The populate command runs the write string after the -- separator.
+        assert "--" in populate_cmd
+        tokens_after_sep = populate_cmd[populate_cmd.index("--") + 1 :]
+        assert tokens_after_sep == ["SET", "key:__rand_int__", "__data__"]
+
+        # Sequential seeding, and the SAME seed as the main run.
+        assert "--sequential" in populate_cmd
+        assert self._seed_of(populate_cmd) == self._seed_of(captured[1]) == "111"
+
+
+class TestPopulateWithTestArgvUnchanged:
+    """A ``test:`` scenario using ``populate_with`` must still seed via the
+    predefined write workload (``-t NAME``), sequentially, with the shared
+    seed. This locks the compiled basic-format populate argv shape that the
+    golden fixtures depend on."""
+
+    @staticmethod
+    def _seed_of(command):
+        assert "--seed" in command, f"no --seed in command: {command}"
+        return command[command.index("--seed") + 1]
+
+    def test_test_format_populate_argv(self, minimal_client_runner):
+        runner = minimal_client_runner
+        scenario = {
+            "id": "s1",
+            "test": "GET",
+            "populate_with": "SET",
+            "requests": 100,
+            "keyspacelen": 100,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+        }
+
+        captured = []
+
+        def fake_run(command=None, *args, **kwargs):
+            captured.append(command)
+            return MagicMock()
+
+        with (
+            patch.object(runner, "_run", side_effect=fake_run),
+            patch("valkey_benchmark.random.randint", side_effect=[111, 222, 333]),
+        ):
+            runner._run_single_scenario(
+                scenario,
+                group_id=1,
+                profiler=None,
+                metrics_processor=None,
+                profiling_enabled=False,
+                commit_time="2026-01-01T00:00:00Z",
+                config_set={},
+                config_suffix="default",
+            )
+
+        assert len(captured) == 2
+        populate_cmd = captured[0]
+
+        # Predefined -t write workload, never the -- separator.
+        assert "-t" in populate_cmd
+        assert populate_cmd[populate_cmd.index("-t") + 1] == "SET"
+        assert "--" not in populate_cmd
+        assert "--sequential" in populate_cmd
+        assert self._seed_of(populate_cmd) == self._seed_of(captured[1]) == "111"
+
+
+class TestPopulateWithNotInMetrics:
+    """``populate_with`` is a scenario input, not a metrics output. A scenario
+    carrying it must not leak the field into the produced metrics row."""
+
+    def test_populate_with_absent_from_metrics(self, minimal_client_runner):
+        from process_metrics import MetricsProcessor
+
+        real_processor = MetricsProcessor(
+            commit_id="abc123",
+            cluster_mode=False,
+            tls_mode=False,
+            commit_time="2026-01-01T00:00:00Z",
+        )
+
+        scenario = {
+            "id": "s1",
+            "test": "GET",
+            "populate_with": "SET",
+            "requests": 100,
+            "keyspacelen": 100,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+        }
+
+        csv_stdout = _make_csv(
+            [
+                {
+                    "test": "GET",
+                    "rps": "1000.0",
+                    "avg_latency_ms": "1.0",
+                    "min_latency_ms": "0.5",
+                    "p50_latency_ms": "1.0",
+                    "p95_latency_ms": "2.0",
+                    "p99_latency_ms": "3.0",
+                    "max_latency_ms": "5.0",
+                }
+            ]
+        )
+        proc = MagicMock()
+        proc.stdout = csv_stdout
+
+        metrics = minimal_client_runner._build_scenario_metrics(
+            scenario,
+            proc,
+            None,
+            group_id=1,
+            config_set={},
+            warmup_duration=0,
+            group_description=None,
+            metrics_processor=real_processor,
+        )
+
+        assert metrics is not None
+        assert "populate_with" not in metrics
+
+
+class TestRestartReappliesConfigSet:
+    """Restarting a server discards CONFIG SET values, so any scenario that
+    restarts must re-apply the active ``config_set`` afterwards. Compiled
+    basic-format scenarios set ``restart_before`` on every combination, so
+    without this the sweep values from ``config_sets`` would be silently lost
+    for the rest of the run."""
+
+    @staticmethod
+    def _scenario(**extra):
+        scenario = {
+            "id": "s1",
+            "test": "SET",
+            "requests": 100,
+            "keyspacelen": 100,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+        }
+        scenario.update(extra)
+        return scenario
+
+    def _run(self, runner, scenario, config_set):
+        """Run one scenario, returning the ordered server-side call names."""
+        calls = []
+        with (
+            patch.object(runner, "_run", return_value=MagicMock()),
+            patch.object(
+                runner, "_restart_server", side_effect=lambda: calls.append("restart")
+            ),
+            patch.object(
+                runner, "_flush_database", side_effect=lambda: calls.append("flush")
+            ),
+            patch.object(
+                runner,
+                "_apply_config_set",
+                side_effect=lambda cs: calls.append(f"apply:{cs}"),
+            ),
+        ):
+            runner._run_single_scenario(
+                scenario,
+                group_id=1,
+                profiler=None,
+                metrics_processor=None,
+                profiling_enabled=False,
+                commit_time="2026-01-01T00:00:00Z",
+                config_set=config_set,
+                config_suffix="default",
+            )
+        return calls
+
+    def test_restart_before_reapplies_config_set(self, minimal_client_runner):
+        from valkey_benchmark import ORIGIN_FIELD, ORIGIN_SIMPLE
+
+        runner = minimal_client_runner
+        runner.server_launcher = MagicMock()
+        config_set = {"appendonly": "no"}
+
+        calls = self._run(
+            runner,
+            self._scenario(**{ORIGIN_FIELD: ORIGIN_SIMPLE, "restart_before": True}),
+            config_set,
+        )
+
+        # Restart first, then re-apply: applying before the restart would be
+        # discarded by it.
+        assert calls == ["restart", f"apply:{config_set}"]
+
+    def test_flush_before_reapplies_config_set(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.server_launcher = MagicMock()
+        config_set = {"appendonly": "no"}
+
+        calls = self._run(runner, self._scenario(flush_before=True), config_set)
+
+        assert calls == ["restart", f"apply:{config_set}"]
+
+    def test_restart_and_flush_flags_together_restart_once(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.server_launcher = MagicMock()
+
+        calls = self._run(
+            runner,
+            self._scenario(restart_before=True, flush_before=True),
+            {"appendonly": "no"},
+        )
+
+        assert calls.count("restart") == 1
+
+    def test_empty_config_set_skips_reapply(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.server_launcher = MagicMock()
+
+        calls = self._run(runner, self._scenario(restart_before=True), {})
+
+        assert calls == ["restart"]
+
+    def test_without_launcher_flushes_and_skips_reapply(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.server_launcher = None
+
+        calls = self._run(
+            runner, self._scenario(restart_before=True), {"appendonly": "no"}
+        )
+
+        # No launcher means we cannot restart, so there is nothing to restore.
+        assert calls == ["flush"]
+
+
+# ---------------------------------------------------------------------------
+# _run_single_scenario error-path parity between origin-simple (compiled
+# basic-format) and hand-written scenarios. The old simple path: a failing
+# benchmark COMMAND aborted the whole run (semantic a); proc-is-None skipped
+# the combination with no row (semantic b); a CSV-parse/metrics error was
+# logged and the run continued (semantic c). Compiled basic scenarios must
+# reproduce those semantics AND never leak scenario-only schema keys into the
+# basic-format metrics.json.
+# ---------------------------------------------------------------------------
+
+# Scenario-only keys that must never appear on an origin-simple metrics row;
+# one leaked row permanently pollutes the dynamically-created core metrics
+# table and the comparison tool's auto-discovered grouping keys.
+FORBIDDEN_SIMPLE_KEYS = {
+    "test_id",
+    "test_phase",
+    "group",
+    "scenario",
+    "group_description",
+    "scenario_description",
+    "config_set",
+    "status",
+    "error",
+    "config_name",
+    "module_commit",
+    "module_commit_timestamp",
+    "dataset",
+}
+
+
+class TestRunSingleScenarioErrorPaths:
+    """Error-path parity for compiled basic (origin-simple) vs hand-written
+    scenarios in ``_run_single_scenario``."""
+
+    @staticmethod
+    def _command_scenario(**extra):
+        """A minimal command-type scenario (no populate/restart side effects)."""
+        scenario = {
+            "id": "s1",
+            "type": "write",
+            "command": "SET",
+            "requests": 100,
+            "keyspacelen": 100,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+        }
+        scenario.update(extra)
+        return scenario
+
+    @staticmethod
+    def _origin_simple(**extra):
+        from valkey_benchmark import ORIGIN_FIELD, ORIGIN_SIMPLE
+
+        return TestRunSingleScenarioErrorPaths._command_scenario(
+            **{ORIGIN_FIELD: ORIGIN_SIMPLE, **extra}
+        )
+
+    @staticmethod
+    def _invoke(runner, scenario, metrics_processor):
+        return runner._run_single_scenario(
+            scenario,
+            group_id=1,
+            profiler=None,
+            metrics_processor=metrics_processor,
+            profiling_enabled=False,
+            commit_time="2026-01-01T00:00:00Z",
+            config_set={"appendonly": "no"},
+            config_suffix="default",
+        )
+
+    def test_origin_simple_no_results_returns_none(self, minimal_client_runner):
+        """Finding 1: an origin-simple scenario whose benchmark returns no
+        results skips the combination (returns None, no metrics row, no
+        exception) instead of emitting a failure marker."""
+        runner = minimal_client_runner
+        metrics_processor = MagicMock()
+
+        with (
+            patch.object(runner, "_build_benchmark_command", return_value=["vb"]),
+            patch.object(runner, "_run", return_value=None),
+        ):
+            result = self._invoke(runner, self._origin_simple(), metrics_processor)
+
+        assert result is None
+        # No row was produced, so metrics were never constructed.
+        metrics_processor.create_metrics.assert_not_called()
+
+    def test_handwritten_no_results_returns_failure_marker(self, minimal_client_runner):
+        """Unchanged behavior: a hand-written scenario in the same no-results
+        situation still returns a failure-marker dict."""
+        runner = minimal_client_runner
+        metrics_processor = MagicMock()
+
+        with (
+            patch.object(runner, "_build_benchmark_command", return_value=["vb"]),
+            patch.object(runner, "_run", return_value=None),
+        ):
+            result = self._invoke(runner, self._command_scenario(), metrics_processor)
+
+        assert isinstance(result, dict)
+        assert result["test_id"] == "1_s1"
+        assert result["test_phase"] == "write"
+        assert result["status"] == "failed"
+
+    def test_origin_simple_parse_error_returns_none(self, minimal_client_runner):
+        """Finding 2 (semantic c): a parse/metrics-phase error on an
+        origin-simple scenario is logged and yields None so the run continues
+        -- it must NOT propagate."""
+        runner = minimal_client_runner
+        metrics_processor = MagicMock()
+
+        with (
+            patch.object(runner, "_build_benchmark_command", return_value=["vb"]),
+            patch.object(runner, "_run", return_value=MagicMock()),
+            patch.object(runner, "_parse_csv_row", side_effect=ValueError("bad csv")),
+        ):
+            result = self._invoke(runner, self._origin_simple(), metrics_processor)
+
+        assert result is None
+
+    def test_origin_simple_invocation_error_propagates(self, minimal_client_runner):
+        """Finding 2 (semantic a): a benchmark-invocation failure on an
+        origin-simple scenario propagates out of ``_run_single_scenario`` and
+        aborts the run."""
+        runner = minimal_client_runner
+        metrics_processor = MagicMock()
+
+        with (
+            patch.object(runner, "_build_benchmark_command", return_value=["vb"]),
+            patch.object(
+                runner, "_run", side_effect=RuntimeError("Command failed: vb")
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="Command failed"):
+                self._invoke(runner, self._origin_simple(), metrics_processor)
+
+    def test_origin_simple_never_leaks_scenario_keys(self, minimal_client_runner):
+        """Schema-fence guard: across both the success path and the no-results
+        path, an origin-simple metrics result never contains scenario-only
+        keys."""
+        runner = minimal_client_runner
+
+        # Success path: create_metrics returns a clean basic-format row and
+        # _run_single_scenario must return it verbatim for origin-simple.
+        success_processor = MagicMock()
+        success_processor.create_metrics.return_value = {
+            "rps": 1000.0,
+            "avg_latency_ms": 0.5,
+        }
+        with (
+            patch.object(runner, "_build_benchmark_command", return_value=["vb"]),
+            patch.object(runner, "_run", return_value=MagicMock()),
+            patch.object(
+                runner, "_parse_csv_row", return_value={"test": "SET", "rps": "1000"}
+            ),
+        ):
+            success = self._invoke(runner, self._origin_simple(), success_processor)
+
+        assert isinstance(success, dict)
+        assert FORBIDDEN_SIMPLE_KEYS.isdisjoint(success)
+
+        # No-results path: must return None (a failure marker WOULD carry the
+        # forbidden keys).
+        with (
+            patch.object(runner, "_build_benchmark_command", return_value=["vb"]),
+            patch.object(runner, "_run", return_value=None),
+        ):
+            no_results = self._invoke(runner, self._origin_simple(), MagicMock())
+
+        assert no_results is None

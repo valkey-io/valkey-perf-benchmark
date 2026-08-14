@@ -11,6 +11,7 @@ from utils.compare_benchmark_results import (
     average_multiple_runs,
     discover_config_keys,
     group_by_command,
+    group_by_static_configuration,
     calculate_prediction_interval_percentage,
     calculate_confidence_interval_percentage,
     calculate_percent_change_with_ci,
@@ -19,6 +20,8 @@ from utils.compare_benchmark_results import (
     create_config_sort_key,
     summarize_benchmark_results,
     create_comparison_table_data,
+    format_comparison_report,
+    collect_failed_scenarios,
     _format_with_sig_figs,
     _format_stats_only,
     _format_percent_change,
@@ -316,6 +319,60 @@ class TestDiscoverConfigKeys:
         assert "rps_ci_upper" not in keys
         assert "rps_pi_lower" not in keys
         assert "rps_pi_upper" not in keys
+
+    def test_excludes_env_prefixed_fields(self):
+        # env_-prefixed reproducibility metadata (upstream PR #55) must not be
+        # treated as configuration; the exclusion is prefix-based so future
+        # env_ fields are covered automatically.
+        data = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "env_cpu_model": "golden-cpu",
+                "env_cpu_freq_mhz_at_setup": 3200,
+                "env_kernel_version": "golden-kernel",
+            }
+        ]
+        keys = discover_config_keys(data)
+        assert "command" in keys
+        assert "pipeline" in keys
+        assert not any(k.startswith("env_") for k in keys)
+
+    def test_env_only_difference_yields_matching_signatures(self):
+        # Two datasets identical except for a live env_ reading (e.g. CPU
+        # frequency sampled at setup) must group under the SAME static config
+        # signature, so group_by_static_configuration finds a shared group and
+        # the comparison table is non-empty.
+        baseline = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "io_threads": 4,
+                "clients": 50,
+                "data_size": 16,
+                "rps": 100000.0,
+                "env_cpu_freq_mhz_at_setup": 3200,
+            }
+        ]
+        new = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "io_threads": 4,
+                "clients": 50,
+                "data_size": 16,
+                "rps": 101000.0,
+                "env_cpu_freq_mhz_at_setup": 3105,
+            }
+        ]
+
+        baseline_groups = group_by_static_configuration(baseline)
+        new_groups = group_by_static_configuration(new)
+        shared = set(baseline_groups) & set(new_groups)
+        assert len(shared) == 1, (
+            "datasets differing only in an env_ value must share a config "
+            f"signature; baseline={list(baseline_groups)} new={list(new_groups)}"
+        )
 
 
 # --- group_by_command ---
@@ -868,3 +925,600 @@ class TestComparisonPipeline:
             )
             == "❌"
         )
+
+
+# --- Union key discovery + failed-scenario reporting ---
+
+
+class TestUnionKeyDiscoveryAndFailedScenarios:
+    """
+    Tests for the config-signature fix: union-based key discovery (Part 1) and
+    honest failed-scenario reporting (Part 2).
+    """
+
+    def _row(self, **overrides):
+        """A complete, comparable benchmark row; override individual fields."""
+        row = {
+            "command": "GET",
+            "pipeline": 1,
+            "io_threads": 4,
+            "data_size": 16,
+            "clients": 50,
+            "rps": 100000.0,
+            "avg_latency_ms": 0.5,
+            "p50_latency_ms": 0.4,
+            "p95_latency_ms": 0.8,
+            "p99_latency_ms": 1.2,
+            "commit": "base123",
+        }
+        row.update(overrides)
+        return row
+
+    def _failure(self, test_id, error, side_commit, phase="write", command="HSET"):
+        """A failure marker as written by ClientRunner._create_failure_marker."""
+        return {
+            "test_id": test_id,
+            "test_phase": phase,
+            "group": 1,
+            "scenario": test_id.split("_")[-1],
+            "status": "failed",
+            "error": error,
+            "command": command,
+            "timestamp": "<TS>",
+            "config_set": {},
+            "commit": side_commit,
+        }
+
+    def test_union_key_discovery_matches_across_extra_field(self):
+        # A field present on only ONE row of ONE dataset would, under per-dataset
+        # discovery, be added to that dataset's key list only - desynchronizing
+        # EVERY signature in it, including rows that never carry the field. Union
+        # discovery keeps the key list shared so the identical rows still match.
+        baseline = [
+            self._row(test_id="1_a"),
+            self._row(test_id="1_b", command="SET"),
+        ]
+        new = [
+            self._row(test_id="1_a", extra_field="only-in-new"),
+            self._row(test_id="1_b", command="SET"),
+        ]
+
+        # Per-dataset discovery desynchronizes even the identical 1_b rows.
+        per_dataset_shared = set(group_by_static_configuration(baseline)) & set(
+            group_by_static_configuration(new)
+        )
+        assert len(per_dataset_shared) == 0
+
+        # Union discovery lets the identical 1_b rows group together.
+        shared_keys = discover_config_keys(baseline + new)
+        union_shared = set(group_by_static_configuration(baseline, shared_keys)) & set(
+            group_by_static_configuration(new, shared_keys)
+        )
+        assert len(union_shared) == 1
+
+    def test_union_keys_survive_metrics_schema_drift_through_pipeline(self):
+        """Guard the union threading in ``create_comparison_table_data``.
+
+        Simulates the realistic trigger: a STORED HISTORICAL baseline compared
+        against a FRESH run after the framework started emitting a new config
+        field. ``keyspacelen`` is a benchmark configuration parameter (keyspace
+        size) that is neither in ``discover_config_keys``' ``excluded_fields``
+        nor ``env_``-prefixed, so it genuinely participates in the config
+        signature. The stored baseline predates the field (no row carries it);
+        the fresh run records it on the scenario that exercises it (``1_b``).
+
+        The unrelated scenario ``1_a`` carries the field on NEITHER side. Under
+        per-dataset key discovery the two datasets build signatures over
+        different key lists (baseline lacks ``keyspacelen``, new has it), so even
+        ``1_a`` - identical on both sides - fails to match and renders as a
+        fabricated -100%. Only the union key list threaded through
+        ``create_comparison_table_data`` keeps both sides on one key space, so
+        ``1_a`` still matches and compares correctly. This exercises the real
+        pipeline, not ``group_by_static_configuration`` directly.
+        """
+        # Stored baseline: NO row carries the newly-emitted field.
+        baseline = [
+            self._row(test_id="1_a", rps=100000.0),
+            self._row(test_id="1_b", rps=100000.0),
+        ]
+        # Fresh run: the field appears (on the scenario that uses it). Its mere
+        # presence on one side is enough to diverge the discovered key lists.
+        new = [
+            self._row(test_id="1_a", rps=120000.0, commit="new123"),
+            self._row(
+                test_id="1_b", rps=130000.0, commit="new123", keyspacelen=1000000
+            ),
+        ]
+
+        # The chosen field genuinely diverges the per-dataset key lists: it
+        # participates in the signature (not excluded, not env_) and is one-sided.
+        assert "keyspacelen" not in discover_config_keys(baseline)
+        assert "keyspacelen" in discover_config_keys(new)
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+
+        # The unrelated scenario 1_a - identical config on both sides - must
+        # survive as a single matched, comparable group. Under per-dataset
+        # discovery it would split into a baseline-only (-100%) group and a
+        # new-only group instead.
+        matched = [
+            r
+            for g in groups
+            if g["config_dict"].get("test_id") == "1_a"
+            for r in g["table_rows"]
+            if r["metric"] == "rps"
+        ]
+        assert len(matched) == 1
+        assert matched[0]["baseline_value"] == pytest.approx(100000.0)
+        assert matched[0]["new_value"] == pytest.approx(120000.0)
+        assert matched[0]["change"] == pytest.approx(20.0)
+
+        # 1_a matched (1 group) + 1_b one-sided on each side (2 groups) = 3.
+        # Per-dataset discovery would also split 1_a, yielding 4 groups.
+        assert len(groups) == 3
+
+    def test_failed_scenario_does_not_poison_healthy_scenario(self):
+        # Exact repro: scenario a failed in the new run, scenario b succeeded on
+        # both sides. Scenario b must match and compare cleanly - no phantom
+        # -100% / N/A rows fabricated for the healthy scenario.
+        baseline = [
+            self._row(test_id="1_a", command="HSET"),
+            self._row(test_id="1_b", command="FT.SEARCH"),
+        ]
+        new = [
+            self._failure("1_a", "No results", "new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+
+        # Only the healthy scenario b survives as a comparable group.
+        assert len(groups) == 1
+        rps_rows = [r for g in groups for r in g["table_rows"] if r["metric"] == "rps"]
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["change"] == pytest.approx(0.0)
+
+    def test_failed_in_new_labeled_not_regression(self):
+        # A scenario that succeeded in baseline but failed in new must be shown
+        # in the failed table with the baseline's measured value preserved and a
+        # FAILED marker for new - NOT rendered as a -100% regression row.
+        baseline = [
+            self._row(test_id="1_a", command="HSET"),
+            self._row(test_id="1_b", command="FT.SEARCH"),
+        ]
+        new = [
+            self._failure("1_a", "boom benchmark crashed", "new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+
+        assert "failed scenario" in report.lower()
+        assert "1_a" in report
+        assert "boom benchmark crashed" in report
+        # Rendered as a table with per-side version columns, not a bullet list.
+        assert f"| Scenario | Phase | Command | {bver} | {nver} | Error |" in report
+        # Baseline succeeded -> its measured value survives; new shows FAILED.
+        assert "100K rps" in report
+        assert "**FAILED**" in report
+        # The failed scenario must not be rendered as a fabricated regression.
+        assert "-100.0%" not in report
+
+    def test_failed_in_baseline_labeled_not_phantom_improvement(self):
+        # Reverse direction: failed in baseline, succeeded in new. The new value
+        # is preserved in the failed table and baseline shows FAILED - never
+        # rendered as a phantom improvement (+100% / N/A) row.
+        baseline = [
+            self._failure("1_a", "baseline oom", "base123"),
+            self._row(test_id="1_b", command="FT.SEARCH"),
+        ]
+        new = [
+            self._row(test_id="1_a", command="HSET", commit="new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+
+        assert "1_a" in report
+        assert "baseline oom" in report
+        # New side's measured value survives; baseline shows FAILED.
+        assert "100K rps" in report
+        assert "**FAILED**" in report
+        assert "-100.0%" not in report
+
+        # Scenario a is excluded from the numeric comparison on both sides, so
+        # only scenario b is compared - no phantom improvement row for a.
+        assert len(groups) == 1
+        rps_rows = [r for g in groups for r in g["table_rows"] if r["metric"] == "rps"]
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["change"] == pytest.approx(0.0)
+
+    def test_normal_comparison_unchanged_no_failures(self):
+        # Regression guard: identical field sets on both sides, no failures. The
+        # grouping count and comparison values match current behavior, and no
+        # "Failed scenarios" section is emitted.
+        baseline = [
+            self._row(command="GET", rps=100000.0),
+            self._row(command="SET", rps=80000.0),
+        ]
+        new = [
+            self._row(command="GET", rps=120000.0, commit="new123"),
+            self._row(command="SET", rps=88000.0, commit="new123"),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert failed == []
+
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        # command is a table parameter, so GET and SET share one static config.
+        assert len(groups) == 1
+
+        rows = groups[0]["table_rows"]
+        get_rps = next(
+            r for r in rows if r["command"] == "GET" and r["metric"] == "rps"
+        )
+        set_rps = next(
+            r for r in rows if r["command"] == "SET" and r["metric"] == "rps"
+        )
+        assert get_rps["change"] == pytest.approx(20.0)
+        assert set_rps["change"] == pytest.approx(10.0)
+
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+        assert "failed scenario" not in report.lower()
+
+    def test_failed_in_new_captures_baseline_value(self):
+        # collect_failed_scenarios must attach the surviving baseline reading to
+        # the new-side failure descriptor via the test_id counterpart lookup.
+        baseline = [self._row(test_id="1_a", command="HSET", rps=123456.0)]
+        new = [self._failure("1_a", "boom", "new123")]
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        entry = failed[0]
+        assert entry["side"] == "new"
+        assert entry["counterpart_present"] is True
+        assert entry["counterpart_value"] == pytest.approx(123456.0)
+        assert entry["metric_label"] == "rps"
+
+        # And the table shows that baseline value (humanized) beside FAILED.
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+        assert "123K rps" in report
+        assert "**FAILED**" in report
+
+    def test_failed_in_baseline_captures_new_value(self):
+        # Mirror: baseline failed, new survived -> new reading attached to the
+        # baseline-side descriptor and shown in the table.
+        baseline = [self._failure("1_a", "oom", "base123")]
+        new = [self._row(test_id="1_a", command="HSET", rps=250000.0, commit="new123")]
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        entry = failed[0]
+        assert entry["side"] == "baseline"
+        assert entry["counterpart_value"] == pytest.approx(250000.0)
+
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+        assert "250K rps" in report
+        assert "**FAILED**" in report
+
+    def test_both_sides_failed_rendering(self):
+        # A scenario that failed on BOTH sides shows FAILED for each side and an
+        # error cell that attributes text to both. No survivor value exists.
+        baseline = [self._failure("1_a", "baseline oom", "base123")]
+        new = [self._failure("1_a", "new segfault", "new123")]
+
+        failed = collect_failed_scenarios(baseline, new)
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+
+        # One row, two FAILED cells, both errors attributed by side.
+        assert report.count("**FAILED**") == 2
+        assert "baseline: baseline oom" in report
+        assert "new: new segfault" in report
+        assert "-100.0%" not in report
+        # No comparable groups at all (both sides failed the only scenario).
+        assert all(not g["table_rows"] for g in groups)
+
+    def test_failed_scenario_no_counterpart_renders_absent_marker(self):
+        # A failed scenario with NO counterpart row in the other dataset must not
+        # crash and must render an absent (n/a) marker for the missing side. A
+        # healthy unrelated scenario still compares normally.
+        baseline = [self._row(test_id="1_b", command="FT.SEARCH")]
+        new = [
+            self._failure("1_a", "boom", "new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        a_entry = next(e for e in failed if e["test_id"] == "1_a")
+        assert a_entry["counterpart_present"] is False
+        assert a_entry["counterpart_value"] is None
+
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+        assert "n/a" in report
+        assert "**FAILED**" in report
+        assert "-100.0%" not in report
+        # Healthy scenario b still compares cleanly.
+        rps_rows = [r for g in groups for r in g["table_rows"] if r["metric"] == "rps"]
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["change"] == pytest.approx(0.0)
+
+    def test_no_negative_100_percent_for_any_failed_direction(self):
+        # Guard: across every failure direction, a failed scenario is never
+        # rendered as a -100% (or +100%) fabricated change.
+        directions = [
+            (  # failed in new
+                [self._row(test_id="1_a", command="HSET")],
+                [self._failure("1_a", "boom", "new123")],
+            ),
+            (  # failed in baseline
+                [self._failure("1_a", "oom", "base123")],
+                [self._row(test_id="1_a", command="HSET", commit="new123")],
+            ),
+            (  # failed on both
+                [self._failure("1_a", "oom", "base123")],
+                [self._failure("1_a", "boom", "new123")],
+            ),
+        ]
+        for baseline, new in directions:
+            failed = collect_failed_scenarios(baseline, new)
+            groups, bver, nver, brepo, nrepo = create_comparison_table_data(
+                baseline, new
+            )
+            report = format_comparison_report(
+                groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+            )
+            assert "-100.0%" not in report
+            assert "+100.0%" not in report
+
+
+class TestScenarioIdentityAndCellSanitization:
+    """
+    Tests for two code-review findings in the failed-scenario handling:
+
+    * Finding A - the scenario pairing identity must discriminate ``config_set``
+      and ``cluster_mode`` in addition to ``test_id``, so a healthy sibling row
+      of a failed scenario is neither over-excluded from the numeric comparison
+      nor smeared into the failed row's displayed counterpart value.
+    * Finding B/C - free-text cells (and the version header) in the failed
+      table must be neutralized against markdown/HTML injection, since the
+      report is posted verbatim as a GitHub PR comment.
+    """
+
+    def _row(self, **overrides):
+        """A complete, comparable benchmark row; override individual fields."""
+        row = {
+            "test_id": "1_a",
+            "command": "GET",
+            "pipeline": 1,
+            "io_threads": 4,
+            "data_size": 16,
+            "clients": 50,
+            "rps": 100000.0,
+            "avg_latency_ms": 0.5,
+            "p50_latency_ms": 0.4,
+            "p95_latency_ms": 0.8,
+            "p99_latency_ms": 1.2,
+            "commit": "base123",
+        }
+        row.update(overrides)
+        return row
+
+    def _failure(self, test_id, error, side_commit, command="HSET", **overrides):
+        """A failure marker as written by ClientRunner._create_failure_marker."""
+        failure = {
+            "test_id": test_id,
+            "test_phase": "write",
+            "status": "failed",
+            "error": error,
+            "command": command,
+            "timestamp": "<TS>",
+            "config_set": {},
+            "commit": side_commit,
+        }
+        failure.update(overrides)
+        return failure
+
+    # --- Finding A: identity discriminates config_set / cluster_mode ---
+
+    def test_config_set_sibling_survives_when_one_config_set_fails(self):
+        # Same test_id executed under TWO config_sets. It FAILS under the "100mb"
+        # config_set in the new run but SUCCEEDS under "200mb" on both sides. The
+        # healthy "200mb" sibling must remain in the numeric comparison (keying on
+        # test_id alone would over-exclude it because it shares the failed row's
+        # test_id).
+        cfg_a = {"maxmemory": "100mb"}
+        cfg_b = {"maxmemory": "200mb"}
+        baseline = [
+            self._row(test_id="1_a", config_set=cfg_a, rps=100000.0),
+            self._row(test_id="1_a", config_set=cfg_b, rps=200000.0),
+        ]
+        new = [
+            self._failure("1_a", "boom", "new123", config_set=cfg_a),
+            self._row(test_id="1_a", config_set=cfg_b, rps=220000.0, commit="new123"),
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+        rps_rows = [r for g in groups for r in g["table_rows"] if r["metric"] == "rps"]
+
+        # Only the healthy "200mb" sibling is compared; the "100mb" pair is
+        # excluded (its new-run counterpart failed). test_id-only identity would
+        # drop BOTH siblings, leaving zero comparable rows.
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(200000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(220000.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+    def test_counterpart_value_reflects_only_matching_config_set(self):
+        # The failed row's displayed counterpart value must be the reading from
+        # its OWN config_set, not an average across every config_set sharing the
+        # test_id. Values are chosen so a smear (mean = 500000) is obvious.
+        cfg_a = {"maxmemory": "100mb"}
+        cfg_b = {"maxmemory": "200mb"}
+        baseline = [
+            self._row(test_id="1_a", config_set=cfg_a, rps=100000.0),
+            self._row(test_id="1_a", config_set=cfg_b, rps=900000.0),
+        ]
+        new = [
+            self._failure("1_a", "boom", "new123", config_set=cfg_a),
+            self._row(test_id="1_a", config_set=cfg_b, rps=950000.0, commit="new123"),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        entry = failed[0]
+        assert entry["side"] == "new"
+        # Only the "100mb" baseline reading (100000), NOT the mean of 100000 and
+        # 900000 that a test_id-only lookup would smear in.
+        assert entry["counterpart_value"] == pytest.approx(100000.0)
+
+    def test_cluster_mode_sibling_survives_when_one_mode_fails(self):
+        # Same test_id executed under cluster_mode false AND true. It fails under
+        # cluster_mode=false in the new run but succeeds under cluster_mode=true.
+        # The cluster_mode=true sibling must still be compared.
+        baseline = [
+            self._row(test_id="1_a", cluster_mode=False, rps=100000.0),
+            self._row(test_id="1_a", cluster_mode=True, rps=300000.0),
+        ]
+        new = [
+            self._failure("1_a", "boom", "new123", cluster_mode=False),
+            self._row(test_id="1_a", cluster_mode=True, rps=330000.0, commit="new123"),
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+        rps_rows = [r for g in groups for r in g["table_rows"] if r["metric"] == "rps"]
+
+        # Only the cluster_mode=true sibling survives; test_id-only identity would
+        # exclude both modes.
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(300000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(330000.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+    def test_legacy_row_without_test_id_never_excluded_and_still_renders(self):
+        # Regression guard for the legacy contract: a comparable row with NO
+        # test_id is never excluded (identity is None), and a FAILED legacy row
+        # still renders in the failed table with its error.
+        legacy_ok = {
+            "command": "GET",
+            "pipeline": 1,
+            "io_threads": 4,
+            "data_size": 16,
+            "clients": 50,
+            "rps": 100000.0,
+            "avg_latency_ms": 0.5,
+        }
+        failed_legacy = {
+            "status": "failed",
+            "error": "legacy runner died",
+            "command": "SET",
+            "timestamp": "<TS>",
+        }
+        baseline = [
+            {**legacy_ok, "commit": "base123"},
+            self._row(test_id="1_a", command="HSET"),
+        ]
+        new = [
+            {**legacy_ok, "rps": 110000.0, "commit": "new123"},
+            self._failure("1_a", "scenario boom", "new123"),
+            failed_legacy,
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+
+        # The legacy comparable row survived and compares cleanly (+10%), while
+        # the test_id scenario 1_a was excluded.
+        rps_rows = [r for g in groups for r in g["table_rows"] if r["metric"] == "rps"]
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(110000.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+        # The failed legacy row (no test_id) still renders in the failed table.
+        assert "legacy runner died" in report
+        assert "1_a" in report
+
+    # --- Finding B/C: free-text cell and version-header sanitization ---
+
+    def test_injection_in_command_and_error_is_inert(self):
+        # A fork-authored command/error containing a markdown link, raw HTML, a
+        # backtick, and a carriage return must render inert in the failed table.
+        injected_command = "[click](http://evil.example) <img src=x>"
+        injected_error = "boom `rm -rf` \r done"
+        baseline = [self._row(test_id="1_a", command="HSET")]
+        new = [self._failure("1_a", injected_error, "new123", command=injected_command)]
+
+        failed = collect_failed_scenarios(baseline, new)
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(baseline, new)
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+
+        # The markdown link cannot render: its punctuation is backslash-escaped,
+        # so the raw link form is absent and the escaped form is present.
+        assert "[click](http://evil.example)" not in report
+        assert "\\[click\\]\\(http://evil.example\\)" in report
+        # Raw HTML is neutralized via HTML-escaping.
+        assert "<img" not in report
+        assert "&lt;img src=x&gt;" in report
+        # A stray backtick cannot open a code span (escaped), and the carriage
+        # return is normalized away.
+        assert "`rm -rf`" not in report
+        assert "\r" not in report
+        # Table structure intact: the failed data row still has exactly 6 cells
+        # (7 pipe delimiters) and the separator row is untouched.
+        assert report.count("| --- | --- | --- | --- | --- | --- |") == 1
+        data_row = next(
+            line for line in report.splitlines() if line.startswith("| 1_a |")
+        )
+        assert data_row.count("|") == 7
+
+    def test_version_header_is_sanitized(self):
+        # Version labels flow into the failed-table HEADER; a label containing
+        # markdown or a pipe must be sanitized there too (finding C).
+        baseline = [self._row(test_id="1_a", command="HSET")]
+        new = [self._failure("1_a", "boom", "new123")]
+        failed = collect_failed_scenarios(baseline, new)
+        groups, _b, _n, brepo, nrepo = create_comparison_table_data(baseline, new)
+
+        report = format_comparison_report(
+            groups,
+            "[evil](http://evil.example)",
+            "v1|v2",
+            brepo,
+            nrepo,
+            failed_scenarios=failed,
+        )
+
+        # Markdown in the baseline version label is neutralized in the header.
+        assert "[evil](http://evil.example)" not in report
+        assert "\\[evil\\]\\(http://evil.example\\)" in report
+        # A pipe in the new version label is escaped so it cannot add a column.
+        assert "v1\\|v2" in report

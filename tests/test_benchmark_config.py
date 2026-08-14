@@ -381,6 +381,160 @@ class TestValidateTestGroups:
         cfg = {"test_groups": [{"scenarios": [{"id": "s1", "command": "GET key"}]}]}
         validate_test_groups(cfg)  # should not raise
 
+    def test_both_test_and_command_raises(self):
+        cfg = {
+            "test_groups": [
+                {"scenarios": [{"id": "s1", "test": "GET", "command": "GET key"}]}
+            ]
+        }
+        with pytest.raises(ValueError, match="exactly one of 'test' or 'command'"):
+            validate_test_groups(cfg)
+
+    def test_neither_test_nor_command_raises(self):
+        cfg = {"test_groups": [{"scenarios": [{"id": "s1", "clients": 1}]}]}
+        with pytest.raises(ValueError, match="exactly one of 'test' or 'command'"):
+            validate_test_groups(cfg)
+
+    def test_mixed_without_test_or_command_passes(self):
+        cfg = {
+            "test_groups": [
+                {
+                    "scenarios": [
+                        {
+                            "id": "m1",
+                            "type": "mixed",
+                            "writes": [{"id": "w1", "command": "HSET k f v"}],
+                            "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        validate_test_groups(cfg)  # should not raise
+
+    def test_options_on_test_scenario_raises(self):
+        cfg = {
+            "test_groups": [
+                {
+                    "scenarios": [
+                        {"id": "s1", "test": "GET", "options": {"--foo": "_foo"}}
+                    ]
+                }
+            ]
+        }
+        with pytest.raises(ValueError, match="only valid with 'command', not 'test'"):
+            validate_test_groups(cfg)
+
+    def test_options_on_command_scenario_passes(self):
+        cfg = {
+            "test_groups": [
+                {
+                    "scenarios": [
+                        {
+                            "id": "s1",
+                            "command": "FT.SEARCH idx q",
+                            "options": {"--nocontent": "_nocontent"},
+                        }
+                    ]
+                }
+            ]
+        }
+        validate_test_groups(cfg)  # should not raise
+
+    def test_populate_with_non_string_raises(self):
+        cfg = {
+            "test_groups": [
+                {"scenarios": [{"id": "s1", "test": "GET", "populate_with": 123}]}
+            ]
+        }
+        with pytest.raises(ValueError, match="must be a non-empty string"):
+            validate_test_groups(cfg)
+
+    def test_populate_with_empty_string_raises(self):
+        cfg = {
+            "test_groups": [
+                {"scenarios": [{"id": "s1", "test": "GET", "populate_with": ""}]}
+            ]
+        }
+        with pytest.raises(ValueError, match="must be a non-empty string"):
+            validate_test_groups(cfg)
+
+    def test_populate_with_unsupported_write_on_test_scenario_raises(self):
+        # For a test: scenario populate_with must name a predefined write
+        # workload; a read name like GET is not a supported write.
+        cfg = {
+            "test_groups": [
+                {"scenarios": [{"id": "s1", "test": "GET", "populate_with": "GET"}]}
+            ]
+        }
+        with pytest.raises(ValueError, match="not a supported write command"):
+            validate_test_groups(cfg)
+
+    def test_populate_with_supported_write_on_test_scenario_passes(self):
+        cfg = {
+            "test_groups": [
+                {"scenarios": [{"id": "s1", "test": "GET", "populate_with": "SET"}]}
+            ]
+        }
+        validate_test_groups(cfg)  # should not raise
+
+    def test_populate_with_on_mixed_scenario_raises(self):
+        # A mixed scenario seeds through its own writes and has no
+        # test/command, so populate_with would fall back to running as a
+        # predefined -t workload.
+        cfg = {
+            "test_groups": [
+                {
+                    "scenarios": [
+                        {
+                            "id": "s1",
+                            "type": "mixed",
+                            "writes": [{"id": "w", "command": "SET foo bar"}],
+                            "reads": [{"id": "r", "command": "GET foo"}],
+                            "populate_with": "SET",
+                        }
+                    ]
+                }
+            ]
+        }
+        with pytest.raises(ValueError, match="combines 'mixed' with 'populate_with'"):
+            validate_test_groups(cfg)
+
+    def test_mixed_scenario_without_populate_with_passes(self):
+        cfg = {
+            "test_groups": [
+                {
+                    "scenarios": [
+                        {
+                            "id": "s1",
+                            "type": "mixed",
+                            "writes": [{"id": "w", "command": "SET foo bar"}],
+                            "reads": [{"id": "r", "command": "GET foo"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        validate_test_groups(cfg)  # should not raise
+
+    def test_populate_with_arbitrary_command_on_command_scenario_passes(self):
+        # command: scenarios treat populate_with as an arbitrary write command
+        # string, so it is not checked against the predefined write list.
+        cfg = {
+            "test_groups": [
+                {
+                    "scenarios": [
+                        {
+                            "id": "s1",
+                            "command": "GET key:__rand_int__",
+                            "populate_with": "SET key:__rand_int__ __data__",
+                        }
+                    ]
+                }
+            ]
+        }
+        validate_test_groups(cfg)  # should not raise
+
 
 # ---------------------------------------------------------------------------
 # _get_active_ports

@@ -43,14 +43,13 @@ def _make_runner(config, *, tls_mode=False, cores=None) -> ClientRunner:
     )
 
 
-_DEFAULT_BUILD_KWARGS = dict(
+_DEFAULT_BUILD_SCENARIO = dict(
+    test="GET",
     requests=100,
     keyspacelen=1000,
     data_size=16,
     pipeline=1,
     clients=10,
-    command="GET",
-    seed_val=12345,
 )
 
 
@@ -146,9 +145,11 @@ class TestMockBenchmarkExecution:
 class TestBenchmarkCommandBuilding:
     """Test benchmark command construction."""
 
-    def test_build_simple_command(self, minimal_benchmark_config):
+    def test_build_test_workload_command(self, minimal_benchmark_config):
         runner = _make_runner(minimal_benchmark_config)
-        cmd = runner._build_benchmark_command(tls=False, **_DEFAULT_BUILD_KWARGS)
+        cmd = runner._build_benchmark_command(
+            dict(_DEFAULT_BUILD_SCENARIO), tls=False, seed_val=12345
+        )
 
         assert "/tmp/valkey-benchmark" in cmd
         for token in ("-n", "100", "-t", "GET", "--csv"):
@@ -156,14 +157,18 @@ class TestBenchmarkCommandBuilding:
 
     def test_build_tls_command(self, minimal_benchmark_config):
         runner = _make_runner(minimal_benchmark_config, tls_mode=True)
-        cmd = runner._build_benchmark_command(tls=True, **_DEFAULT_BUILD_KWARGS)
+        cmd = runner._build_benchmark_command(
+            dict(_DEFAULT_BUILD_SCENARIO), tls=True, seed_val=12345
+        )
 
         for token in ("--tls", "--cert", "--key", "--cacert"):
             assert token in cmd
 
     def test_build_command_with_cpu_pinning(self, minimal_benchmark_config):
         runner = _make_runner(minimal_benchmark_config, cores="0-3")
-        cmd = runner._build_benchmark_command(tls=False, **_DEFAULT_BUILD_KWARGS)
+        cmd = runner._build_benchmark_command(
+            dict(_DEFAULT_BUILD_SCENARIO), tls=False, seed_val=12345
+        )
 
         assert "taskset" in cmd
         assert "-c" in cmd
