@@ -600,16 +600,7 @@ class ServerLauncher:
 
     def _valkey_processes_running(self) -> bool:
         """Check if any valkey-server processes are running."""
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", VALKEY_SERVER],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        return bool(self._get_valkey_pids())
 
     def _get_valkey_pids(self) -> List[str]:
         """Get PIDs of running valkey-server processes."""
@@ -637,11 +628,29 @@ class ServerLauncher:
                 return
             time.sleep(0.5)
 
-        # Timeout reached - escalate to SIGKILL
+        # Timeout reached - escalate: SIGTERM first (graceful), then SIGKILL
         remaining_pids = self._get_valkey_pids()
         logging.warning(
             f"Process shutdown timed out after {timeout}s. "
-            f"Sending SIGKILL to PIDs: {remaining_pids}"
+            f"Sending SIGTERM to PIDs: {remaining_pids}"
+        )
+        try:
+            subprocess.run(["pkill", "-f", VALKEY_SERVER], timeout=5, check=False)
+        except Exception as e:
+            logging.warning(f"SIGTERM via pkill failed: {e}")
+
+        # Wait up to 5 seconds for SIGTERM to take effect
+        term_deadline = time.time() + 5
+        while time.time() < term_deadline:
+            if not self._valkey_processes_running():
+                logging.info("Valkey server terminated after SIGTERM.")
+                return
+            time.sleep(0.5)
+
+        # SIGTERM didn't work - escalate to SIGKILL
+        remaining_pids = self._get_valkey_pids()
+        logging.warning(
+            f"SIGTERM ineffective. Sending SIGKILL to PIDs: {remaining_pids}"
         )
         try:
             subprocess.run(["pkill", "-9", "-f", VALKEY_SERVER], timeout=5, check=False)

@@ -16,6 +16,31 @@ import pytest
 from valkey_server import ServerLauncher, VALKEY_SERVER
 
 
+def _valkey_server_already_running() -> bool:
+    """Return True if a real valkey-server matching our pattern is already running."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", VALKEY_SERVER],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+# Skip real-process tests when a valkey-server is already running on the host
+# to avoid killing unrelated servers (e.g., on benchmark machines).
+_skip_if_server_running = pytest.mark.skipif(
+    _valkey_server_already_running(),
+    reason=(
+        f"Real valkey-server matching '{VALKEY_SERVER}' already running. "
+        "Skipping to avoid killing it."
+    ),
+)
+
+
 @pytest.fixture
 def launcher():
     """Create a minimal ServerLauncher instance."""
@@ -23,7 +48,6 @@ def launcher():
         results_dir="/tmp/test_results",
         valkey_path="/tmp/valkey",
     )
-    sl.cluster_nodes = []
     sl.config = None
     return sl
 
@@ -86,8 +110,14 @@ while True:
 """
 
 
+@pytest.mark.slow
+@_skip_if_server_running
 class TestShutdownWithRealProcess:
-    """Spawn a real process that ignores SIGTERM, verify SIGKILL escalation."""
+    """Spawn a real process that ignores SIGTERM, verify SIGKILL escalation.
+
+    These tests are marked slow and skipped when a real valkey-server is
+    already running on the host to avoid killing unrelated servers.
+    """
 
     @pytest.fixture
     def stubborn_process(self, tmp_path):
@@ -137,7 +167,7 @@ class TestShutdownWithRealProcess:
 
         # Reap the child process (it's a zombie until parent calls wait)
         # and verify it was killed by a signal
-        exit_code = stubborn_process.wait(timeout=3)
+        exit_code = stubborn_process.wait(timeout=10)
         # Negative exit code means killed by signal; -9 = SIGKILL
         assert (
             exit_code == -signal.SIGKILL
