@@ -12,7 +12,7 @@ import valkey
 # Constants
 VALKEY_SERVER = "src/valkey-server"
 DEFAULT_PORT = 6379
-DEFAULT_TIMEOUT = 15
+DEFAULT_TIMEOUT = 30
 
 
 def apply_config_to_servers(
@@ -31,7 +31,7 @@ def apply_config_to_servers(
         tls_mode: Whether to connect with TLS.
         valkey_dir: Path to valkey directory (needed for TLS cert paths).
     """
-    kwargs_base = {"decode_responses": True, "socket_timeout": 10}
+    kwargs_base = {"decode_responses": True, "socket_timeout": 30}
     if tls_mode:
         if valkey_dir is None:
             raise ValueError("valkey_dir is required when tls_mode is True")
@@ -82,8 +82,8 @@ class ServerLauncher:
             "host": host,
             "port": port,
             "decode_responses": True,
-            "socket_timeout": 5,
-            "socket_connect_timeout": 5,
+            "socket_timeout": 30,
+            "socket_connect_timeout": 30,
         }
         if tls_mode:
             tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
