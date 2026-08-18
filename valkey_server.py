@@ -595,70 +595,80 @@ class ServerLauncher:
             except Exception as e:
                 logging.warning(f"Could not send shutdown command: {e}")
 
-        # Fallback: kill any remaining processes
-        try:
-            subprocess.run(["pkill", "-f", VALKEY_SERVER], timeout=10, check=False)
-        except Exception as e:
-            logging.debug(f"pkill fallback failed: {e}")
-
-        # Wait for all processes to stop
+        # Wait for all processes to stop (escalates to SIGKILL if needed)
         self._wait_for_process_shutdown()
 
-    def _wait_for_process_shutdown(self, timeout: int = 10) -> None:
-        """Wait for Valkey server process to fully terminate."""
+    def _valkey_processes_running(self) -> bool:
+        """Check if any valkey-server processes are running."""
+        return bool(self._get_valkey_pids())
+
+    def _get_valkey_pids(self) -> List[str]:
+        """Get PIDs of running valkey-server processes."""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", VALKEY_SERVER],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split("\n")
+        except Exception:
+            pass
+        return []
+
+    def _wait_for_process_shutdown(self, timeout: int = 30) -> None:
+        """Wait for Valkey server process to fully terminate, force-kill if needed."""
         logging.info("Waiting for Valkey server process to terminate...")
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            try:
-                # Check if any valkey-server processes are still running
-                result = subprocess.run(
-                    ["ps", "aux"], capture_output=True, text=True, timeout=5
-                )
+            if not self._valkey_processes_running():
+                logging.info("Valkey server process has terminated successfully.")
+                return
+            time.sleep(0.5)
 
-                # Filter for valkey-server processes (excluding grep itself)
-                valkey_processes = []
-                for line in result.stdout.splitlines():
-                    if "valkey-server" in line and "grep" not in line:
-                        valkey_processes.append(line.strip())
-
-                if not valkey_processes:
-                    logging.info("Valkey server process has terminated successfully.")
-                    return
-
-                # Log found processes for debugging
-                logging.info(
-                    f"Found {len(valkey_processes)} valkey-server process(es) still running:"
-                )
-                for proc in valkey_processes:
-                    logging.info(f"  {proc}")
-
-                time.sleep(0.5)
-
-            except subprocess.TimeoutExpired:
-                logging.warning("Process check timed out, continuing to wait...")
-                time.sleep(0.5)
-            except Exception as e:
-                logging.warning(f"Error checking process status: {e}")
-                time.sleep(0.5)
-
-        # Timeout reached - log warning but don't fail
-        elapsed = time.time() - start_time
-        logging.warning(f"Process shutdown verification timed out after {elapsed:.1f}s")
-
-        # Final check to log any remaining processes
+        # Timeout reached - escalate: SIGTERM first (graceful), then SIGKILL
+        remaining_pids = self._get_valkey_pids()
+        logging.warning(
+            f"Process shutdown timed out after {timeout}s. "
+            f"Sending SIGTERM to PIDs: {remaining_pids}"
+        )
         try:
-            result = subprocess.run(
-                ["ps", "aux"], capture_output=True, text=True, timeout=5
-            )
-            remaining_processes = [
-                line.strip()
-                for line in result.stdout.splitlines()
-                if "valkey-server" in line and "grep" not in line
-            ]
-            if remaining_processes:
-                logging.warning("Remaining valkey-server processes:")
-                for proc in remaining_processes:
-                    logging.warning(f"  {proc}")
+            subprocess.run(["pkill", "-f", VALKEY_SERVER], timeout=5, check=False)
         except Exception as e:
-            logging.warning(f"Could not perform final process check: {e}")
+            logging.warning(f"SIGTERM via pkill failed: {e}")
+
+        # Wait up to 5 seconds for SIGTERM to take effect
+        term_deadline = time.time() + 5
+        while time.time() < term_deadline:
+            if not self._valkey_processes_running():
+                logging.info("Valkey server terminated after SIGTERM.")
+                return
+            time.sleep(0.5)
+
+        # SIGTERM didn't work - escalate to SIGKILL
+        remaining_pids = self._get_valkey_pids()
+        logging.warning(
+            f"SIGTERM ineffective. Sending SIGKILL to PIDs: {remaining_pids}"
+        )
+        try:
+            subprocess.run(["pkill", "-9", "-f", VALKEY_SERVER], timeout=5, check=False)
+        except Exception as e:
+            logging.warning(f"SIGKILL via pkill failed: {e}")
+
+        # Wait up to 5 more seconds for SIGKILL to take effect
+        kill_deadline = time.time() + 5
+        while time.time() < kill_deadline:
+            if not self._valkey_processes_running():
+                logging.info("Valkey server terminated after SIGKILL.")
+                return
+            time.sleep(0.5)
+
+        # If still alive after SIGKILL, something is very wrong
+        still_alive = self._get_valkey_pids()
+        if still_alive:
+            logging.error(
+                f"CRITICAL: valkey-server PIDs {still_alive} still alive after SIGKILL!"
+            )
+            raise RuntimeError(f"Cannot kill valkey-server processes: {still_alive}")

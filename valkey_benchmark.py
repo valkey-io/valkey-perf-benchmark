@@ -1516,6 +1516,15 @@ class ClientRunner:
 
         logging.info("Restarting Valkey server for clean state...")
 
+        # Flush database before shutdown to eliminate RDB/index cleanup delays
+        # that can block the server from releasing the port in time.
+        try:
+            self._flush_database()
+        except Exception as e:
+            logging.warning(
+                f"Pre-shutdown flush failed (proceeding with shutdown): {e}"
+            )
+
         # Shutdown current server
         self.server_launcher.shutdown(self.tls_mode)
 
