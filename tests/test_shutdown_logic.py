@@ -90,6 +90,63 @@ class TestGetValkeyPids:
         assert launcher._get_valkey_pids() == []
 
 
+class TestWaitForPortAvailable:
+    """Test _wait_for_port_available helper."""
+
+    @patch("valkey_server.subprocess.run")
+    def test_returns_immediately_when_port_free(self, mock_run, launcher):
+        """Port is free (no output lines) — should return quickly."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="State  Recv-Q Send-Q Local Address:Port\n"
+        )
+        start = time.time()
+        launcher._wait_for_port_available(port=6379, timeout=10)
+        elapsed = time.time() - start
+        assert (
+            elapsed < 2.0
+        ), f"Should return immediately when port free, took {elapsed:.1f}s"
+
+    @patch("valkey_server.subprocess.run")
+    def test_waits_until_port_free(self, mock_run, launcher):
+        """Port is busy first, then becomes free after 2 calls."""
+        busy_result = MagicMock(
+            returncode=0,
+            stdout="State  Recv-Q Send-Q Local Address:Port\nLISTEN 0      511    *:6379\n",
+        )
+        free_result = MagicMock(
+            returncode=0, stdout="State  Recv-Q Send-Q Local Address:Port\n"
+        )
+        mock_run.side_effect = [busy_result, busy_result, free_result]
+
+        start = time.time()
+        launcher._wait_for_port_available(port=6379, timeout=10)
+        elapsed = time.time() - start
+        # Should take ~2s (2 sleep(1) iterations before free)
+        assert 1.5 < elapsed < 4.0, f"Expected ~2s wait, got {elapsed:.1f}s"
+
+    @patch("valkey_server.subprocess.run")
+    def test_proceeds_after_timeout(self, mock_run, launcher):
+        """Port never frees — should warn and proceed after timeout."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="State  Recv-Q Send-Q Local Address:Port\nLISTEN 0      511    *:6379\n",
+        )
+        start = time.time()
+        # Use short timeout so test doesn't take long
+        launcher._wait_for_port_available(port=6379, timeout=3)
+        elapsed = time.time() - start
+        assert 2.5 < elapsed < 5.0, f"Should wait ~3s then proceed, took {elapsed:.1f}s"
+
+    @patch("valkey_server.subprocess.run")
+    def test_handles_ss_failure(self, mock_run, launcher):
+        """If ss command fails, should still proceed after timeout."""
+        mock_run.side_effect = Exception("ss not found")
+        start = time.time()
+        launcher._wait_for_port_available(port=6379, timeout=3)
+        elapsed = time.time() - start
+        assert 2.5 < elapsed < 5.0, f"Should wait ~3s then proceed, took {elapsed:.1f}s"
+
+
 # ---------------------------------------------------------------------------
 # Real-process test: validates shutdown + SIGKILL escalation
 # ---------------------------------------------------------------------------

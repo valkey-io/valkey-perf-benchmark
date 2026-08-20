@@ -254,6 +254,40 @@ class ServerLauncher:
 
         return cmd
 
+    def _wait_for_port_available(
+        self, port: int = DEFAULT_PORT, timeout: int = 60
+    ) -> None:
+        """Wait until the TCP port is free (not in TIME_WAIT/LISTEN).
+
+        After SIGKILL, the kernel may hold the socket in TIME_WAIT for up to 60s.
+        This method blocks until the port is available for binding.
+        """
+        logging.info(f"Waiting for port {port} to become available...")
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                result = subprocess.run(
+                    ["ss", "-tlnp", f"sport = :{port}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                # If no lines with the port in LISTEN state, port is free
+                lines = [l for l in result.stdout.strip().split("\n")[1:] if l.strip()]
+                if not lines:
+                    elapsed = time.time() - start
+                    if elapsed > 1:
+                        logging.info(f"Port {port} available after {elapsed:.1f}s")
+                    return
+            except Exception as e:
+                logging.warning(f"Error checking port availability: {e}")
+            time.sleep(1)
+
+        logging.warning(
+            f"Port {port} still not available after {timeout}s. "
+            f"Proceeding anyway (server may fail to bind)."
+        )
+
     def _wait_for_server_ready(
         self, tls_mode: bool, timeout: int = DEFAULT_TIMEOUT
     ) -> None:
@@ -662,6 +696,8 @@ class ServerLauncher:
         while time.time() < kill_deadline:
             if not self._valkey_processes_running():
                 logging.info("Valkey server terminated after SIGKILL.")
+                # After SIGKILL, port may be in TIME_WAIT - wait for it
+                self._wait_for_port_available()
                 return
             time.sleep(0.5)
 
