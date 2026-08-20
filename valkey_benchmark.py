@@ -1058,9 +1058,9 @@ class ClientRunner:
                     if self.module_commit:
                         metrics["module_commit"] = self.module_commit
                     if self.module_commit_timestamp:
-                        metrics[
-                            "module_commit_timestamp"
-                        ] = self.module_commit_timestamp
+                        metrics["module_commit_timestamp"] = (
+                            self.module_commit_timestamp
+                        )
                     if scenario.get("dataset"):
                         metrics["dataset"] = scenario["dataset"]
                     return metrics
