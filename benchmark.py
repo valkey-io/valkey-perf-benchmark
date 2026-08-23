@@ -612,9 +612,7 @@ def validate_test_groups(cfg: dict) -> None:
                     on_iterations,
                     f"test_groups[{i}].iterations.scenarios[{j}].on_iterations",
                 )
-                if any(
-                    iteration > iterations["count"] for iteration in on_iterations
-                ):
+                if any(iteration > iterations["count"] for iteration in on_iterations):
                     raise ValueError(
                         f"test_groups[{i}].iterations.scenarios[{j}].on_iterations "
                         "cannot exceed iteration count"
