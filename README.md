@@ -400,6 +400,40 @@ Two scenario types worth calling out:
   declared on a mixed scenario are applied to every read sub-scenario, not to a
   (non-existent) top-level command.
 
+Each group's regular `scenarios` run once in their declared order. To repeat a
+stateful sequence without rerunning the initial scenarios, add an `iterations`
+block:
+
+```json
+{
+  "scenarios": [
+    {"id": "load", "type": "write", "command": "SET item:0 value"}
+  ],
+  "iterations": {
+    "count": 3,
+    "scenarios": [
+      {
+        "id": "mutate",
+        "type": "write",
+        "command": "SET item:{iteration} value"
+      },
+      {
+        "id": "sample",
+        "type": "read",
+        "command": "GET item:{iteration}",
+        "on_iterations": [1, 3]
+      }
+    ]
+  }
+}
+```
+
+`{iteration}` is replaced in `command` and `dataset` values. Every repeated
+scenario records its one-based `iteration` in the resulting metric.
+`on_iterations` limits a scenario to selected iterations. Unlike `--runs`,
+which repeats the entire group, `iterations` preserves state created by the
+group's initial scenarios.
+
 Datasets consumed by scenarios can be generated ahead of time from a
 `dataset_generation` block in the same config, via `scripts/setup_datasets.py`.
 Supported CSV transforms include `wikipedia`, `inject`, `repeat`, `prefix_gen`,
