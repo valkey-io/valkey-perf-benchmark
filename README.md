@@ -986,6 +986,17 @@ The framework uses a **transform-based dataset generation system** that supports
   NPY writer. Used for KNN / HNSW vector-search tests, including hybrid configs
   that combine a vector field with text/numeric/tag fields.
 
+A structured `.npy` entry may read one array from a local `.h5` or `.hdf5`
+`source`; `chunk_size` defaults to `10000` rows.
+
+```json
+"sift-base.npy": {
+  "source": "sift.hdf5",
+  "hdf5_dataset": "train",
+  "field": "embedding",
+  "dtype": "f4"
+}
+```
 
 **Compact Format (for field explosion):**
 ```json
