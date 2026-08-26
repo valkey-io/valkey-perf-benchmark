@@ -347,39 +347,112 @@ class TestValidatePositiveIntOrList:
 # ---------------------------------------------------------------------------
 
 
+def _tg(scenario):
+    """Wrap a single scenario dict in the minimal test_groups config shape."""
+    return {"test_groups": [{"scenarios": [scenario]}]}
+
+
 class TestValidateTestGroups:
     """Tests for validate_test_groups."""
 
     def test_no_test_groups_key_passes(self):
         validate_test_groups({})  # should not raise
 
-    def test_not_a_list_raises(self):
-        with pytest.raises(ValueError, match="must be a non-empty list"):
-            validate_test_groups({"test_groups": "not a list"})
+    @pytest.mark.parametrize(
+        "cfg, match",
+        [
+            ({"test_groups": "not a list"}, "must be a non-empty list"),
+            ({"test_groups": []}, "must be a non-empty list"),
+            ({"test_groups": ["not a dict"]}, "must be a dict"),
+            ({"test_groups": [{"group": 1}]}, "missing 'scenarios' field"),
+            (
+                {"test_groups": [{"scenarios": []}]},
+                "scenarios must be a non-empty list",
+            ),
+            (
+                {"test_groups": [{"scenarios": "bad"}]},
+                "scenarios must be a non-empty list",
+            ),
+        ],
+    )
+    def test_invalid_container_structure_raises(self, cfg, match):
+        with pytest.raises(ValueError, match=match):
+            validate_test_groups(cfg)
 
-    def test_empty_list_raises(self):
-        with pytest.raises(ValueError, match="must be a non-empty list"):
-            validate_test_groups({"test_groups": []})
+    @pytest.mark.parametrize(
+        "scenario, match",
+        [
+            # exactly-one-of test/command
+            (
+                {"id": "s1", "test": "GET", "command": "GET key"},
+                "exactly one of 'test' or 'command'",
+            ),
+            ({"id": "s1", "clients": 1}, "exactly one of 'test' or 'command'"),
+            # options only valid with command
+            (
+                {"id": "s1", "test": "GET", "options": {"--foo": "_foo"}},
+                "only valid with 'command', not 'test'",
+            ),
+            # populate_with value validation (guards mutation: drop this check)
+            (
+                {"id": "s1", "test": "GET", "populate_with": 123},
+                "must be a non-empty string",
+            ),
+            (
+                {"id": "s1", "test": "GET", "populate_with": ""},
+                "must be a non-empty string",
+            ),
+            (
+                {"id": "s1", "test": "GET", "populate_with": "GET"},
+                "not a supported write command",
+            ),
+            # mixed scenarios seed through their own writes, never populate_with
+            (
+                {
+                    "id": "s1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "command": "SET foo bar"}],
+                    "reads": [{"id": "r", "command": "GET foo"}],
+                    "populate_with": "SET",
+                },
+                "combines 'mixed' with 'populate_with'",
+            ),
+        ],
+    )
+    def test_invalid_scenario_raises(self, scenario, match):
+        with pytest.raises(ValueError, match=match):
+            validate_test_groups(_tg(scenario))
 
-    def test_element_not_dict_raises(self):
-        with pytest.raises(ValueError, match="must be a dict"):
-            validate_test_groups({"test_groups": ["not a dict"]})
-
-    def test_element_missing_scenarios_raises(self):
-        with pytest.raises(ValueError, match="missing 'scenarios' field"):
-            validate_test_groups({"test_groups": [{"group": 1}]})
-
-    def test_empty_scenarios_raises(self):
-        with pytest.raises(ValueError, match="scenarios must be a non-empty list"):
-            validate_test_groups({"test_groups": [{"scenarios": []}]})
-
-    def test_scenarios_not_list_raises(self):
-        with pytest.raises(ValueError, match="scenarios must be a non-empty list"):
-            validate_test_groups({"test_groups": [{"scenarios": "bad"}]})
-
-    def test_valid_test_groups_passes(self):
-        cfg = {"test_groups": [{"scenarios": [{"id": "s1", "command": "GET key"}]}]}
-        validate_test_groups(cfg)  # should not raise
+    @pytest.mark.parametrize(
+        "scenario",
+        [
+            # plain command scenario
+            {"id": "s1", "command": "GET key"},
+            # test scenario seeded by a supported predefined write
+            {"id": "s1", "test": "GET", "populate_with": "SET"},
+            # options are valid on a command scenario
+            {
+                "id": "s1",
+                "command": "FT.SEARCH idx q",
+                "options": {"--nocontent": "_nocontent"},
+            },
+            # command scenario treats populate_with as an arbitrary write string
+            {
+                "id": "s1",
+                "command": "GET key:__rand_int__",
+                "populate_with": "SET key:__rand_int__ __data__",
+            },
+            # mixed scenario with no test/command and no populate_with
+            {
+                "id": "m1",
+                "type": "mixed",
+                "writes": [{"id": "w1", "command": "HSET k f v"}],
+                "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
+            },
+        ],
+    )
+    def test_valid_scenario_passes(self, scenario):
+        validate_test_groups(_tg(scenario))  # should not raise
 
 
 # ---------------------------------------------------------------------------

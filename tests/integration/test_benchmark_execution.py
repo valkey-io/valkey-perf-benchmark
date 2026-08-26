@@ -5,15 +5,16 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-from .conftest import GitRepoFixture, MockBenchmarkBinary, PROJECT_ROOT
+from .conftest import PROJECT_ROOT
 
 from benchmark import load_configs
 from valkey_benchmark import ClientRunner
 from process_metrics import MetricsProcessor
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,14 +44,13 @@ def _make_runner(config, *, tls_mode=False, cores=None) -> ClientRunner:
     )
 
 
-_DEFAULT_BUILD_KWARGS = dict(
+_DEFAULT_BUILD_SCENARIO = dict(
+    test="GET",
     requests=100,
     keyspacelen=1000,
     data_size=16,
     pipeline=1,
     clients=10,
-    command="GET",
-    seed_val=12345,
 )
 
 
@@ -146,9 +146,11 @@ class TestMockBenchmarkExecution:
 class TestBenchmarkCommandBuilding:
     """Test benchmark command construction."""
 
-    def test_build_simple_command(self, minimal_benchmark_config):
+    def test_build_test_workload_command(self, minimal_benchmark_config):
         runner = _make_runner(minimal_benchmark_config)
-        cmd = runner._build_benchmark_command(tls=False, **_DEFAULT_BUILD_KWARGS)
+        cmd = runner._build_benchmark_command(
+            dict(_DEFAULT_BUILD_SCENARIO), tls=False, seed_val=12345
+        )
 
         assert "/tmp/valkey-benchmark" in cmd
         for token in ("-n", "100", "-t", "GET", "--csv"):
@@ -156,14 +158,18 @@ class TestBenchmarkCommandBuilding:
 
     def test_build_tls_command(self, minimal_benchmark_config):
         runner = _make_runner(minimal_benchmark_config, tls_mode=True)
-        cmd = runner._build_benchmark_command(tls=True, **_DEFAULT_BUILD_KWARGS)
+        cmd = runner._build_benchmark_command(
+            dict(_DEFAULT_BUILD_SCENARIO), tls=True, seed_val=12345
+        )
 
         for token in ("--tls", "--cert", "--key", "--cacert"):
             assert token in cmd
 
     def test_build_command_with_cpu_pinning(self, minimal_benchmark_config):
         runner = _make_runner(minimal_benchmark_config, cores="0-3")
-        cmd = runner._build_benchmark_command(tls=False, **_DEFAULT_BUILD_KWARGS)
+        cmd = runner._build_benchmark_command(
+            dict(_DEFAULT_BUILD_SCENARIO), tls=False, seed_val=12345
+        )
 
         assert "taskset" in cmd
         assert "-c" in cmd
@@ -295,7 +301,7 @@ class TestEndToEndWithMock:
         except subprocess.TimeoutExpired as e:
             # Timeout means it got past config loading — expected
             output = (e.stdout or b"").decode() + (e.stderr or b"").decode()
-            assert len(output) > 0, f"Expected benchmark to start, got no output"
+            assert len(output) > 0, "Expected benchmark to start, got no output"
 
     def test_benchmark_generates_metrics_with_mock_server(
         self, mock_valkey_repo, tmp_path
@@ -351,3 +357,113 @@ class TestEndToEndWithMock:
             cwd=PROJECT_ROOT,
         )
         assert result.returncode != 0
+
+
+class TestCompiledBasicFormatRun:
+    _CSV_HEADER = (
+        '"test","rps","avg_latency_ms","min_latency_ms","p50_latency_ms",'
+        '"p95_latency_ms","p99_latency_ms","max_latency_ms"'
+    )
+    _CSV_ROW = '"100000.00","0.500","0.100","0.400","0.800","1.200","2.000"'
+
+    _EXPECTED_BASIC_KEYS = {
+        "timestamp",
+        "commit",
+        "repository",
+        "command",
+        "data_size",
+        "pipeline",
+        "clients",
+        "rps",
+        "avg_latency_ms",
+        "min_latency_ms",
+        "p50_latency_ms",
+        "p95_latency_ms",
+        "p99_latency_ms",
+        "max_latency_ms",
+        "cluster_mode",
+        "tls",
+        "requests",
+        "benchmark_mode",
+        "warmup",
+        "architecture",
+    }
+    _TEST_GROUPS_ONLY_KEYS = {
+        "test_id",
+        "test_phase",
+        "group",
+        "scenario",
+        "config_set",
+        "status",
+        "group_description",
+        "scenario_description",
+        "config_name",
+        "dataset",
+        "module_commit",
+        "module_commit_timestamp",
+    }
+
+    def _canned_csv(self, cmd):
+        name = cmd[cmd.index("-t") + 1] if "-t" in cmd else "SCENARIO"
+        return f'{self._CSV_HEADER}\n"{name}",{self._CSV_ROW}\n'
+
+    def test_run_ordering_and_metrics_schema(self, tmp_path):
+        config_path = _write_config(
+            tmp_path,
+            [
+                {
+                    "requests": [100],
+                    "keyspacelen": [1000],
+                    "data_sizes": [16],
+                    "pipelines": [1],
+                    "clients": [1],
+                    "commands": ["SET", "GET"],
+                    "cluster_mode": False,
+                    "tls_mode": False,
+                    "warmup": 0,
+                }
+            ],
+        )
+        cfg = load_configs(str(config_path))[0]
+
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=cfg,
+            cluster_mode=False,
+            tls_mode=False,
+            target_ip="127.0.0.1",
+            results_dir=tmp_path,
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            architecture="test-arch",
+        )
+
+        invocations = []
+
+        def fake_run(command=None, *args, **kwargs):
+            invocations.append(list(command))
+            if kwargs.get("capture_output"):
+                return SimpleNamespace(stdout=self._canned_csv(list(command)))
+            return None
+
+        with (
+            patch.object(runner, "_run", side_effect=fake_run),
+            patch.object(runner, "_flush_database"),
+            patch.object(ClientRunner, "get_commit_time", lambda self, cid: "<TS>"),
+            patch(
+                "valkey_benchmark.collect_environment_metadata",
+                lambda **kwargs: {"numa_nodes": "1"},
+            ),
+            patch("valkey_benchmark.random.randint", return_value=555),
+        ):
+            runner.run_benchmark_config()
+
+        order = [(c[c.index("-t") + 1], "--sequential" in c) for c in invocations]
+        assert order == [("SET", False), ("SET", True), ("GET", False)]
+
+        metrics = json.loads((tmp_path / "metrics.json").read_text())
+        assert [m["command"] for m in metrics] == ["SET", "GET"]
+        for row in metrics:
+            non_env = {k for k in row if not k.startswith("env_")}
+            assert non_env == self._EXPECTED_BASIC_KEYS
+            assert not (set(row) & self._TEST_GROUPS_ONLY_KEYS)

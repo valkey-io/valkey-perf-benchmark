@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import platform
+from itertools import product
 from pathlib import Path
 from typing import List, Optional
 import sys
@@ -12,7 +13,14 @@ import sys
 
 from valkey_build import ServerBuilder
 from valkey_server import ServerLauncher, apply_config_to_servers
-from valkey_benchmark import ClientRunner
+from valkey_benchmark import (
+    ClientRunner,
+    ORIGIN_FIELD,
+    ORIGIN_SIMPLE,
+    READ_COMMANDS,
+    READ_POPULATE_MAP,
+    WRITE_COMMANDS,
+)
 from benchmark_build import BenchmarkBuilder
 from utils.cpu_utils import (
     parse_core_range,
@@ -286,6 +294,54 @@ def _validate_cpu_range(value, key_name: str) -> None:
 # ---------- Helpers ----------------------------------------------------------
 
 
+def compile_simple_config(cfg: dict) -> None:
+    """Compile the basic 'commands' format into generated test_groups.
+
+    Each parameter combination becomes a single-scenario group, preserving
+    consecutive run ordering. The origin marker preserves the basic metrics
+    schema and shared seed. Cluster-specific filtering happens later, after
+    cluster mode has been scalarized.
+    """
+    requests_list = (
+        cfg["requests"] if cfg.get("requests") is not None else [None]
+    )  # duration mode has no requests
+
+    groups = []
+    for requests, keyspacelen, data_size, pipeline, clients, command in product(
+        requests_list,
+        cfg["keyspacelen"],
+        cfg["data_sizes"],
+        cfg["pipelines"],
+        cfg["clients"],
+        cfg["commands"],
+    ):
+        if command not in READ_COMMANDS + WRITE_COMMANDS:
+            logging.warning(f"Unsupported command: {command}, skipping.")
+            continue
+
+        scenario = {
+            ORIGIN_FIELD: ORIGIN_SIMPLE,
+            "id": command,
+            "test": command,
+            "data_size": data_size,
+            "pipeline": pipeline,
+            "clients": clients,
+            "keyspacelen": keyspacelen,
+            "warmup_inline": cfg["warmup"],
+            "restart_before": True,
+        }
+        if cfg.get("duration") is not None:
+            scenario["duration"] = cfg["duration"]
+        else:
+            scenario["requests"] = requests
+        if command in READ_COMMANDS:
+            scenario["populate_with"] = READ_POPULATE_MAP[command]
+
+        groups.append({"group": len(groups) + 1, "scenarios": [scenario]})
+
+    cfg["test_groups"] = groups
+
+
 def validate_config(cfg: dict) -> None:
     """Validate config (commands or test_groups format)."""
     if "scenarios" in cfg and "test_groups" not in cfg:
@@ -369,6 +425,9 @@ def validate_config(cfg: dict) -> None:
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])
     if "tls_mode" in cfg:
         cfg["tls_mode"] = parse_bool(cfg["tls_mode"])
+
+    if has_commands and not has_test_groups:
+        compile_simple_config(cfg)
 
 
 def load_configs(path: str) -> List[dict]:
@@ -477,6 +536,48 @@ def validate_test_groups(cfg: dict) -> None:
         if not isinstance(group["scenarios"], list) or len(group["scenarios"]) == 0:
             raise ValueError(f"test_groups[{i}].scenarios must be a non-empty list")
 
+        for j, scenario in enumerate(group["scenarios"]):
+            if not isinstance(scenario, dict):
+                raise ValueError(f"test_groups[{i}].scenarios[{j}] must be a dict")
+
+            if scenario.get("type") == "mixed":
+                if "populate_with" in scenario:
+                    raise ValueError(
+                        f"test_groups[{i}].scenarios[{j}] combines 'mixed' "
+                        "with 'populate_with'; mixed scenarios seed the "
+                        "keyspace through their own 'writes' sub-scenarios"
+                    )
+                continue
+
+            if ("test" in scenario) == ("command" in scenario):
+                raise ValueError(
+                    f"test_groups[{i}].scenarios[{j}] must have exactly one "
+                    "of 'test' or 'command'"
+                )
+
+            if "test" in scenario and "options" in scenario:
+                raise ValueError(
+                    f"test_groups[{i}].scenarios[{j}] combines 'test' with "
+                    "'options'; options append flags to the command string "
+                    "and are only valid with 'command', not 'test'"
+                )
+
+            if "populate_with" in scenario:
+                populate_with = scenario["populate_with"]
+                if not isinstance(populate_with, str) or not populate_with:
+                    raise ValueError(
+                        f"test_groups[{i}].scenarios[{j}] 'populate_with' must "
+                        "be a non-empty string"
+                    )
+                # Predefined tests require a supported write workload; command
+                # scenarios may use arbitrary populate commands.
+                if "test" in scenario and populate_with not in WRITE_COMMANDS:
+                    raise ValueError(
+                        f"test_groups[{i}].scenarios[{j}] 'populate_with' "
+                        f"{populate_with!r} is not a supported write command; "
+                        f"for a 'test' scenario it must be one of {WRITE_COMMANDS}"
+                    )
+
 
 def run_benchmark_matrix(
     *,
@@ -484,7 +585,6 @@ def run_benchmark_matrix(
     cfg: dict,
     args: argparse.Namespace,
     module_path: Optional[str] = None,
-    uses_test_groups: bool = False,
     config_name: Optional[str] = None,
     module_commit: Optional[str] = None,
     module_commit_timestamp: Optional[str] = None,
@@ -536,7 +636,6 @@ def run_benchmark_matrix(
             valkey_dir,
             commit_id,
             module_path,
-            uses_test_groups,
             architecture,
             client_cpu_ranges,
             config_name,
@@ -610,7 +709,6 @@ def _execute_benchmark_run(
     valkey_dir,
     commit_id,
     module_path,
-    uses_test_groups,
     architecture,
     client_cpu_ranges,
     config_name=None,
@@ -687,7 +785,6 @@ def _execute_benchmark_run(
             runs=args.runs,
             server_launcher=launcher,
             architecture=architecture,
-            uses_test_groups=uses_test_groups,
             repository=args.repository,
             config_name=config_name,
             module_commit=module_commit,
@@ -773,8 +870,6 @@ def main() -> None:
     config = configs_list[0]
     validate_cpu_allocation(config)
 
-    uses_test_groups = "test_groups" in config
-
     module_path = get_module_binary_path(args, config)
 
     # Module testing requires valkey-path
@@ -782,9 +877,8 @@ def main() -> None:
         print("ERROR: Module testing requires --valkey-path")
         sys.exit(1)
 
-    if uses_test_groups and (
-        config.get("dataset_generation") or config.get("query_generation")
-    ):
+    # Every validated config has test_groups (basic configs are compiled)
+    if config.get("dataset_generation") or config.get("query_generation"):
         import subprocess
 
         required_datasets = set()
@@ -825,7 +919,6 @@ def main() -> None:
     # Process all configs
     for cfg in configs_list:
         validate_cpu_allocation(cfg)
-        uses_test_groups = "test_groups" in cfg
 
         # Apply CLI filters to this config
         if args.groups:
@@ -840,7 +933,6 @@ def main() -> None:
                 cfg=cfg,
                 args=args,
                 module_path=module_path,
-                uses_test_groups=uses_test_groups,
                 config_name=Path(args.config).name if args.module else None,
                 module_commit=args.module_commit,
                 module_commit_timestamp=args.module_commit_timestamp,

@@ -30,8 +30,7 @@ except ImportError:
     np = None
     FuncFormatter = None
 
-# Central confidence level used for all CI/PI calculations and labels.
-# Change this single value to adjust the confidence level project-wide.
+# Shared by all CI/PI calculations and labels.
 CONFIDENCE_LEVEL = 0.95
 CONFIDENCE_PERCENT = int(CONFIDENCE_LEVEL * 100)
 
@@ -66,16 +65,7 @@ def calculate_stdev(values: List[float]) -> float:
 def calculate_confidence_interval(
     values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> Tuple[float, float]:
-    """
-    Calculate confidence interval for a list of values using t-distribution.
-
-    Args:
-        values: List of numeric values
-        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
-
-    Returns:
-        Tuple of (lower_bound, upper_bound) or (0.0, 0.0) if insufficient data
-    """
+    """Return a t-distribution confidence interval, or zeros for fewer than 2 values."""
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
 
@@ -85,7 +75,6 @@ def calculate_confidence_interval(
     mean_val = statistics.mean(filtered_values)
     stdev_val = statistics.stdev(filtered_values)
 
-    # Calculate standard error
     standard_error = stdev_val / (n**0.5)
 
     degrees_of_freedom = n - 1
@@ -98,19 +87,7 @@ def calculate_confidence_interval(
 def calculate_prediction_interval(
     values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> Tuple[float, float]:
-    """
-    Calculate prediction interval for a single future observation using t-distribution.
-
-    Uses SciPy's t-distribution functions for accurate statistical calculations.
-    Reference: https://en.wikipedia.org/wiki/Student%27s_t-distribution#Prediction_interval
-
-    Args:
-        values: List of numeric values
-        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
-
-    Returns:
-        Tuple of (lower_bound, upper_bound) or (0.0, 0.0) if insufficient data
-    """
+    """Return a t prediction interval, or zeros for fewer than 2 values."""
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
 
@@ -121,7 +98,6 @@ def calculate_prediction_interval(
     stdev_val = statistics.stdev(filtered_values)
 
     degrees_of_freedom = n - 1
-    # Prediction interval accounts for both sampling uncertainty and future observation variability
     prediction_scale = stdev_val * (1 + 1 / n) ** 0.5
 
     lower_bound, upper_bound = stats.t.interval(
@@ -133,16 +109,7 @@ def calculate_prediction_interval(
 def calculate_prediction_interval_percentage(
     values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> float:
-    """
-    Calculate prediction interval as a percentage of the mean value.
-
-    Args:
-        values: List of numeric values
-        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
-
-    Returns:
-        Prediction interval as percentage of mean (±X%), or 0.0 if insufficient data
-    """
+    """Return the prediction-interval margin as a percentage of the mean."""
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
 
@@ -155,7 +122,6 @@ def calculate_prediction_interval_percentage(
 
     stdev_val = statistics.stdev(filtered_values)
 
-    # Prediction interval uses sqrt(1 + 1/n) factor
     prediction_error = stdev_val * (1 + 1 / n) ** 0.5
 
     degrees_of_freedom = n - 1
@@ -163,25 +129,13 @@ def calculate_prediction_interval_percentage(
     t_critical = stats.t.ppf(1 - alpha / 2, degrees_of_freedom)
     margin_of_error = t_critical * prediction_error
 
-    # Calculate PI as percentage of mean
-    pi_percentage = (margin_of_error / mean_val) * 100.0
-
-    return pi_percentage
+    return (margin_of_error / mean_val) * 100.0
 
 
 def calculate_confidence_interval_percentage(
     values: List[float], confidence_level: float = CONFIDENCE_LEVEL
 ) -> float:
-    """
-    Calculate confidence interval as a percentage of the mean value.
-
-    Args:
-        values: List of numeric values
-        confidence_level: Confidence level (default CONFIDENCE_LEVEL)
-
-    Returns:
-        Confidence interval as percentage of mean (±X%), or 0.0 if insufficient data
-    """
+    """Return the confidence-interval margin as a percentage of the mean."""
     filtered_values = [v for v in values if v is not None]
     n = len(filtered_values)
 
@@ -192,33 +146,16 @@ def calculate_confidence_interval_percentage(
     if mean_val == 0.0:
         return 0.0
 
-    # Use the existing calculate_confidence_interval function
     ci_lower, ci_upper = calculate_confidence_interval(values, confidence_level)
-
-    # If confidence interval calculation failed, return 0.0
     if ci_lower == 0.0 and ci_upper == 0.0:
         return 0.0
-
-    # Calculate margin of error from the confidence interval bounds
     margin_of_error = (ci_upper - ci_lower) / 2.0
-
-    # Calculate CI as percentage of mean
-    ci_percentage = (margin_of_error / mean_val) * 100.0
-
-    return ci_percentage
+    return (margin_of_error / mean_val) * 100.0
 
 
-def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
-    """
-    Dynamically discover configuration keys from benchmark data.
-
-    Excludes performance metrics and metadata fields, keeping only
-    configuration parameters that define test scenarios.
-    """
-    config_keys = set()
-
-    # Fields that are metrics or metadata, not configuration
-    excluded_fields = {
+# Metrics and run metadata excluded from both grouping and scenario identity.
+_CONFIG_EXCLUDED_FIELDS = frozenset(
+    {
         "timestamp",
         "commit",
         "module_commit",
@@ -278,10 +215,35 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
         "p99_latency_ms_pi_upper",
         "p99_latency_ms_pi_percent",
     }
+)
+
+# Failure state and display-only fields do not identify a scenario. In particular,
+# success and failure rows may use different command labels.
+_NON_IDENTITY_FIELDS = _CONFIG_EXCLUDED_FIELDS | {
+    "status",
+    "error",
+    "command",
+    "group_description",
+    "scenario_description",
+}
+
+# Live readings may differ between compatible runs. Unknown environment fields
+# remain identity axes so new compatibility metadata is conservative by default.
+_VOLATILE_ENV_FIELDS = frozenset({"env_cpu_freq_mhz_at_setup"})
+
+
+def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
+    """
+    Dynamically discover configuration keys from benchmark data.
+
+    Excludes performance metrics and metadata fields, keeping only
+    configuration parameters that define test scenarios.
+    """
+    config_keys = set()
 
     for item in data:
         for key, value in item.items():
-            if key not in excluded_fields:
+            if key not in _CONFIG_EXCLUDED_FIELDS and key not in _VOLATILE_ENV_FIELDS:
                 # Only include keys with hashable values for grouping
                 if isinstance(value, (str, int, float, bool, type(None))):
                     config_keys.add(key)
@@ -295,8 +257,10 @@ def discover_config_keys(data: List[Dict[str, Any]]) -> List[str]:
 
 
 def create_config_signature(item: Dict[str, Any], config_keys: List[str]) -> Tuple:
-    """Create a configuration signature tuple for grouping identical configurations."""
-    return tuple(item.get(key) for key in config_keys)
+    """Build a scalar signature plus a frozen ``config_set`` sweep value."""
+    config_set = item.get("config_set")
+    frozen_config_set = _make_hashable(config_set) if config_set else None
+    return tuple(item.get(key) for key in config_keys) + (frozen_config_set,)
 
 
 def group_by_command(items: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -336,35 +300,33 @@ def summarize_benchmark_results(data_items: List[Dict[str, Any]]) -> Dict[str, f
     }
 
 
-def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Automatically average multiple benchmark runs with identical configurations.
-
-    Groups runs by configuration parameters and calculates means and standard deviations
-    for performance metrics. Always applied to ensure consistent comparisons.
-    """
+def average_multiple_runs(
+    data: List[Dict[str, Any]],
+    shared_config_keys: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Average runs with identical signatures using optional shared config keys."""
     if not data:
         return []
 
-    # Get configuration keys (excluding metrics and metadata)
+    base_keys = (
+        shared_config_keys
+        if shared_config_keys is not None
+        else discover_config_keys(data)
+    )
     config_keys = [
         key
-        for key in discover_config_keys(data)
+        for key in base_keys
         if key not in ["timestamp", "run_count"] and not key.endswith("_stdev")
     ]
 
-    # Group runs by identical configurations
     grouped_runs = {}
     for item in data:
         config_signature = create_config_signature(item, config_keys)
-        if config_signature not in grouped_runs:
-            grouped_runs[config_signature] = []
-        grouped_runs[config_signature].append(item)
+        grouped_runs.setdefault(config_signature, []).append(item)
 
     # Process each configuration group
     averaged_results = []
     for config_signature, runs in grouped_runs.items():
-        # Create base configuration item
         averaged_item = dict(zip(config_keys, config_signature))
         averaged_item["run_count"] = len(runs)
 
@@ -383,7 +345,6 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             )
             averaged_results.append(single_run)
         else:
-            # Multiple runs: calculate averages and standard deviations
             metric_values = {
                 "rps": [run.get("rps", 0.0) for run in runs],
                 "avg_latency_ms": [run.get("avg_latency_ms", 0.0) for run in runs],
@@ -392,7 +353,6 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "p99_latency_ms": [run.get("p99_latency_ms", 0.0) for run in runs],
             }
 
-            # Calculate means, standard deviations, coefficient of variation, and confidence intervals
             for metric, values in metric_values.items():
                 mean_val = calculate_mean(values)
                 stdev_val = calculate_stdev(values)
@@ -400,27 +360,22 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 averaged_item[metric] = mean_val
                 averaged_item[f"{metric}_stdev"] = stdev_val
 
-                # Calculate CV directly from already computed mean and stdev
                 if mean_val == 0.0 or stdev_val == 0.0:
                     averaged_item[f"{metric}_cv"] = 0.0
                 else:
                     averaged_item[f"{metric}_cv"] = (stdev_val / mean_val) * 100.0
 
-                # Calculate confidence interval
                 ci_lower, ci_upper = calculate_confidence_interval(values)
                 averaged_item[f"{metric}_ci_lower"] = ci_lower
                 averaged_item[f"{metric}_ci_upper"] = ci_upper
 
-                # Calculate confidence interval as percentage of mean
                 ci_percentage = calculate_confidence_interval_percentage(values)
                 averaged_item[f"{metric}_ci_percent"] = ci_percentage
 
-                # Calculate prediction interval
                 pi_lower, pi_upper = calculate_prediction_interval(values)
                 averaged_item[f"{metric}_pi_lower"] = pi_lower
                 averaged_item[f"{metric}_pi_upper"] = pi_upper
 
-                # Calculate prediction interval as percentage of mean
                 pi_percentage = calculate_prediction_interval_percentage(values)
                 averaged_item[f"{metric}_pi_percent"] = pi_percentage
 
@@ -429,26 +384,25 @@ def average_multiple_runs(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if timestamps:
                 averaged_item["timestamp"] = max(timestamps)
 
-            # Preserve commit information from any run (they should all be the same)
             commits = [run.get("commit") for run in runs if run.get("commit")]
             if commits:
-                averaged_item["commit"] = commits[
-                    0
-                ]  # Use first commit (should be same for all runs)
+                averaged_item["commit"] = commits[0]
 
-            # Preserve module_commit information from any run
             module_commits = [
                 run.get("module_commit") for run in runs if run.get("module_commit")
             ]
             if module_commits:
                 averaged_item["module_commit"] = module_commits[0]
 
-            # Preserve repository information from any run
             repositories = [
                 run.get("repository") for run in runs if run.get("repository")
             ]
             if repositories:
                 averaged_item["repository"] = repositories[0]
+
+            # ``config_set`` is frozen outside ``config_keys``; retain its raw form.
+            if "config_set" in runs[0]:
+                averaged_item["config_set"] = runs[0]["config_set"]
 
             averaged_results.append(averaged_item)
 
@@ -463,14 +417,7 @@ def calculate_percentage_change(new_value: float, old_value: float) -> float:
 
 
 def create_config_sort_key(config_tuple: Tuple) -> Tuple[str, ...]:
-    """
-    Create a sorting key for configuration tuples that handles None values and mixed types.
-
-    Groups by test scenario first (test_id is hoisted to the front of the
-    config keys). Converts all values to strings for consistent comparison,
-    with None values sorting first. Note: sorting is lexicographic, so numeric
-    values embedded in strings sort as text (e.g. "10_get" before "2_get").
-    """
+    """Normalize mixed configuration values into a sortable string tuple."""
 
     def normalize_value(value):
         return "" if value is None else str(value)
@@ -519,28 +466,12 @@ def extract_version_identifier(data: List[Dict[str, Any]]) -> str:
 
 
 def extract_version_with_repo(data: List[Dict[str, Any]]) -> Tuple[str, Optional[str]]:
-    """
-    Extract version identifier and repository from benchmark data.
-
-    Returns:
-        Tuple of (version_string, repository) where repository may be None.
-    """
-    version = extract_version_identifier(data)
-    repository = None
-
-    if data:
-        repository = data[0].get("repository")
-
-    return version, repository
+    """Extract a version label and optional repository."""
+    return extract_version_identifier(data), data[0].get("repository") if data else None
 
 
 def format_version_link(version: str, repository: Optional[str]) -> str:
-    """
-    Format version as a GitHub link if repository is available.
-
-    Returns markdown link like [ec4462b](https://github.com/owner/repo/commit/ec4462b)
-    or just the version string if no repository.
-    """
+    """Link a version to its GitHub commit when a repository is available."""
     if repository:
         return f"[{version}](https://github.com/{repository}/commit/{version})"
     return version
@@ -548,32 +479,246 @@ def format_version_link(version: str, repository: Optional[str]) -> str:
 
 def group_by_static_configuration(
     data: List[Dict[str, Any]],
+    shared_config_keys: Optional[List[str]] = None,
 ) -> Dict[Tuple, Dict[str, Any]]:
-    """
-    Group benchmark results by static configuration parameters.
-
-    Excludes table-level parameters (command, pipeline, io_threads) that vary
-    within the same test configuration.
-    """
+    """Group rows by config, excluding command, pipeline, and I/O threads."""
     # Parameters that appear in the comparison table, not in config sections
     table_parameters = {"command", "pipeline", "io_threads"}
 
-    # Get configuration keys excluding table parameters
-    config_keys = [
-        key for key in discover_config_keys(data) if key not in table_parameters
-    ]
+    base_keys = (
+        shared_config_keys
+        if shared_config_keys is not None
+        else discover_config_keys(data)
+    )
+    config_keys = [key for key in base_keys if key not in table_parameters]
 
     grouped_configs = {}
     for item in data:
         config_signature = create_config_signature(item, config_keys)
-        if config_signature not in grouped_configs:
-            grouped_configs[config_signature] = {
-                "items": [],
-                "config_keys": config_keys,
-            }
+        grouped_configs.setdefault(
+            config_signature, {"items": [], "config_keys": config_keys}
+        )
         grouped_configs[config_signature]["items"].append(item)
 
     return grouped_configs
+
+
+# Performance metric fields that a comparable benchmark row is expected to carry.
+# A row missing every one of these is not numerically comparable (e.g. a failure
+# marker), but a row that merely holds a zero value still counts as comparable.
+_PERFORMANCE_METRIC_KEYS = (
+    "rps",
+    "avg_latency_ms",
+    "p50_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+)
+
+
+def is_failed_row(item: Dict[str, Any]) -> bool:
+    """Return whether a row is explicit failure or has no performance metrics."""
+    return item.get("status") == "failed" or not any(
+        key in item for key in _PERFORMANCE_METRIC_KEYS
+    )
+
+
+def partition_failed_rows(
+    data: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split rows into ``(comparable, failed)`` using :func:`is_failed_row`."""
+    comparable: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for item in data:
+        (failed if is_failed_row(item) else comparable).append(item)
+    return comparable, failed
+
+
+def _make_hashable(value: Any) -> Any:
+    """Recursively freeze dictionaries and sequences for use in identity tuples."""
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _make_hashable(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_make_hashable(v) for v in value)
+    return value
+
+
+def _scenario_identity(item: Dict[str, Any]) -> Optional[Tuple]:
+    """Return the structural scenario identity, or ``None`` for legacy rows.
+
+    All non-metric configuration and stable environment fields participate so
+    sweeps pair independently. Failure state, display labels, and volatile host
+    readings are excluded so matching success and failure rows still pair.
+    """
+    test_id = item.get("test_id")
+    if test_id is None:
+        return None
+    config_items = tuple(
+        sorted(
+            (key, _make_hashable(value))
+            for key, value in item.items()
+            if key != "test_id"
+            and key not in _NON_IDENTITY_FIELDS
+            and key not in _VOLATILE_ENV_FIELDS
+        )
+    )
+    return (test_id,) + config_items
+
+
+def _identity_set(data: List[Dict[str, Any]]) -> set:
+    """Return the distinct structural identities present in ``data``."""
+    return {
+        identity
+        for identity in (_scenario_identity(row) for row in data)
+        if identity is not None
+    }
+
+
+def _identities_compatible(left: Tuple, right: Tuple) -> bool:
+    """Return whether identities agree on every field they have in common."""
+    if left[0] != right[0]:
+        return False
+    left_fields = dict(left[1:])
+    right_fields = dict(right[1:])
+    if not (
+        left_fields.keys() <= right_fields.keys()
+        or right_fields.keys() <= left_fields.keys()
+    ):
+        return False
+    return all(
+        left_fields[key] == right_fields[key]
+        for key in left_fields.keys() & right_fields.keys()
+    )
+
+
+def _resolve_counterpart_identity(
+    identity: Optional[Tuple], own_ids: set, other_ids: set
+) -> Optional[Tuple]:
+    """Find an exact or unambiguous schema-compatible identity on the other side."""
+    if identity is None:
+        return None
+    if identity in other_ids:
+        return identity
+
+    candidates = [
+        candidate
+        for candidate in other_ids
+        if _identities_compatible(identity, candidate)
+    ]
+    if len(candidates) != 1:
+        return None
+
+    candidate = candidates[0]
+    reverse_candidates = [
+        own for own in own_ids if _identities_compatible(candidate, own)
+    ]
+    return candidate if reverse_candidates == [identity] else None
+
+
+def _paired_identity_key(identity: Optional[Tuple], counterpart: Optional[Tuple]):
+    """Build a shared report key for identities paired across schema versions."""
+    if identity is None or counterpart is None or identity == counterpart:
+        return identity
+    return ("__schema_pair__",) + tuple(sorted((identity, counterpart), key=repr))
+
+
+def _failed_scenario_ids(failed_rows: List[Dict[str, Any]]) -> set:
+    """Collect the non-None scenario identities from a list of failed rows."""
+    return {
+        identity
+        for identity in (_scenario_identity(row) for row in failed_rows)
+        if identity is not None
+    }
+
+
+def _primary_failed_metric(metrics_filter: str) -> Tuple[str, str]:
+    """Select the healthy counterpart value shown for a failed scenario."""
+    if metrics_filter == "latency":
+        return ("avg_latency_ms", "avg_latency")
+    return ("rps", "rps")
+
+
+def collect_failed_scenarios(
+    baseline_data: List[Dict[str, Any]],
+    new_data: List[Dict[str, Any]],
+    metrics_filter: str = "all",
+) -> List[Dict[str, Any]]:
+    """Describe failures and the matching healthy side's primary metric value."""
+    metric_key, metric_label = _primary_failed_metric(metrics_filter)
+
+    def index(data: List[Dict[str, Any]]) -> Tuple[Dict[Tuple, List[Dict]], set]:
+        comparable_by_id: Dict[Tuple, List[Dict[str, Any]]] = {}
+        present_ids = _identity_set(data)
+        for row in data:
+            identity = _scenario_identity(row)
+            if identity is None:
+                continue
+            if not is_failed_row(row):
+                comparable_by_id.setdefault(identity, []).append(row)
+        return comparable_by_id, present_ids
+
+    baseline_comparable, baseline_ids = index(baseline_data)
+    new_comparable, new_ids = index(new_data)
+
+    # Use all rows so a lone failed member of a sweep still names its varying axes.
+    identities_by_test: Dict[Any, List[Dict[str, Any]]] = {}
+    for row in baseline_data + new_data:
+        identity = _scenario_identity(row)
+        if identity is not None:
+            identities_by_test.setdefault(identity[0], []).append(dict(identity[1:]))
+    varying_axes = {
+        test_id: {
+            key
+            for key in set().union(*(fields.keys() for fields in identities))
+            if key != "test_phase"
+            if len({_make_hashable(fields.get(key)) for fields in identities}) > 1
+        }
+        for test_id, identities in identities_by_test.items()
+    }
+
+    descriptors: List[Dict[str, Any]] = []
+    for side, data, own_ids, other_comparable, other_ids in (
+        ("baseline", baseline_data, baseline_ids, new_comparable, new_ids),
+        ("new", new_data, new_ids, baseline_comparable, baseline_ids),
+    ):
+        _, failed = partition_failed_rows(data)
+        for row in failed:
+            identity = _scenario_identity(row)
+            display_axes = {
+                key: row.get(key) for key in varying_axes.get(row.get("test_id"), set())
+            }
+            if row.get("config_set"):
+                display_axes["config_set"] = row["config_set"]
+            counterpart_identity = _resolve_counterpart_identity(
+                identity, own_ids, other_ids
+            )
+            counterpart_rows = other_comparable.get(counterpart_identity, [])
+            counterpart_value = (
+                calculate_mean([r.get(metric_key) for r in counterpart_rows])
+                if counterpart_rows
+                else None
+            )
+            descriptors.append(
+                {
+                    "test_id": row.get("test_id"),
+                    "test_phase": row.get("test_phase"),
+                    "command": row.get("command"),
+                    "side": side,
+                    "error": row.get("error"),
+                    "counterpart_value": counterpart_value,
+                    "counterpart_present": counterpart_identity is not None,
+                    "metric_key": metric_key,
+                    "metric_label": metric_label,
+                    "identity": identity,
+                    "pairing_identity": _paired_identity_key(
+                        identity, counterpart_identity
+                    ),
+                    "config_set": row.get("config_set"),
+                    "cluster_mode": row.get("cluster_mode"),
+                    "io_threads": row.get("io_threads"),
+                    "display_axes": display_axes,
+                }
+            )
+    return descriptors
 
 
 def create_comparison_table_data(
@@ -590,9 +735,43 @@ def create_comparison_table_data(
     baseline_version, baseline_repo = extract_version_with_repo(baseline_data)
     new_version, new_repo = extract_version_with_repo(new_data)
 
-    # Group data by static configuration
-    baseline_configs = group_by_static_configuration(baseline_data)
-    new_configs = group_by_static_configuration(new_data)
+    baseline_comparable, baseline_failed = partition_failed_rows(baseline_data)
+    new_comparable, new_failed = partition_failed_rows(new_data)
+
+    # Exclude both sides of a failure; the report renders them separately.
+    baseline_ids = _identity_set(baseline_data)
+    new_ids = _identity_set(new_data)
+    baseline_failed_ids = _failed_scenario_ids(baseline_failed)
+    new_failed_ids = _failed_scenario_ids(new_failed)
+    baseline_excluded = set(baseline_failed_ids)
+    new_excluded = set(new_failed_ids)
+    for identity in new_failed_ids:
+        counterpart = _resolve_counterpart_identity(identity, new_ids, baseline_ids)
+        if counterpart is not None:
+            baseline_excluded.add(counterpart)
+    for identity in baseline_failed_ids:
+        counterpart = _resolve_counterpart_identity(identity, baseline_ids, new_ids)
+        if counterpart is not None:
+            new_excluded.add(counterpart)
+
+    if baseline_excluded or new_excluded:
+        baseline_comparable = [
+            row
+            for row in baseline_comparable
+            if _scenario_identity(row) not in baseline_excluded
+        ]
+        new_comparable = [
+            row for row in new_comparable if _scenario_identity(row) not in new_excluded
+        ]
+
+    # Both datasets must use the same signature key space.
+    shared_config_keys = discover_config_keys(baseline_comparable + new_comparable)
+
+    # Group data by static configuration using the shared key list
+    baseline_configs = group_by_static_configuration(
+        baseline_comparable, shared_config_keys
+    )
+    new_configs = group_by_static_configuration(new_comparable, shared_config_keys)
 
     # Define available metrics with their display names
     available_metrics = [
@@ -640,6 +819,15 @@ def create_comparison_table_data(
 
         # Create configuration dictionary for display
         config_dict = dict(zip(config_keys, config_signature))
+
+        # ``config_set`` is frozen outside scalar keys; restore it for display.
+        group_items = baseline_group["items"] or new_group["items"]
+        config_set_label = _format_config_set(
+            group_items[0].get("config_set") if group_items else None
+        )
+        if config_set_label:
+            config_keys = list(config_keys) + ["config_set"]
+            config_dict["config_set"] = config_set_label
 
         # Generate comparison table rows for this configuration
         table_rows = _generate_table_rows_for_config(
@@ -918,13 +1106,7 @@ def _extract_common_and_unique_config(
 def _generate_summary(
     config_groups: List[Dict],
 ) -> Tuple[List[Dict], List[Dict], int, int]:
-    """
-    Generate summary of significant findings from all config groups.
-
-    Returns:
-        Tuple of (improvements, regressions, no_change_count, insufficient_data_count)
-        where improvements and regressions are lists of dicts with test info and change.
-    """
+    """Collect significant changes and unchanged/insufficient counts."""
     improvements = []
     regressions = []
     no_change_count = 0
@@ -987,6 +1169,142 @@ def _generate_summary(
     return improvements, regressions, no_change_count, insufficient_data_count
 
 
+def _sanitize_table_cell(text: Optional[str]) -> str:
+    """Render untrusted text as a literal code span inside a Markdown table."""
+    if text is None:
+        return ""
+    s = str(text).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    s = s.strip()
+    if not s:
+        return ""
+
+    # GitHub creates mentions and issue/email links after decoding character
+    # references. Code spans suppress that post-processing. Use a fence longer
+    # than any run in the value so embedded backticks cannot close the span.
+    longest_run = current_run = 0
+    for char in s:
+        current_run = current_run + 1 if char == "`" else 0
+        longest_run = max(longest_run, current_run)
+    fence = "`" * (longest_run + 1)
+
+    # GFM finds table separators before parsing inline code, so pipes still
+    # need a backslash at the table layer. The backslash is not displayed.
+    s = s.replace("|", r"\|")
+    return f"{fence} {s} {fence}"
+
+
+def _config_set_text(config_set: Optional[Dict[str, Any]]) -> str:
+    """Return sorted ``config_set`` key/value pairs as plain text."""
+    if not config_set:
+        return ""
+    return "; ".join(f"{k}={config_set[k]}" for k in sorted(config_set, key=str))
+
+
+def _format_config_set(config_set: Optional[Dict[str, Any]]) -> str:
+    """Render sorted ``config_set`` key/value pairs as literal text."""
+    return _sanitize_table_cell(_config_set_text(config_set))
+
+
+def _failed_side_cell(
+    own_entry: Optional[Dict[str, Any]],
+    other_entry: Optional[Dict[str, Any]],
+) -> str:
+    """Render ``FAILED``, the healthy counterpart value, or ``n/a``."""
+    if own_entry is not None:
+        return "**FAILED**"
+    if other_entry is None:
+        return "n/a"
+    value = other_entry.get("counterpart_value")
+    if value is None:
+        return "n/a"
+    label = other_entry.get("metric_label", "")
+    return _sanitize_table_cell(f"{_format_with_sig_figs(value)} {label}".strip())
+
+
+def _failed_error_cell(
+    baseline_entry: Optional[Dict[str, Any]],
+    new_entry: Optional[Dict[str, Any]],
+) -> str:
+    """Render one error, or side-prefixed errors when both sides failed."""
+    parts = []
+    if baseline_entry is not None:
+        parts.append(("baseline", baseline_entry.get("error")))
+    if new_entry is not None:
+        parts.append(("new", new_entry.get("error")))
+
+    def clean(err: Optional[str]) -> str:
+        return str(err).strip() if err else "no error recorded"
+
+    if len(parts) == 1:
+        error_text = clean(parts[0][1])
+    else:
+        error_text = "; ".join(f"{side}: {clean(err)}" for side, err in parts)
+    return _sanitize_table_cell(error_text)
+
+
+def _failed_scenario_label(descriptor: Dict[str, Any]) -> str:
+    """Render a scenario id plus config axes that distinguish failed rows."""
+    label = str(descriptor.get("test_id") or "unknown")
+    axis_bits: List[str] = []
+    aliases = {"cluster_mode": "cluster"}
+    for key, value in sorted(descriptor.get("display_axes", {}).items()):
+        if key == "config_set":
+            axis_bits.append(_config_set_text(value))
+        elif value is not None:
+            name = aliases.get(key, key)
+            axis_bits.append(f"{name}={value}")
+
+    if axis_bits:
+        label = f"{label} ({'; '.join(axis_bits)})"
+    return _sanitize_table_cell(label)
+
+
+def _format_failed_scenarios_section(
+    failed_scenarios: List[Dict[str, Any]],
+    baseline_version: str,
+    new_version: str,
+) -> List[str]:
+    """Render failures by full scenario identity as a two-sided table."""
+    grouped: Dict[Any, List[Dict[str, Any]]] = {}
+    for failure in failed_scenarios:
+        key = failure.get("pairing_identity", failure.get("identity"))
+        if key is None:
+            key = ("__no_id__", id(failure))
+        grouped.setdefault(key, []).append(failure)
+
+    lines = [
+        f"## ⚠️ {len(grouped)} failed scenario(s)",
+        "",
+        "Excluded from the numeric comparison (a failure has nothing to compare "
+        "against); the measured value is shown for whichever side succeeded:",
+        "",
+        f"| Scenario | Phase | Command | "
+        f"{_sanitize_table_cell(baseline_version)} | "
+        f"{_sanitize_table_cell(new_version)} | Error |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+
+    for entries in grouped.values():
+        baseline_entry = next((e for e in entries if e["side"] == "baseline"), None)
+        new_entry = next((e for e in entries if e["side"] == "new"), None)
+        sample = entries[0]
+
+        test_id = _failed_scenario_label(sample)
+        phase = _sanitize_table_cell(sample.get("test_phase"))
+        command = _sanitize_table_cell(sample.get("command"))
+        baseline_cell = _failed_side_cell(baseline_entry, new_entry)
+        new_cell = _failed_side_cell(new_entry, baseline_entry)
+        error_cell = _failed_error_cell(baseline_entry, new_entry)
+
+        lines.append(
+            f"| {test_id} | {phase} | {command} | "
+            f"{baseline_cell} | {new_cell} | {error_cell} |"
+        )
+
+    lines.append("")
+    return lines
+
+
 def format_comparison_report(
     config_groups: List[Dict],
     baseline_version: str,
@@ -995,15 +1313,10 @@ def format_comparison_report(
     new_repo: Optional[str] = None,
     core_commit_baseline: Optional[str] = None,
     core_commit_new: Optional[str] = None,
+    failed_scenarios: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    """
-    Format the comparison data as a markdown report.
-
-    Structure:
-    - Summary at top (significant findings)
-    - Collapsible details section with full tables
-    """
-    if not config_groups:
+    """Format summary, failures, and comparison tables as Markdown."""
+    if not config_groups and not failed_scenarios:
         return "No data to compare."
 
     # Format version headers with links if repositories available
@@ -1055,6 +1368,13 @@ def format_comparison_report(
     if summary_parts:
         report_lines.append(f"*{', '.join(summary_parts)}*")
         report_lines.append("")
+
+    if failed_scenarios:
+        report_lines.extend(
+            _format_failed_scenarios_section(
+                failed_scenarios, baseline_version, new_version
+            )
+        )
 
     # Collapsible details section
     report_lines.append("<details>")
@@ -1207,31 +1527,17 @@ def _get_significance_indicator(
     change_percent: float,
     metric: str,
 ) -> str:
-    """
-    Determine significance indicator based on CI overlap.
-
-    Returns:
-        ✅ - Significant improvement (new CI above baseline CI)
-        ❌ - Significant regression (new CI below baseline CI)
-        ➖ - Not significant (CIs overlap)
-        ❔ - Insufficient data (either n <= 1)
-    """
-    # Insufficient data if either has only one run
+    """Classify CI overlap, accounting for whether lower values are better."""
     if baseline_run_count <= 1 or new_run_count <= 1:
         return "❔"
 
-    # For latency metrics, lower values are better (less delay)
-    # For throughput metrics (rps), higher values are better
     lower_is_better = "latency" in metric
 
-    # No overlap: new's lower bound > baseline's upper bound means new value increased
     if new_ci_lower > baseline_ci_upper:
         return "❌" if lower_is_better else "✅"
-    # No overlap: new's upper bound < baseline's lower bound means new value decreased
-    elif new_ci_upper < baseline_ci_lower:
+    if new_ci_upper < baseline_ci_lower:
         return "✅" if lower_is_better else "❌"
-    else:
-        return "➖"  # CIs overlap, not significant
+    return "➖"
 
 
 def calculate_percent_change_with_ci(
@@ -1242,16 +1548,7 @@ def calculate_percent_change_with_ci(
     baseline_run_count: int,
     new_run_count: int,
 ) -> Tuple[float, Optional[float]]:
-    """
-    Calculate percentage change with optional CI margin via uncertainty propagation.
-
-    Uses standard errors (σ/√n) for propagation through the ratio, then scales
-    by t-critical to produce a CI at CONFIDENCE_LEVEL.
-
-    Returns:
-        Tuple of (change_percent, ci_margin) where ci_margin is None when
-        there is insufficient data for uncertainty propagation.
-    """
+    """Return percentage change and an optional propagated CI margin."""
     if baseline_value == 0:
         return (0.0, None)
 
@@ -1322,13 +1619,7 @@ _UNIT_SUFFIXES = [
 
 
 def _format_with_sig_figs(value: float, uncertainty: float = 0.0) -> str:
-    """
-    Format a number with appropriate significant figures based on uncertainty.
-    Uses K/M/B/T suffixes for readability.
-
-    If uncertainty is provided, precision is determined by the uncertainty magnitude.
-    Otherwise, uses default precision.
-    """
+    """Format a value using uncertainty-aware precision and unit suffixes."""
     if value == 0:
         return "0"
 
@@ -1412,21 +1703,11 @@ def generate_comparison_graphs(
 
     # Collect all data for graphing
     all_rows = []
-    config_info = []
     for group in config_groups:
         all_rows.extend(group["table_rows"])
-        # Extract config info for legend
-        config_dict = group["config_dict"]
-        config_str = ", ".join(
-            [f"{k}={v}" for k, v in config_dict.items() if v is not None]
-        )
-        config_info.append(config_str)
 
     if not all_rows:
         return []
-
-    # Get unique config string for legends
-    unique_configs = list(set(config_info))
 
     # Generate single consolidated metrics comparison graph
     comprehensive_graph_path = generate_consolidated_metrics_graph(
@@ -1494,7 +1775,7 @@ def generate_variance_line_graphs(
             if graph_path:
                 generated_files.append(graph_path)
 
-    except Exception as e:
+    except Exception:
         pass  # Silently handle errors in graph generation
 
     return generated_files
@@ -1676,7 +1957,7 @@ def _generate_single_variance_graph(
 
         return str(graph_path)
 
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -1819,7 +2100,7 @@ def generate_consolidated_metrics_graph(
 
         return str(graph_path)
 
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -1922,9 +2203,18 @@ def main():
     baseline_data = load_benchmark_data(baseline_file)
     new_data = load_benchmark_data(new_file)
 
+    # Collect failed / non-comparable scenarios from the RAW rows (before
+    # averaging) so their recorded error text is preserved for the report. The
+    # metrics_filter selects which surviving-side metric to surface.
+    failed_scenarios = collect_failed_scenarios(baseline_data, new_data, metrics_filter)
+
+    # Union-based key discovery over both raw datasets, threaded into the
+    # run-averaging path so both sides group runs over an identical key space.
+    shared_config_keys = discover_config_keys(baseline_data + new_data)
+
     # Always apply dynamic averaging for consistent comparisons
-    baseline_data = average_multiple_runs(baseline_data)
-    new_data = average_multiple_runs(new_data)
+    baseline_data = average_multiple_runs(baseline_data, shared_config_keys)
+    new_data = average_multiple_runs(new_data, shared_config_keys)
 
     # Generate comparison data
     config_groups, baseline_version, new_version, baseline_repo, new_repo = (
@@ -1968,6 +2258,7 @@ def main():
         new_repo,
         core_commit_baseline=core_commit_baseline,
         core_commit_new=core_commit_new,
+        failed_scenarios=failed_scenarios,
     )
 
     # Create final report with metadata

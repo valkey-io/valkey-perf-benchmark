@@ -79,6 +79,26 @@ def validate_explicit_cpu_ranges(server_range: str, client_range: str) -> None:
         )
 
 
+def format_core_list(cores: List[int]) -> str:
+    """Render core IDs as a taskset-compatible string (inverse of parse_core_range).
+
+    Consecutive runs collapse to "a-b", isolated cores stay bare, and parts join
+    with commas (e.g. [11, 20, 21] -> "11,20-21"). Order is preserved as given.
+    """
+    if not cores:
+        raise ValueError("Cannot format an empty core list")
+    parts = []
+    run_start = prev = cores[0]
+    for core in cores[1:]:
+        if core == prev + 1:
+            prev = core
+            continue
+        parts.append(f"{run_start}-{prev}" if prev > run_start else str(run_start))
+        run_start = prev = core
+    parts.append(f"{run_start}-{prev}" if prev > run_start else str(run_start))
+    return ",".join(parts)
+
+
 def parse_core_range(range_str: str) -> List[int]:
     """Parse CPU core range string to list of core IDs.
 
