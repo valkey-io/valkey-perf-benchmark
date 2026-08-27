@@ -8,24 +8,7 @@ import logging
 
 
 class MetricsProcessor:
-    """Process metric output from ``valkey-benchmark``.
-
-    Parameters
-    ----------
-    commit_id : str
-        Git commit identifier of the tested build.
-    cluster_mode : bool
-        Whether cluster mode was enabled for the benchmark.
-    tls_mode : bool
-        Whether TLS was enabled for the benchmark.
-    commit_time : str
-        ISO8601 commit timestamp.
-    repository : str, optional
-        GitHub repository in "owner/repo" format (e.g., "valkey-io/valkey").
-    environment_metadata : dict, optional
-        System environment metadata (CPU governor, turbo state, kernel, etc.).
-        Flattened into top-level ``env_``-prefixed keys in each metric entry.
-    """
+    """Build and persist metric rows from ``valkey-benchmark`` output."""
 
     def __init__(
         self,
@@ -49,6 +32,62 @@ class MetricsProcessor:
         self.repository = repository
         self.environment_metadata = environment_metadata
 
+    def build_base_metadata(
+        self,
+        command: str,
+        data_size: int,
+        pipeline: int,
+        clients: int,
+        requests: Optional[int] = None,
+        warmup: Optional[int] = None,
+        duration: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Build metadata shared by successful and failed metric rows.
+
+        Performance fields must remain absent; their absence identifies failed
+        rows. Optional identity fields are emitted only when configured.
+        """
+        metadata: Dict[str, object] = {
+            "timestamp": self.commit_time,
+            "commit": self.commit_id,
+            "repository": self.repository,
+            "command": command,
+            "data_size": int(data_size),
+            "pipeline": int(pipeline),
+            "clients": int(clients),
+            "cluster_mode": self.cluster_mode,
+            "tls": self.tls_mode,
+        }
+
+        if duration is not None:
+            metadata["duration"] = int(duration)
+            metadata["benchmark_mode"] = "duration"
+        elif requests is not None:
+            metadata["requests"] = int(requests)
+            metadata["benchmark_mode"] = "requests"
+        else:
+            logging.warning("Neither requests nor duration specified")
+            metadata["benchmark_mode"] = "unknown"
+
+        if self.io_threads is not None:
+            metadata["io_threads"] = self.io_threads
+
+        if self.benchmark_threads is not None:
+            metadata["valkey_benchmark_threads"] = self.benchmark_threads
+
+        if warmup is not None:
+            metadata["warmup"] = warmup
+
+        if self.architecture is not None:
+            metadata["architecture"] = self.architecture
+
+        # Downstream tables require flat columns.
+        if self.environment_metadata:
+            for key, value in self.environment_metadata.items():
+                metadata[f"env_{key}"] = value
+
+        return metadata
+
     def create_metrics(
         self,
         benchmark_data: Dict[str, Any],
@@ -60,31 +99,13 @@ class MetricsProcessor:
         warmup: Optional[int] = None,
         duration: Optional[int] = None,
     ) -> Optional[Dict[str, object]]:
-        """Create a complete metrics dictionary from CSV output and benchmark parameters.
-
-        Parameters
-        ----------
-        benchmark_data : Dict[str, Any]
-            CSV output from ``valkey-benchmark``.
-        command : str
-            Benchmark command that was executed.
-        data_size : int
-            Size of the payload in bytes.
-        pipeline : int
-            Number of commands pipelined.
-        clients : int
-            Concurrent client connections used.
-        requests : int
-            Total number of requests issued.
-        warmup : int, optional
-            Warmup time in seconds.
-        """
+        """Add parsed performance measurements to the row metadata."""
         if not benchmark_data:
             logging.warning("Empty benchmark output received")
             return None
 
         try:
-            # Helper function to safely convert to float
+
             def safe_float(value, default=0.0):
                 try:
                     return float(value) if value else default
@@ -94,64 +115,32 @@ class MetricsProcessor:
                     )
                     return default
 
-            metrics_dict = {
-                "timestamp": self.commit_time,
-                "commit": self.commit_id,
-                "repository": self.repository,
-                "command": command,
-                "data_size": int(data_size),
-                "pipeline": int(pipeline),
-                "clients": int(clients),
-                "rps": safe_float(benchmark_data.get("rps")),
-                "avg_latency_ms": safe_float(benchmark_data.get("avg_latency_ms")),
-                "min_latency_ms": safe_float(benchmark_data.get("min_latency_ms")),
-                "p50_latency_ms": safe_float(benchmark_data.get("p50_latency_ms")),
-                "p95_latency_ms": safe_float(benchmark_data.get("p95_latency_ms")),
-                "p99_latency_ms": safe_float(benchmark_data.get("p99_latency_ms")),
-                "max_latency_ms": safe_float(benchmark_data.get("max_latency_ms")),
-                "cluster_mode": self.cluster_mode,
-                "tls": self.tls_mode,
-            }
+            metrics_dict = self.build_base_metadata(
+                command,
+                data_size,
+                pipeline,
+                clients,
+                requests=requests,
+                warmup=warmup,
+                duration=duration,
+            )
 
-            # Add requests or duration based on benchmark mode
-            if duration is not None:
-                metrics_dict["duration"] = int(duration)
-                metrics_dict["benchmark_mode"] = "duration"
-            elif requests is not None:
-                metrics_dict["requests"] = int(requests)
-                metrics_dict["benchmark_mode"] = "requests"
-            else:
-                logging.warning("Neither requests nor duration specified")
-                metrics_dict["benchmark_mode"] = "unknown"
-
-            # Add io_threads to metrics if it was specified
-            if self.io_threads is not None:
-                metrics_dict["io_threads"] = self.io_threads
-
-            # Add benchmark_threads to metrics if it was specified
-            if self.benchmark_threads is not None:
-                metrics_dict["valkey_benchmark_threads"] = self.benchmark_threads
-
-            # Add warmup to metrics if it was specified
-            if warmup is not None:
-                metrics_dict["warmup"] = warmup
-
-            # Add architecture to metrics if it was specified
-            if self.architecture is not None:
-                metrics_dict["architecture"] = self.architecture
-
-            # Add environment metadata for reproducibility. Flattened into
-            # top-level "env_"-prefixed keys because metrics entries are
-            # converted to columns downstream (nested dicts don't map to
-            # columns).
-            if self.environment_metadata:
-                for key, value in self.environment_metadata.items():
-                    metrics_dict[f"env_{key}"] = value
+            metrics_dict.update(
+                {
+                    "rps": safe_float(benchmark_data.get("rps")),
+                    "avg_latency_ms": safe_float(benchmark_data.get("avg_latency_ms")),
+                    "min_latency_ms": safe_float(benchmark_data.get("min_latency_ms")),
+                    "p50_latency_ms": safe_float(benchmark_data.get("p50_latency_ms")),
+                    "p95_latency_ms": safe_float(benchmark_data.get("p95_latency_ms")),
+                    "p99_latency_ms": safe_float(benchmark_data.get("p99_latency_ms")),
+                    "max_latency_ms": safe_float(benchmark_data.get("max_latency_ms")),
+                }
+            )
 
             return metrics_dict
         except Exception:
-            logging.exception(f"Error parsing CSV output")
-            logging.debug(f"Raw output: {benchmark_csv_data}")
+            logging.exception("Error parsing CSV output")
+            logging.debug(f"Raw output: {benchmark_data}")
             return None
 
     def write_metrics(
@@ -165,17 +154,15 @@ class MetricsProcessor:
         metrics_file = results_dir / "metrics.json"
         metrics = []
 
-        # Ensure results directory exists
         results_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load existing metrics if file exists
         if metrics_file.exists() and metrics_file.stat().st_size > 0:
             try:
                 with metrics_file.open("r", encoding="utf-8") as f:
                     metrics = json.load(f)
                 if not isinstance(metrics, list):
                     logging.warning(
-                        f"Existing metrics file contains non-list data, starting fresh"
+                        "Existing metrics file contains non-list data, starting fresh"
                     )
                     metrics = []
             except json.JSONDecodeError as e:
@@ -187,10 +174,8 @@ class MetricsProcessor:
                 logging.error(f"Error reading existing metrics file: {e}")
                 raise
 
-        # Extend metrics with new_metrics
         metrics.extend(new_metrics)
 
-        # Write metrics with atomic operation
         temp_file = metrics_file.with_suffix(".tmp")
         try:
             with temp_file.open("w", encoding="utf-8") as f:

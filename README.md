@@ -317,6 +317,8 @@ Create benchmark configurations in JSON format. Each object represents a single 
 ]
 ```
 
+Internally, this basic format is compiled into the scenario model at load time: each combination of the list-valued fields (requests x keyspacelen x data_sizes x pipelines x clients x commands) becomes a generated test group containing a single scenario, and the runner executes only the `test_groups` path. This is purely an internal translation: benchmark invocations and `metrics.json` outputs are unchanged, and both the basic format and the `test_groups` format (see Module Config Structure) remain fully supported.
+
 #### Custom Server Configs Examples
 
 Add server configs the benchmark does not manage (e.g. memory limits, timeouts):
@@ -661,6 +663,18 @@ Module tests use structured `test_groups` with `scenarios`:
   "tls_mode": false
 }
 ```
+
+**Scenario fields:** Each scenario names its workload with exactly one of `test` or `command` (except `type: mixed` scenarios, which use `writes`/`reads` sub-scenarios instead):
+
+| Field            | Description                                                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `test`           | Predefined valkey-benchmark test name, run as `-t NAME`. Used by compiled basic-format configs.                                    |
+| `command`        | Arbitrary command line, run after `--`. Supports `__rand_int__` placeholders.                                                      |
+| `data_size`      | Payload size in bytes, passed as `-d N` when present.                                                                              |
+| `keyspacelen`    | Per-scenario key space size, passed as `-r N`. Falls back to the config-level `keyspacelen[0]`.                                    |
+| `warmup_inline`  | Adds `--warmup N` to the main benchmark run. Distinct from `warmup`, which performs a separate warm-up run first.                  |
+| `restart_before` | Restarts the managed server before the scenario runs (flushes the database instead when using a running server).                   |
+| `populate_with`  | Write workload that seeds the keyspace before a read test. For a `test` scenario it is a predefined write name (e.g. `SET`), run as `-t NAME`; for a `command` scenario it is an arbitrary write command string (e.g. `SET key:__rand_int__ __data__`), run after `--`. The populate pass runs sequentially and shares the main run's seed, so the read hits the seeded keys. |
 
 ### Cluster Mode Support
 

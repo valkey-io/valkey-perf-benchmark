@@ -2,6 +2,9 @@
 
 import pytest
 
+from valkey_benchmark import ClientRunner
+from process_metrics import MetricsProcessor
+
 from utils.compare_benchmark_results import (
     calculate_mean,
     calculate_stdev,
@@ -11,6 +14,7 @@ from utils.compare_benchmark_results import (
     average_multiple_runs,
     discover_config_keys,
     group_by_command,
+    group_by_static_configuration,
     calculate_prediction_interval_percentage,
     calculate_confidence_interval_percentage,
     calculate_percent_change_with_ci,
@@ -19,6 +23,9 @@ from utils.compare_benchmark_results import (
     create_config_sort_key,
     summarize_benchmark_results,
     create_comparison_table_data,
+    format_comparison_report,
+    collect_failed_scenarios,
+    _scenario_identity,
     _format_with_sig_figs,
     _format_stats_only,
     _format_percent_change,
@@ -26,6 +33,161 @@ from utils.compare_benchmark_results import (
     _get_significance_indicator,
     CONFIDENCE_PERCENT,
 )
+
+
+def _row_stamper(module_commit=None, module_commit_timestamp=None, config_name=None):
+    """Minimal runner shell for exercising the real row-stamping methods."""
+    runner = object.__new__(ClientRunner)
+    runner.module_commit = module_commit
+    runner.module_commit_timestamp = module_commit_timestamp
+    runner.config_name = config_name
+    return runner
+
+
+def _scenario_parts(test_id):
+    group, _, scenario = str(test_id).partition("_")
+    return (int(group) if group.isdigit() else 1), scenario or str(test_id)
+
+
+def real_failure_row(
+    test_id,
+    error,
+    *,
+    command="HSET",
+    phase="write",
+    config_set=None,
+    cluster_mode=False,
+    tls_mode=False,
+    io_threads=4,
+    data_size=16,
+    pipeline=1,
+    clients=50,
+    requests=1000,
+    duration=None,
+    commit="new123",
+    repository=None,
+    module_commit=None,
+    module_commit_timestamp=None,
+    config_name=None,
+    **extra,
+):
+    """Build a failure row through the production marker path."""
+    group_id, scenario_id = _scenario_parts(test_id)
+    runner = _row_stamper(
+        module_commit=module_commit,
+        module_commit_timestamp=module_commit_timestamp,
+        config_name=config_name,
+    )
+    processor = MetricsProcessor(
+        commit_id=commit,
+        cluster_mode=cluster_mode,
+        tls_mode=tls_mode,
+        commit_time="<TS>",
+        io_threads=io_threads,
+        repository=repository,
+    )
+    marker = runner._create_failure_marker(
+        processor,
+        {
+            "command": command,
+            "data_size": data_size,
+            "pipeline": pipeline,
+            "clients": clients,
+            "duration": duration,
+        },
+        test_id=f"{group_id}_{scenario_id}",
+        test_phase=phase,
+        group_id=group_id,
+        scenario_id=scenario_id,
+        error=error,
+        requests=requests,
+        config_set=config_set,
+    )
+    marker.update(extra)
+    return marker
+
+
+def real_success_row(
+    *,
+    test_id=None,
+    test_phase="write",
+    command="GET",
+    pipeline=1,
+    io_threads=4,
+    data_size=16,
+    clients=50,
+    rps=100000.0,
+    avg_latency_ms=0.5,
+    p50_latency_ms=0.4,
+    p95_latency_ms=0.8,
+    p99_latency_ms=1.2,
+    config_set=None,
+    cluster_mode=False,
+    tls_mode=False,
+    commit="base123",
+    repository=None,
+    **extra,
+):
+    """Build a success row through the production metrics path."""
+    proc = MetricsProcessor(
+        commit_id=commit,
+        cluster_mode=cluster_mode,
+        tls_mode=tls_mode,
+        commit_time="<TS>",
+        io_threads=io_threads,
+        repository=repository,
+    )
+    bench = {
+        "rps": str(rps),
+        "avg_latency_ms": str(avg_latency_ms),
+        "min_latency_ms": "0.1",
+        "p50_latency_ms": str(p50_latency_ms),
+        "p95_latency_ms": str(p95_latency_ms),
+        "p99_latency_ms": str(p99_latency_ms),
+        "max_latency_ms": "5.0",
+    }
+    row = proc.create_metrics(
+        bench, command, data_size, pipeline, clients, requests=1000
+    )
+    if test_id is not None:
+        group_id, scenario_id = _scenario_parts(test_id)
+        row["status"] = "success"
+        _row_stamper()._apply_row_metadata(
+            row,
+            test_id=test_id,
+            test_phase=test_phase,
+            group_id=group_id,
+            scenario_id=scenario_id,
+            config_set=config_set or {},
+        )
+    row.update(extra)
+    return row
+
+
+def _comparison(baseline, new, metrics_filter="all"):
+    """Return failed descriptors, comparison groups, and the rendered report."""
+    failed = collect_failed_scenarios(baseline, new, metrics_filter)
+    result = create_comparison_table_data(baseline, new, metrics_filter)
+    groups, baseline_version, new_version, baseline_repo, new_repo = result
+    report = format_comparison_report(
+        groups,
+        baseline_version,
+        new_version,
+        baseline_repo,
+        new_repo,
+        failed_scenarios=failed,
+    )
+    return failed, groups, report
+
+
+def _metric_rows(groups, metric="rps"):
+    return [
+        row
+        for group in groups
+        for row in group["table_rows"]
+        if row["metric"] == metric
+    ]
+
 
 # --- calculate_mean ---
 
@@ -317,6 +479,75 @@ class TestDiscoverConfigKeys:
         assert "rps_pi_lower" not in keys
         assert "rps_pi_upper" not in keys
 
+    def test_excludes_only_volatile_env_field(self):
+        # env_-prefixed reproducibility metadata (upstream PR #55) is split by
+        # classification, NOT by a blanket prefix rule: only the VOLATILE live
+        # reading (env_cpu_freq_mhz_at_setup) is excluded so same-host runs still
+        # pair, while STABLE compatibility fields (cpu_model, kernel_version, ...)
+        # participate in the signature so incompatible environments do not
+        # silently compare.
+        data = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "env_cpu_model": "golden-cpu",
+                "env_cpu_freq_mhz_at_setup": 3200,
+                "env_kernel_version": "golden-kernel",
+            }
+        ]
+        keys = discover_config_keys(data)
+        assert "command" in keys
+        assert "pipeline" in keys
+        # Volatile live reading is excluded.
+        assert "env_cpu_freq_mhz_at_setup" not in keys
+        # Stable compatibility fields participate.
+        assert "env_cpu_model" in keys
+        assert "env_kernel_version" in keys
+
+    def test_unknown_env_field_defaults_to_participating(self):
+        # A future/unknown env_ field not enumerated in _VOLATILE_ENV_FIELDS
+        # defaults to the STABLE side (participates) -- the safer direction, so a
+        # newly-added environment axis is never silently ignored.
+        data = [{"command": "GET", "env_some_future_knob": "x"}]
+        keys = discover_config_keys(data)
+        assert "env_some_future_knob" in keys
+
+    def test_env_only_difference_yields_matching_signatures(self):
+        # Two datasets identical except for a live env_ reading (e.g. CPU
+        # frequency sampled at setup) must group under the SAME static config
+        # signature, so group_by_static_configuration finds a shared group and
+        # the comparison table is non-empty.
+        baseline = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "io_threads": 4,
+                "clients": 50,
+                "data_size": 16,
+                "rps": 100000.0,
+                "env_cpu_freq_mhz_at_setup": 3200,
+            }
+        ]
+        new = [
+            {
+                "command": "GET",
+                "pipeline": 1,
+                "io_threads": 4,
+                "clients": 50,
+                "data_size": 16,
+                "rps": 101000.0,
+                "env_cpu_freq_mhz_at_setup": 3105,
+            }
+        ]
+
+        baseline_groups = group_by_static_configuration(baseline)
+        new_groups = group_by_static_configuration(new)
+        shared = set(baseline_groups) & set(new_groups)
+        assert len(shared) == 1, (
+            "datasets differing only in an env_ value must share a config "
+            f"signature; baseline={list(baseline_groups)} new={list(new_groups)}"
+        )
+
 
 # --- group_by_command ---
 
@@ -437,18 +668,42 @@ class TestExtractVersionIdentifier:
 
 class TestCreateConfigSignature:
     def test_returns_tuple_of_values(self):
+        # A trailing frozen config_set component (None when absent) is always
+        # appended so distinct config_sets never collapse into one group.
         item = {"command": "GET", "pipeline": 1, "data_size": 64}
         keys = ["command", "pipeline", "data_size"]
-        assert create_config_signature(item, keys) == ("GET", 1, 64)
+        assert create_config_signature(item, keys) == ("GET", 1, 64, None)
 
     def test_missing_keys_return_none(self):
         item = {"command": "GET"}
         keys = ["command", "missing_key"]
-        assert create_config_signature(item, keys) == ("GET", None)
+        assert create_config_signature(item, keys) == ("GET", None, None)
 
-    def test_empty_keys_returns_empty_tuple(self):
+    def test_empty_keys_returns_config_set_component_only(self):
         item = {"command": "GET"}
-        assert create_config_signature(item, []) == ()
+        # No config keys -> just the trailing (None) config_set component.
+        assert create_config_signature(item, []) == (None,)
+
+    def test_config_set_frozen_into_trailing_component(self):
+        # A config_set dict is frozen into a stable, order-independent component
+        # so two distinct config_sets produce two distinct signatures.
+        keys = ["command"]
+        sig_1gb = create_config_signature(
+            {"command": "GET", "config_set": {"maxmemory": "1gb"}}, keys
+        )
+        sig_4gb = create_config_signature(
+            {"command": "GET", "config_set": {"maxmemory": "4gb"}}, keys
+        )
+        assert sig_1gb != sig_4gb
+        assert sig_1gb == ("GET", (("maxmemory", "1gb"),))
+
+    def test_empty_config_set_matches_absent(self):
+        # An empty config_set collapses to the same None component as an absent
+        # one, so single-config runs key exactly as before.
+        keys = ["command"]
+        assert create_config_signature(
+            {"command": "GET", "config_set": {}}, keys
+        ) == create_config_signature({"command": "GET"}, keys)
 
 
 # --- create_config_sort_key ---
@@ -868,3 +1123,855 @@ class TestComparisonPipeline:
             )
             == "❌"
         )
+
+
+# --- Union key discovery + failed-scenario reporting ---
+
+
+class TestUnionKeyDiscoveryAndFailedScenarios:
+    def _row(self, **overrides):
+        return real_success_row(**overrides)
+
+    def _failure(
+        self,
+        test_id,
+        error,
+        side_commit,
+        phase="write",
+        command="HSET",
+        config_set=None,
+        cluster_mode=False,
+        **extra,
+    ):
+        return real_failure_row(
+            test_id,
+            error,
+            phase=phase,
+            command=command,
+            config_set=config_set,
+            cluster_mode=cluster_mode,
+            commit=side_commit,
+            **extra,
+        )
+
+    def test_union_key_discovery_matches_across_extra_field(self):
+        baseline = [
+            self._row(test_id="1_a"),
+            self._row(test_id="1_b", command="SET"),
+        ]
+        new = [
+            self._row(test_id="1_a", extra_field="only-in-new"),
+            self._row(test_id="1_b", command="SET"),
+        ]
+
+        per_dataset_shared = set(group_by_static_configuration(baseline)) & set(
+            group_by_static_configuration(new)
+        )
+        assert len(per_dataset_shared) == 0
+
+        shared_keys = discover_config_keys(baseline + new)
+        union_shared = set(group_by_static_configuration(baseline, shared_keys)) & set(
+            group_by_static_configuration(new, shared_keys)
+        )
+        assert len(union_shared) == 1
+
+    def test_union_keys_survive_metrics_schema_drift_through_pipeline(self):
+        baseline = [
+            self._row(test_id="1_a", rps=100000.0),
+            self._row(test_id="1_b", rps=100000.0),
+        ]
+        new = [
+            self._row(test_id="1_a", rps=120000.0, commit="new123"),
+            self._row(
+                test_id="1_b", rps=130000.0, commit="new123", keyspacelen=1000000
+            ),
+        ]
+
+        assert "keyspacelen" not in discover_config_keys(baseline)
+        assert "keyspacelen" in discover_config_keys(new)
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+        matched = [
+            r
+            for g in groups
+            if g["config_dict"].get("test_id") == "1_a"
+            for r in g["table_rows"]
+            if r["metric"] == "rps"
+        ]
+        assert len(matched) == 1
+        assert matched[0]["baseline_value"] == pytest.approx(100000.0)
+        assert matched[0]["new_value"] == pytest.approx(120000.0)
+        assert matched[0]["change"] == pytest.approx(20.0)
+
+        assert len(groups) == 3
+
+    def test_failed_scenario_pairs_across_one_sided_schema_field(self):
+        baseline = [self._row(test_id="1_a", rps=123456.0)]
+        new = [self._failure("1_a", "client failed", "new123", keyspacelen=1000000)]
+
+        failed, groups, report = _comparison(baseline, new, "rps")
+
+        assert failed[0]["counterpart_present"] is True
+        assert failed[0]["counterpart_value"] == pytest.approx(123456.0)
+        assert _metric_rows(groups) == []
+        assert "123K rps" in report
+        assert "-100.0%" not in report
+
+    def test_schema_fallback_refuses_ambiguous_one_to_many_match(self):
+        baseline = [self._row(test_id="1_a", rps=123456.0)]
+        new = [
+            self._failure("1_a", "client failed", "new123", keyspacelen=1000),
+            self._row(test_id="1_a", commit="new123", keyspacelen=2000, rps=200000.0),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new, "rps")
+
+        assert failed[0]["counterpart_present"] is False
+        assert failed[0]["counterpart_value"] is None
+
+    def test_failed_scenario_does_not_poison_healthy_scenario(self):
+        baseline = [
+            self._row(test_id="1_a", command="HSET"),
+            self._row(test_id="1_b", command="FT.SEARCH"),
+        ]
+        new = [
+            self._failure("1_a", "No results", "new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+
+        assert len(groups) == 1
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["change"] == pytest.approx(0.0)
+
+    def test_failed_in_new_labeled_not_regression(self):
+        baseline = [
+            self._row(test_id="1_a", command="HSET"),
+            self._row(test_id="1_b", command="FT.SEARCH"),
+        ]
+        new = [
+            self._failure("1_a", "boom benchmark crashed", "new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        _, _, report = _comparison(baseline, new)
+
+        assert "failed scenario" in report.lower()
+        assert "1_a" in report
+        assert "boom benchmark crashed" in report
+        assert (
+            "| Scenario | Phase | Command | ` base123 ` | ` new123 ` | Error |"
+            in report
+        )
+        assert "100K rps" in report
+        assert "**FAILED**" in report
+        assert "-100.0%" not in report
+
+    def test_failed_in_baseline_labeled_not_phantom_improvement(self):
+        baseline = [
+            self._failure("1_a", "baseline oom", "base123"),
+            self._row(test_id="1_b", command="FT.SEARCH"),
+        ]
+        new = [
+            self._row(test_id="1_a", command="HSET", commit="new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        _, groups, report = _comparison(baseline, new)
+
+        assert "1_a" in report
+        assert "baseline oom" in report
+        assert "100K rps" in report
+        assert "**FAILED**" in report
+        assert "-100.0%" not in report
+
+        assert len(groups) == 1
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["change"] == pytest.approx(0.0)
+
+    def test_normal_comparison_unchanged_no_failures(self):
+        baseline = [
+            self._row(command="GET", rps=100000.0),
+            self._row(command="SET", rps=80000.0),
+        ]
+        new = [
+            self._row(command="GET", rps=120000.0, commit="new123"),
+            self._row(command="SET", rps=88000.0, commit="new123"),
+        ]
+
+        failed, groups, report = _comparison(baseline, new)
+        assert failed == []
+        assert len(groups) == 1
+
+        rows = groups[0]["table_rows"]
+        get_rps = next(
+            r for r in rows if r["command"] == "GET" and r["metric"] == "rps"
+        )
+        set_rps = next(
+            r for r in rows if r["command"] == "SET" and r["metric"] == "rps"
+        )
+        assert get_rps["change"] == pytest.approx(20.0)
+        assert set_rps["change"] == pytest.approx(10.0)
+
+        assert "failed scenario" not in report.lower()
+
+    def test_failed_in_new_captures_baseline_value(self):
+        baseline = [self._row(test_id="1_a", command="HSET", rps=123456.0)]
+        new = [self._failure("1_a", "boom", "new123")]
+
+        failed, _, report = _comparison(baseline, new)
+        assert len(failed) == 1
+        entry = failed[0]
+        assert entry["side"] == "new"
+        assert entry["counterpart_present"] is True
+        assert entry["counterpart_value"] == pytest.approx(123456.0)
+        assert entry["metric_label"] == "rps"
+
+        assert "123K rps" in report
+        assert "**FAILED**" in report
+
+    def test_failed_in_baseline_captures_new_value(self):
+        baseline = [self._failure("1_a", "oom", "base123")]
+        new = [self._row(test_id="1_a", command="HSET", rps=250000.0, commit="new123")]
+
+        failed, _, report = _comparison(baseline, new)
+        assert len(failed) == 1
+        entry = failed[0]
+        assert entry["side"] == "baseline"
+        assert entry["counterpart_value"] == pytest.approx(250000.0)
+
+        assert "250K rps" in report
+        assert "**FAILED**" in report
+
+    def test_both_sides_failed_rendering(self):
+        baseline = [self._failure("1_a", "baseline oom", "base123")]
+        new = [self._failure("1_a", "new segfault", "new123")]
+
+        _, groups, report = _comparison(baseline, new)
+
+        assert report.count("**FAILED**") == 2
+        assert "baseline: baseline oom" in report
+        assert "new: new segfault" in report
+        assert "-100.0%" not in report
+        assert all(not g["table_rows"] for g in groups)
+
+    def test_failed_scenario_no_counterpart_renders_absent_marker(self):
+        baseline = [self._row(test_id="1_b", command="FT.SEARCH")]
+        new = [
+            self._failure("1_a", "boom", "new123"),
+            self._row(test_id="1_b", command="FT.SEARCH", commit="new123"),
+        ]
+
+        failed, groups, report = _comparison(baseline, new)
+        a_entry = next(e for e in failed if e["test_id"] == "1_a")
+        assert a_entry["counterpart_present"] is False
+        assert a_entry["counterpart_value"] is None
+
+        assert "n/a" in report
+        assert "**FAILED**" in report
+        assert "-100.0%" not in report
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["change"] == pytest.approx(0.0)
+
+    def test_no_negative_100_percent_for_any_failed_direction(self):
+        directions = [
+            (  # failed in new
+                [self._row(test_id="1_a", command="HSET")],
+                [self._failure("1_a", "boom", "new123")],
+            ),
+            (  # failed in baseline
+                [self._failure("1_a", "oom", "base123")],
+                [self._row(test_id="1_a", command="HSET", commit="new123")],
+            ),
+            (  # failed on both
+                [self._failure("1_a", "oom", "base123")],
+                [self._failure("1_a", "boom", "new123")],
+            ),
+        ]
+        for baseline, new in directions:
+            _, _, report = _comparison(baseline, new)
+            assert "-100.0%" not in report
+            assert "+100.0%" not in report
+
+    @pytest.mark.parametrize(
+        "variant_a, variant_b, label_a, label_b, err_a, err_b",
+        [
+            (  # config_set is part of the identity
+                {"config_set": {"appendonly": "yes"}},
+                {"config_set": {"appendonly": "no"}},
+                "appendonly=yes",
+                "appendonly=no",
+                "err on yes",
+                "err on no",
+            ),
+            (  # cluster_mode is part of the identity too
+                {"cluster_mode": False},
+                {"cluster_mode": True},
+                "cluster=False",
+                "cluster=True",
+                "boom single",
+                "boom cluster",
+            ),
+        ],
+    )
+    def test_same_test_id_two_variants_render_two_rows(
+        self, variant_a, variant_b, label_a, label_b, err_a, err_b
+    ):
+        baseline = [
+            self._row(test_id="1_a", command="HSET", rps=100000.0, **variant_a),
+            self._row(test_id="1_a", command="HSET", rps=500000.0, **variant_b),
+        ]
+        new = [
+            self._failure("1_a", err_a, "new123", **variant_a),
+            self._failure("1_a", err_b, "new123", **variant_b),
+        ]
+
+        _, _, report = _comparison(baseline, new)
+
+        assert "## ⚠️ 2 failed scenario(s)" in report
+        assert label_a in report
+        assert label_b in report
+        assert err_a in report
+        assert err_b in report
+        assert "100K rps" in report
+        assert "500K rps" in report
+        assert "300K rps" not in report
+        row_lines = [
+            ln for ln in report.splitlines() if ln.startswith("| ") and "1_a" in ln
+        ]
+        assert len(row_lines) == 2
+
+    def test_single_config_set_still_renders_one_row(self):
+        baseline = [self._row(test_id="1_a", command="HSET", rps=100000.0)]
+        new = [self._failure("1_a", "boom", "new123")]
+
+        _, _, report = _comparison(baseline, new)
+
+        assert "## ⚠️ 1 failed scenario(s)" in report
+        row_lines = [
+            ln for ln in report.splitlines() if ln.startswith("| ") and "1_a" in ln
+        ]
+        assert len(row_lines) == 1
+        assert row_lines[0].startswith("| ` 1_a ` |")
+        assert "appendonly=" not in report
+        assert "cluster=" not in report
+
+
+class TestScenarioIdentityAndCellSanitization:
+    def _row(self, **overrides):
+        overrides.setdefault("test_id", "1_a")
+        return real_success_row(**overrides)
+
+    def _failure(self, test_id, error, side_commit, command="HSET", **overrides):
+        return real_failure_row(
+            test_id, error, command=command, commit=side_commit, **overrides
+        )
+
+    @pytest.mark.parametrize(
+        "variant_a, variant_b, base_rps, new_rps",
+        [
+            (
+                {"config_set": {"maxmemory": "100mb"}},
+                {"config_set": {"maxmemory": "200mb"}},
+                200000.0,
+                220000.0,
+            ),
+            ({"cluster_mode": False}, {"cluster_mode": True}, 300000.0, 330000.0),
+        ],
+    )
+    def test_healthy_sibling_survives_when_one_variant_fails(
+        self, variant_a, variant_b, base_rps, new_rps
+    ):
+        baseline = [
+            self._row(test_id="1_a", rps=100000.0, **variant_a),
+            self._row(test_id="1_a", rps=base_rps, **variant_b),
+        ]
+        new = [
+            self._failure("1_a", "boom", "new123", **variant_a),
+            self._row(test_id="1_a", rps=new_rps, commit="new123", **variant_b),
+        ]
+
+        failed, groups, report = _comparison(baseline, new)
+        rps_rows = _metric_rows(groups)
+
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(base_rps)
+        assert rps_rows[0]["new_value"] == pytest.approx(new_rps)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+    def test_counterpart_value_reflects_only_matching_config_set(self):
+        cfg_a = {"maxmemory": "100mb"}
+        cfg_b = {"maxmemory": "200mb"}
+        baseline = [
+            self._row(test_id="1_a", config_set=cfg_a, rps=100000.0),
+            self._row(test_id="1_a", config_set=cfg_b, rps=900000.0),
+        ]
+        new = [
+            self._failure("1_a", "boom", "new123", config_set=cfg_a),
+            self._row(test_id="1_a", config_set=cfg_b, rps=950000.0, commit="new123"),
+        ]
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        entry = failed[0]
+        assert entry["side"] == "new"
+        assert entry["counterpart_value"] == pytest.approx(100000.0)
+
+    def test_legacy_row_without_test_id_never_excluded_and_still_renders(self):
+        legacy_ok = {
+            "command": "GET",
+            "pipeline": 1,
+            "io_threads": 4,
+            "data_size": 16,
+            "clients": 50,
+            "rps": 100000.0,
+            "avg_latency_ms": 0.5,
+        }
+        failed_legacy = {
+            "status": "failed",
+            "error": "legacy runner died",
+            "command": "SET",
+            "timestamp": "<TS>",
+        }
+        baseline = [
+            {**legacy_ok, "commit": "base123"},
+            self._row(test_id="1_a", command="HSET"),
+        ]
+        new = [
+            {**legacy_ok, "rps": 110000.0, "commit": "new123"},
+            self._failure("1_a", "scenario boom", "new123"),
+            failed_legacy,
+        ]
+
+        _, groups, report = _comparison(baseline, new)
+
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(110000.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+        assert "legacy runner died" in report
+        assert "1_a" in report
+
+    def test_injection_in_command_and_error_is_inert(self):
+        injected_command = (
+            r"[click](http://evil.example) @octocat #83 GH-83 "
+            r"a@example.com <img src=x> a|b"
+        )
+        injected_error = r"boom `rm -rf` ``two ticks`` *bold* _em_" + "\r done"
+        baseline = [self._row(test_id="1_a", command="HSET")]
+        new = [self._failure("1_a", injected_error, "new123", command=injected_command)]
+
+        _, _, report = _comparison(baseline, new)
+
+        assert (
+            "` [click](http://evil.example) @octocat #83 GH-83 "
+            "a@example.com <img src=x> a\\|b `"
+        ) in report
+        assert "``` boom `rm -rf` ``two ticks`` *bold* _em_  done ```" in report
+        assert "\r" not in report
+        assert report.count("| --- | --- | --- | --- | --- | --- |") == 1
+        data_row = next(
+            line
+            for line in report.splitlines()
+            if line.startswith("| ") and "1_a" in line
+        )
+        assert data_row.count(" | ") == 5
+        assert data_row.count(r"\|") == 1
+
+    def test_version_header_is_sanitized(self):
+        baseline = [self._row(test_id="1_a", command="HSET")]
+        new = [self._failure("1_a", "boom", "new123")]
+        failed = collect_failed_scenarios(baseline, new)
+        groups, _b, _n, brepo, nrepo = create_comparison_table_data(baseline, new)
+
+        report = format_comparison_report(
+            groups,
+            "[evil](http://evil.example)",
+            "v1|v2",
+            brepo,
+            nrepo,
+            failed_scenarios=failed,
+        )
+
+        assert "` [evil](http://evil.example) `" in report
+        assert r"` v1\|v2 `" in report
+
+
+class TestRealProducerFailurePairing:
+    def test_real_failure_marker_pairs_with_real_success_row(self):
+        baseline = [
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                cluster_mode=False,
+                io_threads=4,
+                rps=100000.0,
+            )
+        ]
+        new = [
+            real_failure_row(
+                "1_a", "No results", command="HSET", cluster_mode=False, io_threads=4
+            )
+        ]
+
+        assert _scenario_identity(baseline[0]) == _scenario_identity(new[0])
+
+        _, groups, report = _comparison(baseline, new)
+
+        assert _metric_rows(groups) == []
+        assert "**FAILED**" in report
+        assert "-100.0%" not in report
+
+    def test_producer_failure_marker_carries_cluster_mode_and_io_threads(self):
+        marker = real_failure_row(
+            "1_a", "boom", command="HSET", cluster_mode=True, io_threads=8
+        )
+        assert marker["cluster_mode"] is True
+        assert marker["io_threads"] == 8
+        assert marker["status"] == "failed"
+        assert "rps" not in marker
+
+    def test_io_threads_sweep_sibling_survives_when_one_thread_count_fails(self):
+        baseline = [
+            real_success_row(test_id="1_a", command="HSET", io_threads=4, rps=100000.0),
+            real_success_row(test_id="1_a", command="HSET", io_threads=8, rps=300000.0),
+        ]
+        new = [
+            real_success_row(
+                test_id="1_a", command="HSET", io_threads=4, rps=110000.0, commit="new"
+            ),
+            real_failure_row("1_a", "boom", command="HSET", io_threads=8, commit="new"),
+        ]
+
+        failed, groups, report = _comparison(baseline, new)
+        rps_rows = _metric_rows(groups)
+
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(110000.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+
+class TestAveragingStageConfigSet:
+    @staticmethod
+    def _run_pipeline(baseline, new):
+        failed = collect_failed_scenarios(baseline, new)
+        shared = discover_config_keys(baseline + new)
+        baseline_avg = average_multiple_runs(baseline, shared)
+        new_avg = average_multiple_runs(new, shared)
+        groups, bver, nver, brepo, nrepo = create_comparison_table_data(
+            baseline_avg, new_avg
+        )
+        return failed, baseline_avg, new_avg, groups, bver, nver, brepo, nrepo
+
+    def test_config_set_sweep_not_collapsed_reproduction(self):
+        baseline = [
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                config_set={"maxmemory": "1gb"},
+                rps=100.0,
+                commit="base",
+            ),
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                config_set={"maxmemory": "4gb"},
+                rps=200.0,
+                commit="base",
+            ),
+        ]
+        new = [
+            real_failure_row(
+                "1_a",
+                "oom",
+                command="HSET",
+                config_set={"maxmemory": "1gb"},
+                commit="new",
+            ),
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                config_set={"maxmemory": "4gb"},
+                rps=220.0,
+                commit="new",
+            ),
+        ]
+
+        failed, baseline_avg, new_avg, groups, bver, nver, brepo, nrepo = (
+            self._run_pipeline(baseline, new)
+        )
+
+        assert len(baseline_avg) == 2
+        assert {r["run_count"] for r in baseline_avg} == {1}
+        assert sorted(r["rps"] for r in baseline_avg) == [100.0, 200.0]
+
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(200.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(220.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+        assert rps_rows[0]["change"] != pytest.approx(46.7, abs=1.0)
+
+        report = format_comparison_report(
+            groups, bver, nver, brepo, nrepo, failed_scenarios=failed
+        )
+        assert "1gb" in report
+        assert "oom" in report
+        assert "-100.0%" not in report
+        assert "+46.7%" not in report
+
+    def test_genuine_repeated_runs_same_config_set_still_average(self):
+        baseline = [
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                config_set={"maxmemory": "1gb"},
+                rps=100.0,
+            ),
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                config_set={"maxmemory": "1gb"},
+                rps=200.0,
+            ),
+            real_success_row(
+                test_id="1_a",
+                command="HSET",
+                config_set={"maxmemory": "1gb"},
+                rps=300.0,
+            ),
+        ]
+        shared = discover_config_keys(baseline)
+        averaged = average_multiple_runs(baseline, shared)
+
+        assert len(averaged) == 1
+        assert averaged[0]["run_count"] == 3
+        assert averaged[0]["rps"] == pytest.approx(200.0)
+        assert averaged[0]["rps_stdev"] > 0.0
+        assert averaged[0]["config_set"] == {"maxmemory": "1gb"}
+
+    def test_no_config_set_runs_average_as_before(self):
+        baseline = [
+            real_success_row(command="GET", rps=100.0),
+            real_success_row(command="GET", rps=200.0),
+        ]
+        for row in baseline:
+            assert "config_set" not in row
+
+        shared = discover_config_keys(baseline)
+        averaged = average_multiple_runs(baseline, shared)
+
+        assert len(averaged) == 1
+        assert averaged[0]["run_count"] == 2
+        assert averaged[0]["rps"] == pytest.approx(150.0)
+        assert "config_set" not in averaged[0]
+
+    def test_two_config_sets_each_repeated_average_within_config_set(self):
+        def runs(config_set, rps_pair):
+            return [
+                real_success_row(
+                    test_id="1_a", command="HSET", config_set=config_set, rps=rps
+                )
+                for rps in rps_pair
+            ]
+
+        baseline = runs({"maxmemory": "1gb"}, [100.0, 120.0]) + runs(
+            {"maxmemory": "4gb"}, [200.0, 240.0]
+        )
+        shared = discover_config_keys(baseline)
+        averaged = average_multiple_runs(baseline, shared)
+
+        assert len(averaged) == 2
+        assert {r["run_count"] for r in averaged} == {2}
+        by_cfg = {r["config_set"]["maxmemory"]: r["rps"] for r in averaged}
+        assert by_cfg == {"1gb": pytest.approx(110.0), "4gb": pytest.approx(220.0)}
+
+
+class TestStructuralIdentityAndAttribution:
+    def test_tls_variants_pair_independently_and_failure_not_smeared(self):
+        baseline = [
+            real_success_row(test_id="1_a", tls_mode=False, rps=100.0),
+            real_success_row(test_id="1_a", tls_mode=True, rps=500.0),
+        ]
+        new = [
+            real_success_row(test_id="1_a", tls_mode=False, rps=110.0, commit="new123"),
+            real_failure_row("1_a", "tls boom", tls_mode=True, commit="new123"),
+        ]
+
+        failed, groups, report = _comparison(baseline, new)
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(110.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+        assert len(failed) == 1
+        assert failed[0]["counterpart_value"] == pytest.approx(500.0)
+        assert "1_a (tls=True)" in report
+
+    def test_command_difference_does_not_break_pairing(self):
+        baseline = [
+            real_success_row(test_id="1_a", command="MSET (10 keys)", rps=100.0)
+        ]
+        new = [real_failure_row("1_a", "boom", command="MSET", commit="new123")]
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        assert failed[0]["counterpart_value"] == pytest.approx(100.0)
+
+    def test_all_failed_module_dataset_labeled_with_module_commit(self):
+        markers = [
+            real_failure_row(
+                "1_a",
+                "boom",
+                commit="core_sha",
+                module_commit="module_sha_1234567890",
+                module_commit_timestamp="2026-01-01T00:00:00Z",
+                config_name="fts.json",
+            )
+        ]
+        assert markers[0]["module_commit"] == "module_sha_1234567890"
+        assert extract_version_identifier(markers) == "module_s"
+        core_only = [real_failure_row("1_a", "boom", commit="corecommit123")]
+        assert extract_version_identifier(core_only) == "corecomm"
+
+    def test_mixed_failure_no_fabricated_regression_end_to_end(self):
+        baseline = [
+            real_success_row(
+                test_id="1_mix_write_w", test_phase="mixed_write", rps=100.0
+            ),
+            real_success_row(
+                test_id="1_mix_read_r1", test_phase="mixed_read", rps=200.0
+            ),
+        ]
+        new = [
+            real_failure_row(
+                "1_mix_write_w", "write boom", phase="mixed_write", commit="new123"
+            ),
+            real_success_row(
+                test_id="1_mix_read_r1",
+                test_phase="mixed_read",
+                rps=210.0,
+                commit="new123",
+            ),
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+        rps_rows = _metric_rows(groups)
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(200.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(210.0)
+        assert rps_rows[0]["change"] == pytest.approx(5.0)
+        assert all(r["change"] != pytest.approx(-100.0) for r in rps_rows)
+
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        assert failed[0]["test_id"] == "1_mix_write_w"
+        assert failed[0]["counterpart_value"] == pytest.approx(100.0)
+
+
+class TestVolatileVsStableEnvClassification:
+    """Stable environment identity versus volatile live readings."""
+
+    def test_stable_env_field_prevents_comparison(self):
+        baseline = [
+            real_success_row(test_id="1_a", rps=100000.0, env_cpu_model="AMD EPYC")
+        ]
+        new = [
+            real_success_row(
+                test_id="1_a",
+                rps=200000.0,
+                commit="new123",
+                env_cpu_model="Intel Xeon",
+            )
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+        rps_rows = _metric_rows(groups)
+
+        assert len(groups) == 2
+        assert not any(r["baseline_value"] > 0 and r["new_value"] > 0 for r in rps_rows)
+
+    def test_volatile_freq_field_still_compares(self):
+        baseline = [
+            real_success_row(
+                test_id="1_a", rps=100000.0, env_cpu_freq_mhz_at_setup=3200
+            )
+        ]
+        new = [
+            real_success_row(
+                test_id="1_a",
+                rps=110000.0,
+                commit="new123",
+                env_cpu_freq_mhz_at_setup=3105,
+            )
+        ]
+
+        groups, *_ = create_comparison_table_data(baseline, new)
+        rps_rows = _metric_rows(groups)
+
+        assert len(groups) == 1
+        assert len(rps_rows) == 1
+        assert rps_rows[0]["baseline_value"] == pytest.approx(100000.0)
+        assert rps_rows[0]["new_value"] == pytest.approx(110000.0)
+        assert rps_rows[0]["change"] == pytest.approx(10.0)
+
+    def test_stable_env_field_is_identity_axis_and_pairs_same_host(self):
+        baseline = [
+            real_success_row(test_id="1_a", rps=100.0, env_cpu_model="AMD EPYC")
+        ]
+        new = [
+            real_failure_row("1_a", "boom", commit="new123", env_cpu_model="AMD EPYC")
+        ]
+
+        assert ("env_cpu_model", "AMD EPYC") in _scenario_identity(baseline[0])
+        failed = collect_failed_scenarios(baseline, new)
+        assert len(failed) == 1
+        assert failed[0]["counterpart_value"] == pytest.approx(100.0)
+
+
+class TestConfigSetGroupHeadingAttribution:
+    def test_two_config_sets_render_attributable_headings(self):
+        cfg_1gb = {"maxmemory": "1gb"}
+        cfg_4gb = {"maxmemory": "4gb"}
+        baseline = [
+            real_success_row(test_id="1_a", config_set=cfg_1gb, rps=100.0),
+            real_success_row(test_id="1_a", config_set=cfg_4gb, rps=500.0),
+        ]
+        new = [
+            real_success_row(
+                test_id="1_a", config_set=cfg_1gb, rps=110.0, commit="new123"
+            ),
+            real_success_row(
+                test_id="1_a", config_set=cfg_4gb, rps=550.0, commit="new123"
+            ),
+        ]
+
+        _, _, report = _comparison(baseline, new)
+
+        headings = [line for line in report.splitlines() if line.startswith("###")]
+        assert "### config_set = ` maxmemory=1gb `" in headings
+        assert "### config_set = ` maxmemory=4gb `" in headings
+        base_no_cs = [
+            real_success_row(test_id="1_a", data_size=16, rps=100.0),
+            real_success_row(test_id="1_a", data_size=64, rps=200.0),
+        ]
+        new_no_cs = [
+            real_success_row(test_id="1_a", data_size=16, rps=110.0, commit="new123"),
+            real_success_row(test_id="1_a", data_size=64, rps=220.0, commit="new123"),
+        ]
+        _, _, report2 = _comparison(base_no_cs, new_no_cs)
+
+        assert "config_set" not in report2
+        headings2 = [line for line in report2.splitlines() if line.startswith("###")]
+        assert "### data_size = 16" in headings2
+        assert "### data_size = 64" in headings2
