@@ -16,9 +16,14 @@ Focus is on the non-obvious behavior that would break the benchmark:
 """
 
 import csv
+import json
 import random
 import sys
 from pathlib import Path
+
+import h5py
+import numpy as np
+import pytest
 
 # Ensure scripts/ is importable
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -207,8 +212,6 @@ class TestVectorHybridQueryAlignment:
     """
 
     def test_every_query_term_appears_in_the_hybrid_dataset(self, tmp_path: Path):
-        import numpy as np
-
         dims = 4
         doc_count = 10
         repeats = 2  # → 5 distinct phrase ids: phrase0..phrase4
@@ -251,3 +254,89 @@ class TestVectorHybridQueryAlignment:
                 f"query term {decoded!r} does not appear in hybrid dataset titles "
                 f"({sorted(titles)}) — KNN benchmark would silently return no hits"
             )
+
+
+# ---- HDF5 conversion -------------------------------------------------
+
+
+class TestHdf5Dataset:
+    def test_converts_hdf5(self, tmp_path: Path, monkeypatch):
+        train = np.arange(24, dtype=np.float64).reshape(6, 4)
+        queries = train[:2]
+        neighbors = np.array([[0, 1], [1, 0]], dtype=np.int32)
+        source = tmp_path / "source.hdf5"
+        with h5py.File(source, "w") as dataset:
+            dataset["train"] = train
+            dataset["test"] = queries
+            dataset["neighbors"] = neighbors
+        dataset_generation = {
+            "base.npy": {
+                "source": source.name,
+                "hdf5_dataset": "train",
+                "field": "embedding",
+                "dtype": "f4",
+                "chunk_size": 2,
+            },
+            "queries.npy": {
+                "source": source.name,
+                "hdf5_dataset": "test",
+                "field": "query_vector",
+                "dtype": "f4",
+                "chunk_size": 2,
+            },
+            "neighbors.npy": {
+                "source": source.name,
+                "hdf5_dataset": "neighbors",
+                "field": "neighbors",
+                "chunk_size": 2,
+            },
+        }
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps([{"dataset_generation": dataset_generation}]),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "setup_datasets.py",
+                "--output-dir",
+                str(tmp_path),
+                "--config",
+                str(config_path),
+                "--files",
+                "base.npy",
+                "queries.npy",
+                "neighbors.npy",
+            ],
+        )
+
+        setup_datasets.main()
+
+        base = np.load(tmp_path / "base.npy", allow_pickle=False)
+        assert base.dtype.names == ("embedding",)
+        assert base["embedding"].dtype == np.float32
+        assert np.array_equal(base["embedding"], train)
+
+        query_data = np.load(tmp_path / "queries.npy", allow_pickle=False)[
+            "query_vector"
+        ]
+        assert query_data.dtype == np.float32
+        assert np.array_equal(query_data, queries)
+
+        neighbor_data = np.load(tmp_path / "neighbors.npy", allow_pickle=False)[
+            "neighbors"
+        ]
+        assert neighbor_data.dtype == neighbors.dtype
+        assert np.array_equal(neighbor_data, neighbors)
+
+    def test_rejects_non_npy_output(self, tmp_path: Path):
+        config = {
+            "source": "source.hdf5",
+            "hdf5_dataset": "train",
+            "field": "embedding",
+        }
+
+        with pytest.raises(ValueError, match="must use the .npy extension"):
+            setup_datasets.generate_hdf5_dataset(tmp_path, config, "base.csv")
