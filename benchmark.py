@@ -578,6 +578,85 @@ def validate_test_groups(cfg: dict) -> None:
                         f"for a 'test' scenario it must be one of {WRITE_COMMANDS}"
                     )
 
+        iterations = group.get("iterations")
+        if iterations is None:
+            continue
+
+        if not isinstance(iterations, dict):
+            raise ValueError(f"test_groups[{i}].iterations must be a dictionary")
+        if "count" not in iterations:
+            raise ValueError(f"test_groups[{i}].iterations missing 'count' field")
+        if "scenarios" not in iterations:
+            raise ValueError(f"test_groups[{i}].iterations missing 'scenarios' field")
+
+        _validate_positive_int(
+            iterations["count"],
+            f"test_groups[{i}].iterations.count",
+        )
+        scenarios = iterations["scenarios"]
+        if not isinstance(scenarios, list) or len(scenarios) == 0:
+            raise ValueError(
+                f"test_groups[{i}].iterations.scenarios must be a non-empty list"
+            )
+
+        for j, scenario in enumerate(scenarios):
+            if not isinstance(scenario, dict):
+                raise ValueError(
+                    f"test_groups[{i}].iterations.scenarios[{j}] "
+                    "must be a dictionary"
+                )
+
+            on_iterations = scenario.get("on_iterations")
+            if on_iterations is not None:
+                _validate_positive_int_list(
+                    on_iterations,
+                    f"test_groups[{i}].iterations.scenarios[{j}].on_iterations",
+                )
+                if any(
+                    iteration > iterations["count"] for iteration in on_iterations
+                ):
+                    raise ValueError(
+                        f"test_groups[{i}].iterations.scenarios[{j}].on_iterations "
+                        "cannot exceed iteration count"
+                    )
+
+            if scenario.get("type") == "mixed":
+                if "populate_with" in scenario:
+                    raise ValueError(
+                        f"test_groups[{i}].iterations.scenarios[{j}] combines "
+                        "'mixed' with 'populate_with'; mixed scenarios seed the "
+                        "keyspace through their own 'writes' sub-scenarios"
+                    )
+                continue
+
+            if ("test" in scenario) == ("command" in scenario):
+                raise ValueError(
+                    f"test_groups[{i}].iterations.scenarios[{j}] must have "
+                    "exactly one of 'test' or 'command'"
+                )
+
+            if "test" in scenario and "options" in scenario:
+                raise ValueError(
+                    f"test_groups[{i}].iterations.scenarios[{j}] combines "
+                    "'test' with 'options'; options append flags to the command "
+                    "string and are only valid with 'command', not 'test'"
+                )
+
+            if "populate_with" in scenario:
+                populate_with = scenario["populate_with"]
+                if not isinstance(populate_with, str) or not populate_with:
+                    raise ValueError(
+                        f"test_groups[{i}].iterations.scenarios[{j}] "
+                        "'populate_with' must be a non-empty string"
+                    )
+                if "test" in scenario and populate_with not in WRITE_COMMANDS:
+                    raise ValueError(
+                        f"test_groups[{i}].iterations.scenarios[{j}] "
+                        f"'populate_with' {populate_with!r} is not a supported "
+                        "write command; for a 'test' scenario it must be one of "
+                        f"{WRITE_COMMANDS}"
+                    )
+
 
 def run_benchmark_matrix(
     *,
