@@ -49,6 +49,12 @@ Two databases on a single RDS instance:
 2. **`postgres`** - Benchmark metrics data
    - `benchmark_metrics` table - Performance data
    - `benchmark_commits` table - Commit tracking (used by `postgres_track_commits.py`)
+   - `benchmark_metrics_tiering_ts` table - Per-second data tiering time series, one
+     row per (commit, scenario, elapsed_sec). **Development placeholder: this table
+     name is not final and will be renamed.** It comes from
+     `push_to_postgres.py --table tiering_ts`, and renaming it means editing its
+     block in `schema.sql`, the `--table` value in the workflow, and any dashboard
+     JSON that queries it.
 
 Two IAM-enabled users:
 
