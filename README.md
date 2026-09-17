@@ -675,6 +675,7 @@ Module tests use structured `test_groups` with `scenarios`:
 | `warmup_inline`  | Adds `--warmup N` to the main benchmark run. Distinct from `warmup`, which performs a separate warm-up run first.                  |
 | `restart_before` | Restarts the managed server before the scenario runs (flushes the database instead when using a running server).                   |
 | `populate_with`  | Write workload that seeds the keyspace before a read test. For a `test` scenario it is a predefined write name (e.g. `SET`), run as `-t NAME`; for a `command` scenario it is an arbitrary write command string (e.g. `SET key:__rand_int__ __data__`), run after `--`. The populate pass runs sequentially and shares the main run's seed, so the read hits the seeded keys. |
+| `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. |
 
 ### Cluster Mode Support
 

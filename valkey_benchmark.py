@@ -521,6 +521,13 @@ class ClientRunner:
             seed = seed_val if seed_val is not None else random.randint(0, 1000000)
             cmd += ["--seed", str(seed)]
 
+        # Passthrough for valkey-benchmark's own flags. Emitted here, before
+        # --csv, so the flags always land left of the "--" separator in both
+        # the predefined 'test' branch and the arbitrary 'command' branch, and
+        # stay correct for a scenario that emits no separator at all.
+        for arg in scenario.get("benchmark_args", []):
+            cmd += shlex.split(arg)
+
         cmd += ["--csv"]
 
         if "command" in scenario:
@@ -1125,6 +1132,10 @@ class ClientRunner:
                 cfg["data_size"] = scenario["data_size"]
             if "cluster_execution" not in cfg and scenario.get("cluster_execution"):
                 cfg["cluster_execution"] = scenario["cluster_execution"]
+            # Each mixed child is its own valkey-benchmark process, so a
+            # parent-level passthrough has to reach every child argv.
+            if "benchmark_args" not in cfg and scenario.get("benchmark_args"):
+                cfg["benchmark_args"] = scenario["benchmark_args"]
 
         return write_scenarios, read_scenarios
 

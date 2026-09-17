@@ -417,6 +417,26 @@ class TestValidateTestGroups:
                 },
                 "combines 'mixed' with 'populate_with'",
             ),
+            # benchmark_args must be a list of strings
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": "--zipfian 1.0"},
+                "'benchmark_args' must be a list of strings",
+            ),
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": ["--keysize", 100]},
+                "'benchmark_args' must be a list of strings",
+            ),
+            # checked on a mixed parent too, before the mixed early-return
+            (
+                {
+                    "id": "m1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "command": "SET foo bar"}],
+                    "reads": [{"id": "r", "command": "GET foo"}],
+                    "benchmark_args": {"--zipfian": "1.0"},
+                },
+                "'benchmark_args' must be a list of strings",
+            ),
         ],
     )
     def test_invalid_scenario_raises(self, scenario, match):
@@ -448,6 +468,22 @@ class TestValidateTestGroups:
                 "type": "mixed",
                 "writes": [{"id": "w1", "command": "HSET k f v"}],
                 "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
+            },
+            # benchmark_args as a list of strings, on a test scenario
+            {
+                "id": "s1",
+                "test": "GET",
+                "benchmark_args": ["--zipfian 1.0", "--keysize 100"],
+            },
+            # an empty benchmark_args list is accepted
+            {"id": "s1", "command": "GET key", "benchmark_args": []},
+            # benchmark_args on a mixed parent, for its children to inherit
+            {
+                "id": "m1",
+                "type": "mixed",
+                "writes": [{"id": "w1", "test": "SET"}],
+                "reads": [{"id": "r1", "test": "GET"}],
+                "benchmark_args": ["--zipfian 1.0"],
             },
         ],
     )
