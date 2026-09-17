@@ -104,6 +104,7 @@ valkey-perf-benchmark/
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # CPU monitoring during tests
 ├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
+├── metrics_sampler.py       # 1 Hz per-second sampler for data tiering (not yet wired in)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
@@ -1114,6 +1115,51 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 
 `test_id` is `{group}_{scenario}` and `test_phase` is the scenario type
 (`read`, `write`, or `mixed_read` / `mixed_write` for mixed scenarios).
+
+## Per-Second Metrics Sampler
+
+`metrics_sampler.py` is a standalone sampler that reads the server and the host once per
+second and emits one row per sample, for a per-commit deep-dive dashboard. Each row
+carries:
+
+- `elapsed_sec`, seconds since the start of the measured phase, so several commits can
+  overlay on one chart, plus an absolute `timestamp`
+- Tiering `INFO` counters, emitted under their own `INFO` field names (items spilled, items
+  fetched, spills in flight, plus `completion_read_ok` and `dram_value_hits`)
+- DRAM and disk hit percentages in two forms: cumulative (`disk_hit_pct`, `mem_hit_pct`,
+  from the running totals, matching the reference dashboard CSV) and per-interval
+  (`disk_hit_pct_interval`, `mem_hit_pct_interval`, from the deltas between consecutive
+  samples, so a per-second chart can show transients). A zero denominator yields 0.0.
+- Memory, keyspace hit/miss, and throughput derived from `total_commands_processed` deltas
+- Per-process Valkey CPU and the async IO worker thread CPU, isolated by thread name
+- Block device IOPS and MB/s, on an auto-detected NVMe or SCSI device
+
+It reads `INFO ALL` by shelling out to `valkey-cli`, runs on a background daemon thread,
+and never raises into its caller: an unreadable source becomes 0 plus a warning logged
+once. A server without tiering, or with tiering disabled, samples cleanly with the tiering
+columns at 0.
+
+**It is not yet integrated.** Neither `valkey_benchmark.py` nor `benchmark.py` starts it,
+so nothing invokes it during a normal run. `tests/test_metrics_sampler.py` covers it
+directly.
+
+### Per-Second Time Series Table
+
+`dashboards/schema.sql` defines `benchmark_metrics_tiering_ts`, one row per (commit,
+scenario, `elapsed_sec`), fed by `push_to_postgres.py --table tiering_ts`.
+
+**The table name is a development placeholder and is not final.** Renaming it means
+editing its block in `schema.sql`, the `--table` value in the workflow, and any dashboard
+JSON that queries it. Nothing else references it yet, so the rename is cheap.
+
+Run identity columns (`timestamp`, `commit`, `command`, `data_size`, `pipeline`,
+`clients`) are denormalized onto every per-second row so that `create_indexes()` in
+`utils/push_to_postgres.py`, which hardcodes those names, runs unmodified.
+
+**Create the time series table from `schema.sql` before the first push.** The dynamic
+table-creation path in `utils/push_to_postgres.py` infers `INTEGER` for Python ints, which
+overflows for byte counters such as `used_memory` on a large-memory host. `schema.sql`
+declares those columns `BIGINT`.
 
 ## Performance Profiling
 
