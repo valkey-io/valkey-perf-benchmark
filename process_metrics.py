@@ -144,14 +144,22 @@ class MetricsProcessor:
             return None
 
     def write_metrics(
-        self, results_dir: Path, new_metrics: List[Dict[str, object]]
+        self,
+        results_dir: Path,
+        new_metrics: List[Dict[str, object]],
+        filename: str = "metrics.json",
     ) -> None:
-        """Append metrics to ``results_dir/metrics.json``."""
+        """Append metrics to ``results_dir/filename``.
+
+        ``filename`` defaults to ``metrics.json``. A caller passes another name
+        to append a differently shaped row set to its own file in the same
+        results dir, with the same read, extend, atomic replace behaviour.
+        """
         if not new_metrics:
             logging.warning("No metrics to write")
             return
 
-        metrics_file = results_dir / "metrics.json"
+        metrics_file = results_dir / filename
         metrics = []
 
         results_dir.mkdir(parents=True, exist_ok=True)

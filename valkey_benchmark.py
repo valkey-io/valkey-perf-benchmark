@@ -30,6 +30,11 @@ DEFAULT_TIMEOUT = 30
 # Timeout for the one-shot INFO that resolves the server pid for sampling.
 SERVER_PID_INFO_TIMEOUT = 5
 
+# One appended file per results dir holds every per-second sample of the run.
+# Scenarios, repeated runs and config sets all append to it, exactly as they do
+# to metrics.json, and rows are told apart by the identity fields they carry.
+TIMESERIES_FILENAME = "timeseries.json"
+
 # Supported Valkey benchmark commands
 READ_COMMANDS = ["GET", "MGET", "LRANGE", "SISMEMBER", "ZSCORE", "ZRANGE"]
 WRITE_COMMANDS = [
@@ -120,6 +125,10 @@ class ClientRunner:
         self.current_config_set = {}
         self.config_suffix = "default"
         self.client_cpu_ranges = []
+        # Used only for its append-and-atomically-replace file helper, which
+        # reads no per-run metadata off the instance. The processor that stamps
+        # metric rows is built per run in _setup_scenario_tooling.
+        self.metrics_processor = MetricsProcessor(commit_id, cluster_mode, tls_mode, "")
 
     def _create_client(self, port: Optional[int] = None) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -1071,7 +1080,13 @@ class ClientRunner:
             "data_size": scenario.get("data_size", 100),
             "pipeline": scenario.get("pipeline", 1),
             "clients": clients,
+            # Every scenario, run and config set appends to one timeseries file,
+            # so rows carry the same identity fields metric rows are stamped
+            # with in _apply_row_metadata and build_base_metadata.
+            "config_set": self.current_config_set,
         }
+        if self.io_threads is not None:
+            context["io_threads"] = self.io_threads
         if self.architecture is not None:
             context["architecture"] = self.architecture
 
@@ -1109,11 +1124,18 @@ class ClientRunner:
     def _stop_metrics_sampler(
         self, sampler: MetricsSampler, scenario: dict, group_id
     ) -> None:
-        """Stop a sampler and write its rows beside ``metrics.json``."""
+        """Stop a sampler and append its rows to the shared time series file.
+
+        Rows go to one ``timeseries.json`` per results dir, appended the way
+        metrics.json already is, so repeated runs, several config sets and both
+        cluster modes accumulate instead of overwriting one another.
+        """
         test_id = self._scenario_test_id(scenario, group_id)
         try:
             sampler.stop()
-            sampler.write(self.results_dir / f"timeseries_{test_id}.json")
+            self.metrics_processor.write_metrics(
+                self.results_dir, sampler.rows, filename=TIMESERIES_FILENAME
+            )
         except Exception as e:
             logging.warning(f"Failed to finalize per-second samples for {test_id}: {e}")
 

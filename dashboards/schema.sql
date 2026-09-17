@@ -146,6 +146,16 @@ CREATE TABLE IF NOT EXISTS benchmark_metrics_tiering_ts (
     test_type VARCHAR(50),
     scenario VARCHAR(50),
 
+    -- config_set is the server config variant a row was sampled under, and is
+    -- what tells apart rows that otherwise share (commit, scenario,
+    -- elapsed_sec). convert_metrics_to_rows() in utils/push_to_postgres.py
+    -- wraps it in psycopg2's Json adapter, so it arrives as serialized JSON
+    -- text. TEXT, not VARCHAR(255): a config_set with several keys serializes
+    -- past 255 characters, and TEXT is also what detect_field_type() infers for
+    -- a dict, so a table created from this file and one created by that helper
+    -- agree.
+    config_set TEXT,
+
     -- Time series axis
     elapsed_sec INTEGER NOT NULL CHECK (elapsed_sec >= 0),
 

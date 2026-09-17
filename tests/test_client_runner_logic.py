@@ -1,5 +1,6 @@
 """Unit tests for pure logic methods on ClientRunner from valkey_benchmark.py."""
 
+import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2041,6 +2042,14 @@ def _mixed_sampling_scenario():
 class TestPerSecondSamplingWiring:
     """Tests for the per_second_sampling opt-in in _run_single_scenario."""
 
+    @pytest.fixture(autouse=True)
+    def write_metrics(self, minimal_client_runner):
+        """Keep these tests off the real writer; rows are mock objects here."""
+        with patch.object(
+            minimal_client_runner.metrics_processor, "write_metrics"
+        ) as mock_write:
+            yield mock_write
+
     @staticmethod
     def _invoke(runner, scenario, metrics_processor=None):
         return _invoke_scenario(runner, scenario, metrics_processor=metrics_processor)
@@ -2063,17 +2072,18 @@ class TestPerSecondSamplingWiring:
 
         sampler_cls.assert_not_called()
 
-    def test_wraps_only_the_measured_phase(self, minimal_client_runner):
-        """start() lands after populate and warmup; stop()+write() after the run."""
+    def test_wraps_only_the_measured_phase(self, minimal_client_runner, write_metrics):
+        """start() lands after populate and warmup; stop()+write after the run."""
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
         scenario = _sampling_scenario(populate_with="SET key:__rand_int__ v", warmup=5)
 
         calls = []
         sampler = MagicMock()
+        sampler.rows = [{"elapsed_sec": 0}]
         sampler.start.side_effect = lambda: calls.append("start")
         sampler.stop.side_effect = lambda: calls.append("stop")
-        sampler.write.side_effect = lambda path: calls.append("write")
+        write_metrics.side_effect = lambda *a, **k: calls.append("write")
 
         def fake_run(*args, **kwargs):
             calls.append("benchmark")
@@ -2097,14 +2107,17 @@ class TestPerSecondSamplingWiring:
             self._invoke(runner, scenario)
 
         assert calls == ["populate", "warmup", "start", "benchmark", "stop", "write"]
-        sampler.write.assert_called_once_with(
-            runner.results_dir / "timeseries_1_s1.json"
+        # One appended file per results dir, never a per-test_id file.
+        write_metrics.assert_called_once_with(
+            runner.results_dir, sampler.rows, filename="timeseries.json"
         )
+        sampler.write.assert_not_called()
 
     def test_context_carries_run_identity(self, minimal_client_runner):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
         runner.architecture = "aarch64"
+        runner.current_config_set = {"maxmemory": "1gb"}
 
         with (
             patch("valkey_benchmark.MetricsSampler") as sampler_cls,
@@ -2123,8 +2136,42 @@ class TestPerSecondSamplingWiring:
             "data_size": 64,
             "pipeline": 1,
             "clients": 1,
+            "config_set": {"maxmemory": "1gb"},
             "architecture": "aarch64",
         }
+
+    def test_config_set_lands_on_every_sampled_row(self, minimal_client_runner):
+        """The context is merged into each row, so identity survives appending."""
+        runner = minimal_client_runner
+        runner.current_config_set = {"maxmemory": "1gb"}
+
+        sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
+        with patch.object(sampler, "_read_info", return_value={}):
+            sampler._sample_once()
+            sampler._sample_once()
+
+        rows = sampler.rows
+        assert len(rows) == 2
+        assert all(row["config_set"] == {"maxmemory": "1gb"} for row in rows)
+        assert all(row["scenario"] == "s1" for row in rows)
+
+    def test_context_carries_io_threads_when_set(self, minimal_client_runner):
+        """io_threads is stamped on sampled rows exactly as on metric rows."""
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            self._invoke(runner, _sampling_scenario())
+            assert "io_threads" not in sampler_cls.call_args.kwargs["context"]
+
+            runner.io_threads = 4
+            self._invoke(runner, _sampling_scenario())
+
+        assert sampler_cls.call_args.kwargs["context"]["io_threads"] == 4
 
     def test_mixed_scenario_uses_exactly_one_sampler(self, minimal_client_runner):
         runner = minimal_client_runner
@@ -2149,7 +2196,9 @@ class TestPerSecondSamplingWiring:
         # One sampler covers every mixed child, so clients is the total.
         assert sampler_cls.call_args.kwargs["context"]["clients"] == 8
 
-    def test_start_failure_does_not_fail_run(self, minimal_client_runner):
+    def test_start_failure_does_not_fail_run(
+        self, minimal_client_runner, write_metrics
+    ):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
         sampler = MagicMock()
@@ -2164,7 +2213,7 @@ class TestPerSecondSamplingWiring:
             result = self._invoke(runner, _sampling_scenario())
 
         assert result == {"rps": 1.0}
-        sampler.write.assert_not_called()
+        write_metrics.assert_not_called()
 
     def test_construction_failure_does_not_fail_run(self, minimal_client_runner):
         runner = minimal_client_runner
@@ -2199,7 +2248,9 @@ class TestPerSecondSamplingWiring:
 
         assert result == {"rps": 1.0}
 
-    def test_benchmark_failure_still_stops_sampler(self, minimal_client_runner):
+    def test_benchmark_failure_still_stops_sampler(
+        self, minimal_client_runner, write_metrics
+    ):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
         sampler = MagicMock()
@@ -2217,7 +2268,85 @@ class TestPerSecondSamplingWiring:
 
         assert result["status"] == "failed"
         assert sampler.stop.call_count == 1
-        assert sampler.write.call_count == 1
+        assert write_metrics.call_count == 1
+
+
+class TestTimeseriesAppend:
+    """Tests that per-second rows accumulate in one appended timeseries.json."""
+
+    @staticmethod
+    def _stop(runner, scenario_id, rows, group_id=1):
+        """Drive the finalize path with a sampler that already holds rows."""
+        sampler = MagicMock()
+        sampler.rows = rows
+        runner._stop_metrics_sampler(sampler, {"id": scenario_id}, group_id)
+
+    @staticmethod
+    def _written(runner):
+        return json.loads((runner.results_dir / "timeseries.json").read_text())
+
+    def test_two_scenarios_share_one_file(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+
+        self._stop(runner, "a", [{"scenario": "a", "elapsed_sec": 0}])
+        self._stop(runner, "b", [{"scenario": "b", "elapsed_sec": 0}])
+
+        assert [row["scenario"] for row in self._written(runner)] == ["a", "b"]
+        # No per-test_id files, so nothing to reconcile at push time.
+        assert [path.name for path in sorted(tmp_path.iterdir())] == ["timeseries.json"]
+
+    def test_repeated_run_of_one_scenario_keeps_both_row_sets(
+        self, minimal_client_runner, tmp_path
+    ):
+        """--runs 2 over one scenario appends rather than clobbering."""
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+
+        first = [
+            {"scenario": "a", "elapsed_sec": 0, "timestamp": 100},
+            {"scenario": "a", "elapsed_sec": 1, "timestamp": 101},
+        ]
+        second = [
+            {"scenario": "a", "elapsed_sec": 0, "timestamp": 200},
+            {"scenario": "a", "elapsed_sec": 1, "timestamp": 201},
+        ]
+        self._stop(runner, "a", first)
+        self._stop(runner, "a", second)
+
+        rows = self._written(runner)
+        assert rows == first + second
+        # Repeated runs share (scenario, elapsed_sec) and part on timestamp.
+        assert [row["timestamp"] for row in rows] == [100, 101, 200, 201]
+
+    def test_config_set_survives_the_append(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+
+        self._stop(runner, "a", [{"scenario": "a", "config_set": {"io_threads": 1}}])
+        self._stop(runner, "a", [{"scenario": "a", "config_set": {"io_threads": 8}}])
+
+        assert [row["config_set"] for row in self._written(runner)] == [
+            {"io_threads": 1},
+            {"io_threads": 8},
+        ]
+
+    def test_write_failure_is_logged_not_raised(self, minimal_client_runner, tmp_path):
+        """Sampling is observability and must never fail a benchmark run."""
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a directory")
+        runner = minimal_client_runner
+        runner.results_dir = blocker / "results"
+
+        self._stop(runner, "a", [{"scenario": "a", "elapsed_sec": 0}])
+
+    def test_no_rows_writes_no_file(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path / "results"
+
+        self._stop(runner, "a", [])
+
+        assert not (runner.results_dir / "timeseries.json").exists()
 
 
 class TestResolveServerPid:

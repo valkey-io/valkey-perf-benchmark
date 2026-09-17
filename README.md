@@ -104,7 +104,7 @@ valkey-perf-benchmark/
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # CPU monitoring during tests
 ├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
-├── metrics_sampler.py       # 1 Hz per-second sampler for data tiering (not yet wired in)
+├── metrics_sampler.py       # 1 Hz per-second sampler for data tiering (opt-in via per_second_sampling)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
@@ -1148,16 +1148,25 @@ populate pass, and not the separate warmup run. A `type: mixed` scenario gets ex
 sampler for the whole parallel client set, because the sampler watches the server rather
 than the clients.
 
-Rows are written to `results/<commit>/timeseries_<test_id>.json`, where `test_id` is
-`<group>_<scenario>`, the same identity the rows in `metrics.json` carry. Every row also
-carries `commit`, `scenario`, `command`, `data_size`, `pipeline`, `clients` and
-`architecture`.
+Rows from every scenario are appended to one file, `results/<commit>/timeseries.json`,
+through the same `MetricsProcessor.write_metrics` append that builds `metrics.json`: it
+reads the existing file, extends it, and replaces it atomically. Appending rather than
+writing per scenario is what keeps `--runs N`, several `config_sets`, `io-threads`
+variants and both cluster modes from clobbering one another, since each of those runs the
+same scenario more than once.
+
+Rows self-identify instead, exactly as `metrics.json` rows do. Every row carries
+`commit`, `scenario`, `test_id` (`<group>_<scenario>`), `command`, `data_size`,
+`pipeline`, `clients` and `config_set`, plus `io_threads` and `architecture` when those
+are set. Repeated runs of one scenario share `(commit, scenario, elapsed_sec)` and are
+told apart by the absolute `timestamp`, the same way repeated `metrics.json` rows are;
+there is no run index field.
 
 The server pid is resolved from `INFO server`'s `process_id` field through `valkey-cli`. If
 that fails the wiring logs a warning and passes `server_pid=None`, which the sampler
 supports: the per-process and async IO thread CPU columns then read 0 and the rest of the
 row is unaffected. Sampler failures are contained the same way: any exception from
-construction, `start()`, `stop()` or `write()` is logged and swallowed, so sampling can
+construction, `start()`, `stop()` or the row append is logged and swallowed, so sampling can
 never fail a benchmark run.
 
 `tests/test_metrics_sampler.py` covers the sampler directly and
@@ -1165,8 +1174,11 @@ never fail a benchmark run.
 `.github/workflows/sampler-smoke.yml` closes the remaining gap against a live server: it
 builds upstream valkey on a GitHub runner, runs `configs/sampler-smoke.json` (a tiny
 stock-server config with `per_second_sampling` enabled), and asserts on the emitted time
-series that samples arrive once per second, that `used_memory` and `ops_per_sec` are real,
-and that every tiering counter is 0 as expected on a server without data tiering.
+series that every scenario the config defines has rows in the one appended file (which is
+what proves appending did not clobber), that `elapsed_sec` starts at 0 and increases within
+each scenario's rows, that `used_memory` and `ops_per_sec` are real, that the context
+fields including `config_set` are on every row, and that every tiering counter is 0 as
+expected on a server without data tiering.
 
 ### Per-Second Time Series Table
 
@@ -1180,6 +1192,11 @@ JSON that queries it. Nothing else references it yet, so the rename is cheap.
 Run identity columns (`timestamp`, `commit`, `command`, `data_size`, `pipeline`,
 `clients`) are denormalized onto every per-second row so that `create_indexes()` in
 `utils/push_to_postgres.py`, which hardcodes those names, runs unmodified.
+
+`config_set` is declared `TEXT`. `convert_metrics_to_rows()` in
+`utils/push_to_postgres.py` wraps it in psycopg2's `Json` adapter, so it arrives as
+serialized JSON text, and a config_set with several keys runs past the 255 characters a
+`VARCHAR(255)` would allow.
 
 **Create the time series table from `schema.sql` before the first push.** The dynamic
 table-creation path in `utils/push_to_postgres.py` infers `INTEGER` for Python ints, which
