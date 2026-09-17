@@ -104,6 +104,7 @@ valkey-perf-benchmark/
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # CPU monitoring during tests
 ├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
+├── metrics_sampler.py       # 1 Hz per-second sampler for data tiering (opt-in via per_second_sampling)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
@@ -1114,6 +1115,88 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 
 `test_id` is `{group}_{scenario}` and `test_phase` is the scenario type
 (`read`, `write`, or `mixed_read` / `mixed_write` for mixed scenarios).
+
+## Per-Second Metrics Sampler
+
+`metrics_sampler.py` is a standalone sampler that reads the server and the host once per
+second and emits one row per sample, for a per-commit deep-dive dashboard. Each row
+carries:
+
+- `elapsed_sec`, seconds since the start of the measured phase, so several commits can
+  overlay on one chart, plus an absolute `timestamp`
+- Tiering `INFO` counters, emitted under their own `INFO` field names (items spilled, items
+  fetched, spills in flight, plus `completion_read_ok` and `dram_value_hits`)
+- Write throttling: how many writes have been throttled, how many clients are queued behind
+  the throttle right now, and the rate the throttle is currently allowing
+- The spill pipeline: how many spills have been submitted and serialized, the mean and the
+  total in-flight RAM they hold, how many spill attempts were made, and how many writes were
+  rejected for being out of memory
+- How many clients are blocked waiting on a fetch from disk
+- DRAM and disk hit percentages in two forms: cumulative (`disk_hit_pct`, `mem_hit_pct`,
+  from the running totals, matching the reference dashboard CSV) and per-interval
+  (`disk_hit_pct_interval`, `mem_hit_pct_interval`, from the deltas between consecutive
+  samples, so a per-second chart can show transients). A zero denominator yields 0.0.
+- Memory, keyspace hit/miss, and throughput derived from `total_commands_processed` deltas
+- Per-process Valkey CPU and the async IO worker thread CPU, isolated by thread name
+- Block device detail, on an auto-detected NVMe or SCSI device: IOPS and MB/s, merges per
+  second, how long the average read and the average write waited, the average queue depth,
+  how busy the device was, how many requests are in flight, and the average request size
+
+It reads `INFO ALL` by shelling out to `valkey-cli`, runs on a background daemon thread,
+and never raises into its caller: an unreadable source becomes 0 plus a warning logged
+once. A server without tiering, or with tiering disabled, samples cleanly with the tiering
+columns at 0.
+
+**It is opt-in.** Set the root config key `per_second_sampling` to `true` to enable it; when
+the key is absent or `false` the sampler class is never constructed and a run behaves exactly
+as before. When enabled, `valkey_benchmark.py` starts one sampler immediately before each
+scenario's measured benchmark process and stops it plus writes its rows immediately after.
+Sampling covers the measured phase only: not the flush, not `setup_commands`, not the
+populate pass, and not the separate warmup run. A `type: mixed` scenario gets exactly one
+sampler for the whole parallel client set, because the sampler watches the server rather
+than the clients.
+
+Rows from every scenario are appended to one file, `results/<commit>/timeseries.json`,
+through the same `MetricsProcessor.write_metrics` append that builds `metrics.json`: it
+reads the existing file, extends it, and replaces it atomically. Appending rather than
+writing per scenario is what keeps `--runs N`, several `config_sets`, `io-threads`
+variants and both cluster modes from clobbering one another, since each of those runs the
+same scenario more than once.
+
+Rows self-identify instead, exactly as `metrics.json` rows do. Every row carries
+`commit`, `scenario`, `test_id` (`<group>_<scenario>`), `command`, `data_size`,
+`pipeline`, `clients` and `config_set`, plus `io_threads` and `architecture` when those
+are set. Repeated runs of one scenario share `(commit, scenario, elapsed_sec)` and are
+told apart by the absolute `timestamp`, the same way repeated `metrics.json` rows are;
+there is no run index field.
+
+The server pid is resolved from `INFO server`'s `process_id` field through `valkey-cli`. If
+that fails the wiring logs a warning and passes `server_pid=None`, which the sampler
+supports: the per-process and async IO thread CPU columns then read 0 and the rest of the
+row is unaffected. Sampler failures are contained the same way: any exception from
+construction, `start()`, `stop()` or the row append is logged and swallowed, so sampling can
+never fail a benchmark run.
+
+`tests/test_metrics_sampler.py` covers the sampler directly and
+`tests/test_client_runner_logic.py` covers the wiring. Because those are unit tests,
+`.github/workflows/sampler-smoke.yml` closes the remaining gap against a live server: it
+builds upstream valkey on a GitHub runner, runs `configs/sampler-smoke.json` (a tiny
+stock-server config with `per_second_sampling` enabled), and asserts on the emitted time
+series that every scenario the config defines has rows in the one appended file (which is
+what proves appending did not clobber), that `elapsed_sec` starts at 0 and increases within
+each scenario's rows, that `used_memory` and `ops_per_sec` are real, that the context
+fields including `config_set` are on every row, that every tiering counter is 0 as
+expected on a server without data tiering, and that every disk column is present. The disk
+columns are checked for presence rather than value, because the runner's block device is
+busy with work unrelated to the benchmark. Those assertions live in
+`scripts/verify_sampler_output.py`, which the workflow invokes and
+`tests/test_verify_sampler_output.py` covers directly.
+
+### Per-Second Time Series Output
+
+Rows land in `<results_dir>/<commit>/timeseries.json` and nowhere else. The Postgres
+time series table and the push step that loads it arrive in a follow-up PR, so nothing
+here writes to a database.
 
 ## Performance Profiling
 

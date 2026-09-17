@@ -1,0 +1,40 @@
+[
+  {
+    "test_name": "Per-Second Sampler Smoke Test",
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "Sample a live stock valkey-server through a tiny write then read workload",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "description": "SET, sampled for the measured phase only",
+            "test": "SET",
+            "duration": 15,
+            "keyspacelen": 10000,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 4
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "description": "GET over a seeded keyspace; the populate pass is not sampled",
+            "test": "GET",
+            "populate_with": "SET",
+            "duration": 15,
+            "keyspacelen": 10000,
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 4
+          }
+        ]
+      }
+    ],
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false,
+    "per_second_sampling": true
+  }
+]
