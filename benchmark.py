@@ -540,6 +540,18 @@ def validate_test_groups(cfg: dict) -> None:
             if not isinstance(scenario, dict):
                 raise ValueError(f"test_groups[{i}].scenarios[{j}] must be a dict")
 
+            # Checked before the mixed early-return below, because a mixed
+            # parent may carry benchmark_args for its children to inherit.
+            if "benchmark_args" in scenario:
+                benchmark_args = scenario["benchmark_args"]
+                if not isinstance(benchmark_args, list) or not all(
+                    isinstance(arg, str) for arg in benchmark_args
+                ):
+                    raise ValueError(
+                        f"test_groups[{i}].scenarios[{j}] 'benchmark_args' must "
+                        "be a list of strings"
+                    )
+
             if scenario.get("type") == "mixed":
                 if "populate_with" in scenario:
                     raise ValueError(

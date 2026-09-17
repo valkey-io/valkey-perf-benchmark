@@ -395,3 +395,159 @@ class TestBuildBenchmarkCommandScenarios:
             "key:__rand_int__",
             "__data__",
         ]
+
+
+class TestBuildBenchmarkCommandBenchmarkArgs:
+    """Test the benchmark_args passthrough for valkey-benchmark's own flags."""
+
+    def test_flags_precede_the_command_separator(self, minimal_client_runner):
+        """Flags must land left of '--', where valkey-benchmark parses them."""
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "benchmark_args": ["--zipfian 1.0"],
+            }
+        )
+
+        assert cmd.index("--zipfian") < cmd.index("--")
+        assert cmd.index("1.0") < cmd.index("--")
+
+    def test_multi_token_arg_is_shlex_split(self, minimal_client_runner):
+        """One config string may carry a flag and its value."""
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={"command": "SET foo bar", "type": "write"}
+        )
+        baseline_len = len(cmd)
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "benchmark_args": ["--zipfian 1.0"],
+            }
+        )
+
+        assert len(cmd) == baseline_len + 2
+        assert cmd[cmd.index("--zipfian") + 1] == "1.0"
+
+    def test_multiple_args_keep_config_order(self, minimal_client_runner):
+        cmd = minimal_client_runner._build_benchmark_command(
+            scenario={
+                "command": "SET foo bar",
+                "type": "write",
+                "benchmark_args": ["--zipfian 1.0", "--keysize 100"],
+            }
+        )
+
+        assert cmd.index("--zipfian") < cmd.index("--keysize") < cmd.index("--csv")
+
+    def test_test_format_places_flags_before_csv(
+        self, minimal_client_runner, base_test_scenario
+    ):
+        """A predefined 'test' scenario emits no '--', so anchor on --csv."""
+        base_test_scenario["benchmark_args"] = ["--keysize 100"]
+
+        cmd = minimal_client_runner._build_benchmark_command(
+            base_test_scenario, seed_val=1
+        )
+
+        assert "--" not in cmd
+        assert cmd.index("--keysize") < cmd.index("--csv")
+        assert cmd[cmd.index("--keysize") + 1] == "100"
+
+    def test_test_format_exact_argv(self, minimal_client_runner):
+        scenario = _compiled_basic_scenario("SET")
+        scenario["benchmark_args"] = ["--zipfian 1.0"]
+
+        with patch("valkey_benchmark.random.randint", return_value=42):
+            cmd = minimal_client_runner._build_benchmark_command(scenario, tls=False)
+
+        assert cmd == [
+            *_COMPILED_ARGV_PREFIX,
+            "-t",
+            "SET",
+            "--seed",
+            "42",
+            "--zipfian",
+            "1.0",
+            "--csv",
+        ]
+
+    def test_absent_benchmark_args_leaves_argv_unchanged(self, minimal_client_runner):
+        """The regression guard: the passthrough is purely additive."""
+        scenario = _compiled_basic_scenario("SET")
+
+        with patch("valkey_benchmark.random.randint", return_value=42):
+            cmd = minimal_client_runner._build_benchmark_command(scenario, tls=False)
+
+        assert cmd == [
+            *_COMPILED_ARGV_PREFIX,
+            "-t",
+            "SET",
+            "--seed",
+            "42",
+            "--csv",
+        ]
+
+    def test_empty_list_leaves_argv_unchanged(self, minimal_client_runner):
+        scenario = _compiled_basic_scenario("SET")
+        scenario["benchmark_args"] = []
+
+        with patch("valkey_benchmark.random.randint", return_value=42):
+            cmd = minimal_client_runner._build_benchmark_command(scenario, tls=False)
+
+        assert cmd == [
+            *_COMPILED_ARGV_PREFIX,
+            "-t",
+            "SET",
+            "--seed",
+            "42",
+            "--csv",
+        ]
+
+
+class TestBenchmarkArgsMixedInheritance:
+    """Test parent-level benchmark_args reaching mixed children."""
+
+    @staticmethod
+    def _mixed_scenario(**parent):
+        scenario = {
+            "id": "m1",
+            "type": "mixed",
+            "duration": 10,
+            "writes": [{"id": "w1", "test": "SET", "clients": 4}],
+            "reads": [{"id": "r1", "test": "GET", "clients": 16}],
+        }
+        scenario.update(parent)
+        return scenario
+
+    def test_children_inherit_parent_args(self, minimal_client_runner):
+        scenario = self._mixed_scenario(benchmark_args=["--zipfian 1.0"])
+
+        writes, reads = minimal_client_runner._normalize_mixed_configs(scenario)
+
+        for child in writes + reads:
+            assert child["benchmark_args"] == ["--zipfian 1.0"]
+            cmd = minimal_client_runner._build_benchmark_command(child, seed_val=1)
+            assert cmd[cmd.index("--zipfian") + 1] == "1.0"
+
+    def test_child_value_overrides_parent(self, minimal_client_runner):
+        scenario = self._mixed_scenario(benchmark_args=["--zipfian 1.0"])
+        scenario["reads"][0]["benchmark_args"] = ["--keysize 100"]
+
+        writes, reads = minimal_client_runner._normalize_mixed_configs(scenario)
+
+        assert writes[0]["benchmark_args"] == ["--zipfian 1.0"]
+        assert reads[0]["benchmark_args"] == ["--keysize 100"]
+        read_cmd = minimal_client_runner._build_benchmark_command(reads[0], seed_val=1)
+        assert "--zipfian" not in read_cmd
+        assert read_cmd[read_cmd.index("--keysize") + 1] == "100"
+
+    def test_children_without_parent_args_get_none(self, minimal_client_runner):
+        writes, reads = minimal_client_runner._normalize_mixed_configs(
+            self._mixed_scenario()
+        )
+
+        for child in writes + reads:
+            assert "benchmark_args" not in child
