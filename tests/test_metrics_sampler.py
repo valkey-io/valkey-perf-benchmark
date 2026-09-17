@@ -13,6 +13,7 @@ from metrics_sampler import (
     ASIO_THREAD_NAME,
     MetricsSampler,
     TIERING_INFO_FIELDS,
+    TIERING_INFO_FLOAT_FIELDS,
     detect_block_device,
     parse_info,
     read_disk_counters,
@@ -41,8 +42,20 @@ keyspace_misses:200
 total_num_items_spilled_to_ext_storage:5000
 total_num_items_fetched_from_ext_storage:1200
 num_items_spilling_to_ext_storage:7
+kbc_fetching_block:4
 completion_read_ok:250
+oom_reject_write_count:11
+spill_attempts:6100
+spill_submitted:6000
 dram_value_hits:1000
+throttle_total_throttled:900
+throttle_queued_clients:13
+throttle_current_rate:0.8125
+throttle_allowed_tps:45000.5
+spill_submitted_count:5900
+spill_serialized_count:5850
+mean_spill_ram:2048
+inflight_spill_ram_bytes:102400
 """
 
 # The same server with tiering disabled: genExternalStorageInfoString returns
@@ -187,6 +200,45 @@ class TestGaugeFields:
         assert row["total_num_items_fetched_from_ext_storage"] == 1200
         assert row["num_items_spilling_to_ext_storage"] == 7
 
+    def test_blocked_on_fetch_field_emitted(self):
+        sampler = make_sampler()
+        row = sample_at(sampler, [100.0], [INFO_WITH_TIERING])[0]
+        assert row["kbc_fetching_block"] == 4
+
+    def test_throttle_counters_parsed_as_int(self):
+        sampler = make_sampler()
+        row = sample_at(sampler, [100.0], [INFO_WITH_TIERING])[0]
+        assert row["throttle_total_throttled"] == 900
+        assert row["throttle_queued_clients"] == 13
+
+    def test_throttle_rates_parsed_as_float(self):
+        # The engine formats current_rate %.4f and allowed_tps %.1f, so an int
+        # parse would floor both to 0 and 45000.
+        sampler = make_sampler()
+        row = sample_at(sampler, [100.0], [INFO_WITH_TIERING])[0]
+        assert row["throttle_current_rate"] == 0.8125
+        assert row["throttle_allowed_tps"] == 45000.5
+        assert isinstance(row["throttle_current_rate"], float)
+        assert isinstance(row["throttle_allowed_tps"], float)
+
+    def test_spill_pipeline_fields_emitted(self):
+        sampler = make_sampler()
+        row = sample_at(sampler, [100.0], [INFO_WITH_TIERING])[0]
+        assert row["spill_attempts"] == 6100
+        assert row["spill_serialized_count"] == 5850
+        assert row["mean_spill_ram"] == 2048
+        assert row["inflight_spill_ram_bytes"] == 102400
+        assert row["oom_reject_write_count"] == 11
+
+    def test_spill_submitted_count_not_spill_submitted(self):
+        # The engine emits both names as separate counters. The column is the
+        # atomic that pairs with spill_serialized_count, so the fixture gives
+        # the two different values and this pins which one is read.
+        sampler = make_sampler()
+        row = sample_at(sampler, [100.0], [INFO_WITH_TIERING])[0]
+        assert row["spill_submitted_count"] == 5900
+        assert "spill_submitted" not in row
+
     def test_raw_ratio_inputs_emitted(self):
         sampler = make_sampler()
         row = sample_at(sampler, [100.0], [INFO_WITH_TIERING])[0]
@@ -220,8 +272,19 @@ class TestGaugeFields:
             "total_num_items_spilled_to_ext_storage",
             "total_num_items_fetched_from_ext_storage",
             "num_items_spilling_to_ext_storage",
+            "kbc_fetching_block",
             "completion_read_ok",
             "dram_value_hits",
+            "throttle_total_throttled",
+            "throttle_queued_clients",
+            "throttle_current_rate",
+            "throttle_allowed_tps",
+            "spill_attempts",
+            "spill_submitted_count",
+            "spill_serialized_count",
+            "mean_spill_ram",
+            "inflight_spill_ram_bytes",
+            "oom_reject_write_count",
             "valkey_cpu_user",
             "valkey_cpu_sys",
             "valkey_cpu_total",
@@ -232,6 +295,14 @@ class TestGaugeFields:
             "disk_write_iops",
             "disk_read_mb",
             "disk_write_mb",
+            "disk_read_merges_ps",
+            "disk_write_merges_ps",
+            "disk_r_await_ms",
+            "disk_w_await_ms",
+            "disk_aqu_sz",
+            "disk_util_pct",
+            "disk_in_flight",
+            "disk_req_sz_kb",
             "elapsed_sec",
             "timestamp",
         }
@@ -359,6 +430,12 @@ class TestMissingTieringSection:
         row = sample_at(sampler, [100.0], [INFO_WITHOUT_TIERING])[0]
         for column in TIERING_INFO_FIELDS:
             assert row[column] == 0
+
+    def test_tiering_float_fields_are_zero_not_missing(self):
+        sampler = make_sampler()
+        row = sample_at(sampler, [100.0], [INFO_WITHOUT_TIERING])[0]
+        for column in TIERING_INFO_FLOAT_FIELDS:
+            assert row[column] == 0.0
 
     def test_hit_ratios_are_zero_without_dram_value_hits(self):
         sampler = make_sampler()
@@ -577,22 +654,97 @@ class TestDiskDetection:
             assert detect_block_device() is None
 
 
+# Two consecutive stat snapshots, one second apart. The deltas are chosen so
+# every derived value comes out different from every other, which is what makes
+# a swapped formula fail rather than coincidentally pass.
+#
+# Deltas: read ios 200, read merges 40, read sectors 8192, read ticks 600,
+#         write ios 50, write merges 15, write sectors 3200, write ticks 400,
+#         io ticks 250, time in queue 1500.
+DISK_SAMPLE_1 = {
+    "read_ios": 100,
+    "read_merges": 10,
+    "read_sectors": 2048,
+    "read_ticks": 50,
+    "write_ios": 200,
+    "write_merges": 20,
+    "write_sectors": 4096,
+    "write_ticks": 90,
+    "in_flight": 3,
+    "io_ticks": 1000,
+    "time_in_queue": 5000,
+}
+DISK_SAMPLE_2 = {
+    "read_ios": 300,
+    "read_merges": 50,
+    "read_sectors": 10240,
+    "read_ticks": 650,
+    "write_ios": 250,
+    "write_merges": 35,
+    "write_sectors": 7296,
+    "write_ticks": 490,
+    "in_flight": 7,
+    "io_ticks": 1250,
+    "time_in_queue": 6500,
+}
+
+# Every disk column except disk_in_flight, which is a gauge.
+DISK_DERIVED_COLUMNS = (
+    "disk_read_iops",
+    "disk_write_iops",
+    "disk_read_mb",
+    "disk_write_mb",
+    "disk_read_merges_ps",
+    "disk_write_merges_ps",
+    "disk_r_await_ms",
+    "disk_w_await_ms",
+    "disk_aqu_sz",
+    "disk_util_pct",
+    "disk_req_sz_kb",
+)
+
+
+def disk_rows(counters, monotonic_values=None):
+    """Sample once per entry in `counters`, serving each as the stat snapshot."""
+    monotonic_values = monotonic_values or [100.0 + n for n in range(len(counters))]
+    sampler = make_sampler(block_device="nvme0n1")
+    with patch("metrics_sampler.read_disk_counters", side_effect=counters):
+        return sample_at(sampler, monotonic_values, [INFO_WITH_TIERING] * len(counters))
+
+
 class TestDiskCounters:
-    # /sys/block/<dev>/stat: rd_ios rd_merges rd_sectors rd_ticks
-    #                        wr_ios wr_merges wr_sectors wr_ticks in_flight ...
-    STAT = "100 0 2048 5 200 0 4096 9 0 12 34"
+    # /sys/block/<dev>/stat: read ios, read merges, read sectors, read ticks,
+    # write ios, write merges, write sectors, write ticks, in flight, io ticks,
+    # time in queue. Sectors are 512-byte units, ticks are milliseconds.
+    STAT = "100 10 2048 50 200 20 4096 90 3 1000 5000"
+    COUNTERS = {
+        "read_ios": 100,
+        "read_merges": 10,
+        "read_sectors": 2048,
+        "read_ticks": 50,
+        "write_ios": 200,
+        "write_merges": 20,
+        "write_sectors": 4096,
+        "write_ticks": 90,
+        "in_flight": 3,
+        "io_ticks": 1000,
+        "time_in_queue": 5000,
+    }
 
     def test_parses_counters(self, tmp_path):
         device = tmp_path / "nvme0n1"
         device.mkdir()
         (device / "stat").write_text(self.STAT)
         with patch("metrics_sampler._SYS_BLOCK_DIR", tmp_path):
-            assert read_disk_counters("nvme0n1") == {
-                "read_ios": 100,
-                "read_sectors": 2048,
-                "write_ios": 200,
-                "write_sectors": 4096,
-            }
+            assert read_disk_counters("nvme0n1") == self.COUNTERS
+
+    def test_trailing_fields_are_ignored(self, tmp_path):
+        # Current kernels append discard and flush counters after the eleventh.
+        device = tmp_path / "nvme0n1"
+        device.mkdir()
+        (device / "stat").write_text(self.STAT + " 7 8 9 10 11 12")
+        with patch("metrics_sampler._SYS_BLOCK_DIR", tmp_path):
+            assert read_disk_counters("nvme0n1") == self.COUNTERS
 
     def test_missing_device_returns_none(self, tmp_path):
         with patch("metrics_sampler._SYS_BLOCK_DIR", tmp_path):
@@ -605,45 +757,144 @@ class TestDiskCounters:
         with patch("metrics_sampler._SYS_BLOCK_DIR", tmp_path):
             assert read_disk_counters("nvme0n1") is None
 
-    def test_iops_and_throughput_deltas(self):
-        sampler = make_sampler(block_device="nvme0n1")
-        counters = [
-            {
-                "read_ios": 100,
-                "read_sectors": 2048,
-                "write_ios": 200,
-                "write_sectors": 4096,
-            },
-            {
-                "read_ios": 400,
-                "read_sectors": 4096,
-                "write_ios": 700,
-                "write_sectors": 8192,
-            },
-        ]
-        with patch("metrics_sampler.read_disk_counters", side_effect=counters):
-            rows = sample_at(sampler, [100.0, 101.0], [INFO_WITH_TIERING] * 2)
-        assert rows[0]["disk_read_iops"] == 0.0
-        assert rows[1]["disk_read_iops"] == 300.0
-        assert rows[1]["disk_write_iops"] == 500.0
-        # 2048 sectors of 512 bytes is exactly 1 MiB in 1s
-        assert rows[1]["disk_read_mb"] == 1.0
-        assert rows[1]["disk_write_mb"] == 2.0
+    def test_ten_field_stat_line_returns_none(self, tmp_path):
+        # One field short of the eleven the derivations need.
+        device = tmp_path / "nvme0n1"
+        device.mkdir()
+        (device / "stat").write_text("100 10 2048 50 200 20 4096 90 3 1000")
+        with patch("metrics_sampler._SYS_BLOCK_DIR", tmp_path):
+            assert read_disk_counters("nvme0n1") is None
+
+    def test_non_numeric_stat_line_returns_none(self, tmp_path):
+        device = tmp_path / "nvme0n1"
+        device.mkdir()
+        (device / "stat").write_text("a b c d e f g h i j k")
+        with patch("metrics_sampler._SYS_BLOCK_DIR", tmp_path):
+            assert read_disk_counters("nvme0n1") is None
 
     def test_missing_block_device_does_not_raise(self):
         sampler = make_sampler(block_device=None)
         rows = sample_at(sampler, [100.0, 101.0], [INFO_WITH_TIERING] * 2)
         for row in rows:
-            assert row["disk_read_iops"] == 0.0
-            assert row["disk_write_iops"] == 0.0
-            assert row["disk_read_mb"] == 0.0
-            assert row["disk_write_mb"] == 0.0
+            for column in DISK_DERIVED_COLUMNS:
+                assert row[column] == 0.0
+            assert row["disk_in_flight"] == 0
 
     def test_unreadable_device_stat_does_not_raise(self):
         sampler = make_sampler(block_device="nvme0n1")
         with patch("metrics_sampler.read_disk_counters", return_value=None):
             rows = sample_at(sampler, [100.0, 101.0], [INFO_WITH_TIERING] * 2)
-        assert rows[1]["disk_read_iops"] == 0.0
+        for column in DISK_DERIVED_COLUMNS:
+            assert rows[1][column] == 0.0
+        assert rows[1]["disk_in_flight"] == 0
+
+
+class TestDiskDerivedStats:
+    """Each derived disk column, against hand-computed expected values."""
+
+    def test_iops_and_throughput(self):
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        # 200 read ios and 50 write ios in 1s
+        assert row["disk_read_iops"] == 200.0
+        assert row["disk_write_iops"] == 50.0
+        # 8192 sectors of 512 bytes is exactly 4 MiB, 3200 sectors is 1.5625
+        assert row["disk_read_mb"] == 4.0
+        assert row["disk_write_mb"] == 1.56
+
+    def test_merge_rates(self):
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        # 40 read merges and 15 write merges in 1s
+        assert row["disk_read_merges_ps"] == 40.0
+        assert row["disk_write_merges_ps"] == 15.0
+
+    def test_await_is_ticks_per_io_not_per_second(self):
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        # 600 read ticks over 200 read ios, 400 write ticks over 50 write ios
+        assert row["disk_r_await_ms"] == 3.0
+        assert row["disk_w_await_ms"] == 8.0
+
+    def test_queue_depth_is_queued_ms_over_interval_ms(self):
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        # 1500ms queued over a 1000ms interval
+        assert row["disk_aqu_sz"] == 1.5
+
+    def test_util_is_io_ticks_over_interval_ms(self):
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        # 250ms busy over a 1000ms interval
+        assert row["disk_util_pct"] == 25.0
+
+    def test_in_flight_is_a_gauge(self):
+        rows = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])
+        # Read directly, so it is populated on the first sample and is not the
+        # difference between the two snapshots (which would be 4).
+        assert rows[0]["disk_in_flight"] == 3
+        assert rows[1]["disk_in_flight"] == 7
+
+    def test_request_size_combines_reads_and_writes(self):
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        # (8192 + 3200) sectors of 512 bytes over (200 + 50) ios, in KB
+        assert row["disk_req_sz_kb"] == 22.78
+
+    def test_every_derived_value_is_distinct(self):
+        # A formula swap between any two of these would change a value.
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2])[1]
+        values = [row[column] for column in DISK_DERIVED_COLUMNS]
+        assert len(set(values)) == len(values)
+
+    def test_interval_normalizes_the_rates(self):
+        # The same deltas over 2s halve every rate, while the two awaits are
+        # per-io and do not move.
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2], [100.0, 102.0])[1]
+        assert row["disk_read_iops"] == 100.0
+        assert row["disk_read_mb"] == 2.0
+        assert row["disk_read_merges_ps"] == 20.0
+        assert row["disk_aqu_sz"] == 0.75
+        assert row["disk_util_pct"] == 12.5
+        assert row["disk_r_await_ms"] == 3.0
+        assert row["disk_w_await_ms"] == 8.0
+        assert row["disk_req_sz_kb"] == 22.78
+
+    def test_first_sample_yields_zero_for_every_derived_stat(self):
+        row = disk_rows([DISK_SAMPLE_1])[0]
+        for column in DISK_DERIVED_COLUMNS:
+            assert row[column] == 0.0, f"{column} is {row[column]} on first sample"
+
+    def test_zero_io_interval_zeroes_await_and_request_size(self):
+        # Ticks advance while no io completes: work started in an earlier
+        # interval is still in service.
+        idle = dict(DISK_SAMPLE_2)
+        idle.update(
+            {
+                "read_ticks": 750,
+                "write_ticks": 890,
+                "io_ticks": 1400,
+                "time_in_queue": 7000,
+            }
+        )
+        row = disk_rows([DISK_SAMPLE_1, DISK_SAMPLE_2, idle])[2]
+        assert row["disk_r_await_ms"] == 0.0
+        assert row["disk_w_await_ms"] == 0.0
+        assert row["disk_req_sz_kb"] == 0.0
+        assert row["disk_read_iops"] == 0.0
+        assert row["disk_write_iops"] == 0.0
+        # The device was still busy, so these are unaffected by the io count.
+        assert row["disk_aqu_sz"] == 0.5
+        assert row["disk_util_pct"] == 15.0
+
+    def test_util_caps_at_one_hundred(self):
+        # io ticks is wall-clock busy time on a concurrent queue, so the raw
+        # ratio can exceed 1: 2500ms busy over a 1000ms interval is 250%.
+        saturated = dict(DISK_SAMPLE_2)
+        saturated["io_ticks"] = DISK_SAMPLE_1["io_ticks"] + 2500
+        row = disk_rows([DISK_SAMPLE_1, saturated])[1]
+        assert row["disk_util_pct"] == 100.0
+
+    def test_counter_reset_clamps_to_zero(self):
+        reset = {name: 0 for name in DISK_SAMPLE_1}
+        row = disk_rows([DISK_SAMPLE_2, reset])[1]
+        for column in DISK_DERIVED_COLUMNS:
+            assert row[column] == 0.0
+        assert row["disk_in_flight"] == 0
 
 
 class TestWrite:
