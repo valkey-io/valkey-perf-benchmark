@@ -1,0 +1,150 @@
+name: Per-Second Sampler Smoke Test
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'metrics_sampler.py'
+      - 'valkey_benchmark.py'
+      - 'configs/sampler-smoke.json'
+      - '.github/workflows/sampler-smoke.yml'
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+permissions:
+  contents: read
+
+jobs:
+  sampler-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout valkey
+        uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey
+          ref: unstable
+          path: valkey
+          fetch-depth: 1
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@v4
+        with:
+          path: valkey-perf-benchmark
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: valkey-perf-benchmark/requirements.txt
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make python3-dev libssl-dev
+          pip install -r requirements.txt
+
+      - name: Build valkey
+        working-directory: valkey
+        run: |
+          echo "Building valkey-server, valkey-cli and valkey-benchmark..."
+          make distclean || true
+          make -j$(nproc)
+
+          for binary in valkey-server valkey-cli valkey-benchmark; do
+            if [ ! -f "src/$binary" ]; then
+              echo "$binary build failed"
+              exit 1
+            fi
+            ls -lh "src/$binary"
+          done
+          ./src/valkey-server --version
+
+      - name: Run sampler smoke benchmark
+        working-directory: valkey-perf-benchmark
+        run: |
+          echo "Config: configs/sampler-smoke.json"
+          echo "GitHub runner cores: $(nproc)"
+
+          python benchmark.py \
+            --mode both \
+            --valkey-path ../valkey \
+            --config configs/sampler-smoke.json \
+            --commits HEAD \
+            --results-dir results
+
+      - name: Verify sampled time series
+        working-directory: valkey-perf-benchmark
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          # Tiering counters must sample as 0 on a stock upstream server: the
+          # External Storage INFO section is absent, so every field reads 0.
+          TIERING_COLUMNS = (
+              "total_num_items_spilled_to_ext_storage",
+              "total_num_items_fetched_from_ext_storage",
+              "num_items_spilling_to_ext_storage",
+              "completion_read_ok",
+              "dram_value_hits",
+          )
+          CONTEXT_COLUMNS = ("commit", "scenario", "command")
+          MIN_ROWS = 8
+
+          paths = sorted(Path("results").glob("*/timeseries_*.json"))
+          assert paths, "no timeseries_*.json written under results/"
+          print(f"Found {len(paths)} time series file(s)")
+
+          for path in paths:
+              rows = json.loads(path.read_text())
+              print(f"--- {path}: {len(rows)} rows")
+              assert len(rows) >= MIN_ROWS, f"{path}: {len(rows)} rows < {MIN_ROWS}"
+              print(f"first row: {json.dumps(rows[0], indent=2)}")
+              print(f"last row: {json.dumps(rows[-1], indent=2)}")
+
+              assert rows[0]["elapsed_sec"] == 0, (
+                  f"{path}: first elapsed_sec is {rows[0]['elapsed_sec']}, not 0"
+              )
+              elapsed = [row["elapsed_sec"] for row in rows]
+              assert all(
+                  later > earlier for earlier, later in zip(elapsed, elapsed[1:])
+              ), f"{path}: elapsed_sec not strictly increasing: {elapsed}"
+
+              for index, row in enumerate(rows):
+                  assert row["used_memory"] > 0, (
+                      f"{path} row {index}: used_memory is {row['used_memory']}, "
+                      "so INFO was not sampled"
+                  )
+                  for column in TIERING_COLUMNS:
+                      assert row[column] == 0, (
+                          f"{path} row {index}: {column} is {row[column]}, "
+                          "expected 0 on a stock server"
+                      )
+                  for column in CONTEXT_COLUMNS:
+                      assert row.get(column), (
+                          f"{path} row {index}: context column {column} missing"
+                      )
+
+              assert any(row["ops_per_sec"] > 0 for row in rows), (
+                  f"{path}: ops_per_sec is 0 on every row, so no traffic was sampled"
+              )
+
+          print("Sampler smoke assertions passed")
+          PY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sampler-smoke-results
+          path: valkey-perf-benchmark/results/
+
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill -f valkey || echo "No valkey processes to kill"

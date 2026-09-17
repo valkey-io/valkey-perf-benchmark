@@ -2017,3 +2017,257 @@ class TestProfilingAlwaysStopped:
 
         assert result == expected
         assert profiler.stop_profiling.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-second metrics sampling wiring
+# ---------------------------------------------------------------------------
+
+
+def _sampling_scenario(**extra):
+    return _populate_scenario(type="write", command="SET key:__rand_int__ v", **extra)
+
+
+def _mixed_sampling_scenario():
+    return {
+        "id": "m1",
+        "type": "mixed",
+        "warmup": 0,
+        "writes": [{"id": "w", "command": "SET key:__rand_int__ v", "clients": 3}],
+        "reads": [{"id": "r", "command": "GET key:__rand_int__", "clients": 5}],
+    }
+
+
+class TestPerSecondSamplingWiring:
+    """Tests for the per_second_sampling opt-in in _run_single_scenario."""
+
+    @staticmethod
+    def _invoke(runner, scenario, metrics_processor=None):
+        return _invoke_scenario(runner, scenario, metrics_processor=metrics_processor)
+
+    @pytest.mark.parametrize("flag", [None, False])
+    def test_flag_absent_or_false_never_constructs_sampler(
+        self, minimal_client_runner, flag
+    ):
+        runner = minimal_client_runner
+        if flag is None:
+            assert "per_second_sampling" not in runner.config
+        else:
+            runner.config["per_second_sampling"] = flag
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            self._invoke(runner, _sampling_scenario())
+
+        sampler_cls.assert_not_called()
+
+    def test_wraps_only_the_measured_phase(self, minimal_client_runner):
+        """start() lands after populate and warmup; stop()+write() after the run."""
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+        scenario = _sampling_scenario(populate_with="SET key:__rand_int__ v", warmup=5)
+
+        calls = []
+        sampler = MagicMock()
+        sampler.start.side_effect = lambda: calls.append("start")
+        sampler.stop.side_effect = lambda: calls.append("stop")
+        sampler.write.side_effect = lambda path: calls.append("write")
+
+        def fake_run(*args, **kwargs):
+            calls.append("benchmark")
+            return MagicMock()
+
+        with (
+            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(
+                runner,
+                "_populate_scenario_keyspace",
+                side_effect=lambda *a, **k: calls.append("populate"),
+            ),
+            patch.object(
+                runner,
+                "_run_scenario_warmup",
+                side_effect=lambda *a, **k: calls.append("warmup"),
+            ),
+            patch.object(runner, "_run", side_effect=fake_run),
+        ):
+            self._invoke(runner, scenario)
+
+        assert calls == ["populate", "warmup", "start", "benchmark", "stop", "write"]
+        sampler.write.assert_called_once_with(
+            runner.results_dir / "timeseries_1_s1.json"
+        )
+
+    def test_context_carries_run_identity(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+        runner.architecture = "aarch64"
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            self._invoke(runner, _sampling_scenario())
+
+        kwargs = sampler_cls.call_args.kwargs
+        assert kwargs["server_pid"] == 4242
+        assert kwargs["context"] == {
+            "commit": "abc123",
+            "scenario": "s1",
+            "test_id": "1_s1",
+            "command": "SET key:__rand_int__ v",
+            "data_size": 64,
+            "pipeline": 1,
+            "clients": 1,
+            "architecture": "aarch64",
+        }
+
+    def test_mixed_scenario_uses_exactly_one_sampler(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+        sampler = MagicMock()
+
+        with (
+            patch(
+                "valkey_benchmark.MetricsSampler", return_value=sampler
+            ) as sampler_cls,
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run_mixed_workload", return_value=[{"rps": 1.0}]),
+        ):
+            result = self._invoke(
+                runner, _mixed_sampling_scenario(), metrics_processor=MagicMock()
+            )
+
+        assert result == [{"rps": 1.0}]
+        assert sampler_cls.call_count == 1
+        assert sampler.start.call_count == 1
+        assert sampler.stop.call_count == 1
+        # One sampler covers every mixed child, so clients is the total.
+        assert sampler_cls.call_args.kwargs["context"]["clients"] == 8
+
+    def test_start_failure_does_not_fail_run(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+        sampler = MagicMock()
+        sampler.start.side_effect = RuntimeError("sampler boom")
+
+        with (
+            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run", return_value=MagicMock()),
+            patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
+        ):
+            result = self._invoke(runner, _sampling_scenario())
+
+        assert result == {"rps": 1.0}
+        sampler.write.assert_not_called()
+
+    def test_construction_failure_does_not_fail_run(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+
+        with (
+            patch(
+                "valkey_benchmark.MetricsSampler",
+                side_effect=RuntimeError("construction boom"),
+            ),
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run", return_value=MagicMock()),
+            patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
+        ):
+            result = self._invoke(runner, _sampling_scenario())
+
+        assert result == {"rps": 1.0}
+
+    def test_stop_failure_does_not_fail_run(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+        sampler = MagicMock()
+        sampler.stop.side_effect = RuntimeError("stop boom")
+
+        with (
+            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run", return_value=MagicMock()),
+            patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
+        ):
+            result = self._invoke(runner, _sampling_scenario())
+
+        assert result == {"rps": 1.0}
+
+    def test_benchmark_failure_still_stops_sampler(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+        sampler = MagicMock()
+
+        with (
+            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
+            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch.object(runner, "_run", side_effect=RuntimeError("invocation boom")),
+        ):
+            result = self._invoke(
+                runner,
+                _sampling_scenario(),
+                MetricsProcessor("abc123", False, False, "<TS>"),
+            )
+
+        assert result["status"] == "failed"
+        assert sampler.stop.call_count == 1
+        assert sampler.write.call_count == 1
+
+
+class TestResolveServerPid:
+    """Tests for ClientRunner._resolve_server_pid."""
+
+    def test_parses_process_id_from_info(self, minimal_client_runner):
+        completed = MagicMock(
+            returncode=0, stdout="# Server\nprocess_id:4242\n", stderr=""
+        )
+        with patch("valkey_benchmark.subprocess.run", return_value=completed) as run:
+            assert minimal_client_runner._resolve_server_pid() == 4242
+
+        command = run.call_args.args[0]
+        assert command[0].endswith("src/valkey-cli")
+        assert command[-2:] == ["INFO", "server"]
+
+    @pytest.mark.parametrize(
+        "completed, side_effect",
+        [
+            (MagicMock(returncode=1, stdout="", stderr="connection refused"), None),
+            (MagicMock(returncode=0, stdout="# Server\nrun_id:abc\n", stderr=""), None),
+            (
+                MagicMock(returncode=0, stdout="process_id:not-a-pid\n", stderr=""),
+                None,
+            ),
+            (None, OSError("valkey-cli missing")),
+        ],
+    )
+    def test_unresolvable_pid_returns_none(
+        self, minimal_client_runner, completed, side_effect
+    ):
+        with patch(
+            "valkey_benchmark.subprocess.run",
+            return_value=completed,
+            side_effect=side_effect,
+        ):
+            assert minimal_client_runner._resolve_server_pid() is None
+
+    def test_sampler_gets_none_pid_when_resolution_fails(self, minimal_client_runner):
+        """A None pid is a supported sampler state, not a reason to skip sampling."""
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch(
+                "valkey_benchmark.subprocess.run", side_effect=OSError("no valkey-cli")
+            ),
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            _invoke_scenario(runner, _sampling_scenario(), metrics_processor=None)
+
+        assert sampler_cls.call_args.kwargs["server_pid"] is None

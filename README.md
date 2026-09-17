@@ -1139,9 +1139,34 @@ and never raises into its caller: an unreadable source becomes 0 plus a warning 
 once. A server without tiering, or with tiering disabled, samples cleanly with the tiering
 columns at 0.
 
-**It is not yet integrated.** Neither `valkey_benchmark.py` nor `benchmark.py` starts it,
-so nothing invokes it during a normal run. `tests/test_metrics_sampler.py` covers it
-directly.
+**It is opt-in.** Set the root config key `per_second_sampling` to `true` to enable it; when
+the key is absent or `false` the sampler class is never constructed and a run behaves exactly
+as before. When enabled, `valkey_benchmark.py` starts one sampler immediately before each
+scenario's measured benchmark process and stops it plus writes its rows immediately after.
+Sampling covers the measured phase only: not the flush, not `setup_commands`, not the
+populate pass, and not the separate warmup run. A `type: mixed` scenario gets exactly one
+sampler for the whole parallel client set, because the sampler watches the server rather
+than the clients.
+
+Rows are written to `results/<commit>/timeseries_<test_id>.json`, where `test_id` is
+`<group>_<scenario>`, the same identity the rows in `metrics.json` carry. Every row also
+carries `commit`, `scenario`, `command`, `data_size`, `pipeline`, `clients` and
+`architecture`.
+
+The server pid is resolved from `INFO server`'s `process_id` field through `valkey-cli`. If
+that fails the wiring logs a warning and passes `server_pid=None`, which the sampler
+supports: the per-process and async IO thread CPU columns then read 0 and the rest of the
+row is unaffected. Sampler failures are contained the same way: any exception from
+construction, `start()`, `stop()` or `write()` is logged and swallowed, so sampling can
+never fail a benchmark run.
+
+`tests/test_metrics_sampler.py` covers the sampler directly and
+`tests/test_client_runner_logic.py` covers the wiring. Because those are unit tests,
+`.github/workflows/sampler-smoke.yml` closes the remaining gap against a live server: it
+builds upstream valkey on a GitHub runner, runs `configs/sampler-smoke.json` (a tiny
+stock-server config with `per_second_sampling` enabled), and asserts on the emitted time
+series that samples arrive once per second, that `used_memory` and `ops_per_sec` are real,
+and that every tiering counter is 0 as expected on a server without data tiering.
 
 ### Per-Second Time Series Table
 

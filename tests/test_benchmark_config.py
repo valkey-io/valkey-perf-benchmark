@@ -549,3 +549,22 @@ class TestCustomServerConfigFileValidation:
         minimal_valid_config["custom-server-config-file"] = bad_value
         with pytest.raises(ValueError, match="must be a string path"):
             validate_config(minimal_valid_config)
+
+
+class TestPerSecondSamplingValidation:
+    """Tests for per_second_sampling validation in validate_config."""
+
+    @pytest.mark.parametrize("good_value", [True, False])
+    def test_accepts_bool(self, minimal_valid_config, good_value):
+        minimal_valid_config["per_second_sampling"] = good_value
+        validate_config(minimal_valid_config)  # should not raise
+
+    def test_missing_key_is_fine(self, minimal_valid_config):
+        assert "per_second_sampling" not in minimal_valid_config
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["yes", "true", 1, 0, None, [], {}])
+    def test_reject_non_bool(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = bad_value
+        with pytest.raises(ValueError, match="'per_second_sampling' must be a boolean"):
+            validate_config(minimal_valid_config)

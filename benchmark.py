@@ -420,6 +420,11 @@ def validate_config(cfg: dict) -> None:
     if "custom-server-config-file" in cfg:
         if not isinstance(cfg["custom-server-config-file"], str):
             raise ValueError("'custom-server-config-file' must be a string path")
+    if "per_second_sampling" in cfg:
+        # Opt-in only, and strictly boolean: a truthy string would silently
+        # start sampling on a config that meant to leave it off.
+        if not isinstance(cfg["per_second_sampling"], bool):
+            raise ValueError("'per_second_sampling' must be a boolean")
 
     if "cluster_mode" in cfg and not isinstance(cfg["cluster_mode"], list):
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])
