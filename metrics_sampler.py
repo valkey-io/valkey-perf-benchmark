@@ -24,18 +24,47 @@ Tiering INFO fields
 -------------------
 Tiering INFO field names are emitted verbatim as column names, so the table
 below is a source-location reference rather than a name mapping: each field
-plus where it is registered in the valkey-data-tiering source.
+plus where it is registered in the valkey-data-tiering source. Every line
+number is a `sdscatprintf` format string in `genExternalStorageInfoString`.
 
-| INFO field                               | Source                 |
-| ---------------------------------------- | ---------------------- |
-| total_num_items_spilled_to_ext_storage   | src/ext_storage.c:1551 |
-| total_num_items_fetched_from_ext_storage | src/ext_storage.c:1552 |
-| num_items_spilling_to_ext_storage        | src/ext_storage.c:1554 |
-| completion_read_ok                       | src/ext_storage.c:1572 |
-| dram_value_hits                          | src/ext_storage.c:1587 |
+| INFO field                               | Source                 | Type  |
+| ---------------------------------------- | ---------------------- | ----- |
+| total_num_items_spilled_to_ext_storage   | src/ext_storage.c:1551 | int   |
+| total_num_items_fetched_from_ext_storage | src/ext_storage.c:1552 | int   |
+| num_items_spilling_to_ext_storage        | src/ext_storage.c:1554 | int   |
+| kbc_fetching_block                       | src/ext_storage.c:1560 | int   |
+| completion_read_ok                       | src/ext_storage.c:1572 | int   |
+| oom_reject_write_count                   | src/ext_storage.c:1579 | int   |
+| spill_attempts                           | src/ext_storage.c:1583 | int   |
+| dram_value_hits                          | src/ext_storage.c:1587 | int   |
+| throttle_total_throttled                 | src/ext_storage.c:1588 | int   |
+| throttle_queued_clients                  | src/ext_storage.c:1589 | int   |
+| throttle_current_rate                    | src/ext_storage.c:1590 | float |
+| throttle_allowed_tps                     | src/ext_storage.c:1591 | float |
+| spill_submitted_count                    | src/ext_storage.c:1635 | int   |
+| spill_serialized_count                   | src/ext_storage.c:1636 | int   |
+| mean_spill_ram                           | src/ext_storage.c:1637 | int   |
+| inflight_spill_ram_bytes                 | src/ext_storage.c:1638 | int   |
 
-All five live in the `external_storage` INFO section (valkey-data-tiering
+All of them live in the `external_storage` INFO section (valkey-data-tiering
 src/server.c:6803).
+
+Two of the resolutions are worth stating outright.
+
+`throttle_current_rate` is formatted `%.4f` and `throttle_allowed_tps` `%.1f`
+(src/ext_storage.c:1590-1591), so both are parsed as float. The other two
+throttle fields are `%lld` counters and are parsed as int.
+
+`spill_submitted_count` (src/ext_storage.c:1635) and `spill_submitted`
+(src/ext_storage.c:1584) are both emitted and are two different counters.
+`spill_submitted` is a plain `long long` incremented by the V1 spilling loop
+when a spill reaches the IO thread (src/ext_storage.c:149). `spill_submitted_count`
+is an atomic incremented on the main thread at submit (src/ext_storage.c:42) and
+is one of the two inputs to the spill dead-time predictor, whose submit depth is
+`spill_submitted_count - spill_serialized_count` (src/ext_storage.c:82-83). This
+module emits `spill_submitted_count`, which is both the name the reference
+dashboard CSV uses and the counter that pairs with `spill_serialized_count`,
+`mean_spill_ram` and `inflight_spill_ram_bytes` to describe one pipeline.
 
 Hit ratios
 ----------
@@ -81,9 +110,46 @@ Deltas
 `instantaneous_ops_per_sec`. `total_commands_delta` is the raw command count in
 the interval; `ops_per_sec` is that count divided by the measured interval. The
 first sample of a run has no predecessor, so every delta-derived field is 0
-there. Disk IOPS and MB/s are likewise deltas over the measured interval, and
-CPU percentages are tick deltas over the measured interval (100.0 means one
-fully busy core, so a multi-threaded server can exceed 100).
+there. CPU percentages are tick deltas over the measured interval (100.0 means
+one fully busy core, so a multi-threaded server can exceed 100).
+
+Disk detail
+-----------
+Every disk column except `disk_in_flight` is derived from deltas of
+`/sys/block/<dev>/stat` between consecutive samples. That file holds, in order:
+read ios, read merges, read sectors, read ticks, write ios, write merges, write
+sectors, write ticks, in flight, io ticks, time in queue. Sector counts are in
+512-byte units and all three tick fields are milliseconds.
+
+`interval` below is the measured wall-clock seconds between samples, and
+`interval_ms` is that times 1000.
+
+| Column                | Derivation                                          |
+| --------------------- | --------------------------------------------------- |
+| disk_read_iops        | delta read ios / interval                           |
+| disk_write_iops       | delta write ios / interval                          |
+| disk_read_mb          | delta read sectors * 512 / 1 MiB / interval         |
+| disk_write_mb         | delta write sectors * 512 / 1 MiB / interval        |
+| disk_read_merges_ps   | delta read merges / interval                        |
+| disk_write_merges_ps  | delta write merges / interval                       |
+| disk_r_await_ms       | delta read ticks / delta read ios                   |
+| disk_w_await_ms       | delta write ticks / delta write ios                 |
+| disk_aqu_sz           | delta time in queue / interval_ms                   |
+| disk_util_pct         | delta io ticks / interval_ms * 100, capped at 100.0 |
+| disk_in_flight        | in flight, read directly                            |
+| disk_req_sz_kb        | delta sectors * 512 / delta ios / 1024              |
+
+The two await columns divide by the ios completed in the interval, so each is
+the mean service time of one IO rather than a rate. `disk_req_sz_kb` combines
+reads and writes in both its numerator and its denominator, so it is the mean
+size of any IO on the device. `disk_util_pct` is capped because io ticks is
+wall-clock busy time on a queue that can be served concurrently, so on an NVMe
+device the raw ratio can exceed 1.
+
+A zero denominator yields 0.0, which covers both the first sample of a run (no
+predecessor to take a delta against) and an interval in which the device
+completed no IO at all. `disk_in_flight` is a gauge, not a delta, so it is read
+on every sample including the first.
 """
 
 import json
@@ -123,9 +189,43 @@ TIERING_INFO_FIELDS = (
     "total_num_items_spilled_to_ext_storage",
     "total_num_items_fetched_from_ext_storage",
     "num_items_spilling_to_ext_storage",
+    "kbc_fetching_block",
     "completion_read_ok",
     "dram_value_hits",
+    "throttle_total_throttled",
+    "throttle_queued_clients",
+    "spill_attempts",
+    "spill_submitted_count",
+    "spill_serialized_count",
+    "mean_spill_ram",
+    "inflight_spill_ram_bytes",
+    "oom_reject_write_count",
 )
+
+# Tiering INFO fields the engine formats as floating point rather than as
+# integer counters (src/ext_storage.c:1590-1591).
+TIERING_INFO_FLOAT_FIELDS = (
+    "throttle_current_rate",
+    "throttle_allowed_tps",
+)
+
+# /sys/block/<dev>/stat field positions, keyed by the name used internally.
+# The kernel emits these eleven in this order for a whole disk, sectors in
+# 512-byte units and all three tick fields in milliseconds.
+_DISK_STAT_FIELDS = (
+    ("read_ios", 0),
+    ("read_merges", 1),
+    ("read_sectors", 2),
+    ("read_ticks", 3),
+    ("write_ios", 4),
+    ("write_merges", 5),
+    ("write_sectors", 6),
+    ("write_ticks", 7),
+    ("in_flight", 8),
+    ("io_ticks", 9),
+    ("time_in_queue", 10),
+)
+_DISK_STAT_MIN_FIELDS = len(_DISK_STAT_FIELDS)
 
 
 def _read_text(path: str, default: str = "") -> str:
@@ -259,19 +359,18 @@ def read_thread_cpu_ticks(pid: int, thread_name: str) -> Optional[int]:
 
 
 def read_disk_counters(device: str) -> Optional[Dict[str, int]]:
-    """Return cumulative IO counters for a block device, or None if unreadable."""
+    """Return the /sys/block/<device>/stat counters, or None if unreadable.
+
+    Returns every field named in `_DISK_STAT_FIELDS`. A stat line with fewer
+    fields than that yields None rather than a partial dict, so a device the
+    kernel describes in less detail leaves the disk columns at 0 instead of
+    producing derived values from fields that are not there.
+    """
     parts = _read_text(str(_SYS_BLOCK_DIR / device / "stat")).split()
-    # /sys/block/<dev>/stat: rd_ios rd_merges rd_sectors rd_ticks
-    #                        wr_ios wr_merges wr_sectors wr_ticks ...
-    if len(parts) < 7:
+    if len(parts) < _DISK_STAT_MIN_FIELDS:
         return None
     try:
-        return {
-            "read_ios": int(parts[0]),
-            "read_sectors": int(parts[2]),
-            "write_ios": int(parts[4]),
-            "write_sectors": int(parts[6]),
-        }
+        return {name: int(parts[index]) for name, index in _DISK_STAT_FIELDS}
     except ValueError:
         return None
 
@@ -471,8 +570,13 @@ class MetricsSampler:
             ops_per_sec = round(commands_delta / interval, 2)
         self._prev_total_commands = total_commands
 
-        # Tiering counters, emitted under their own INFO field names.
+        # Tiering counters, emitted under their own INFO field names. The
+        # throttle rate fields are float-formatted by the engine, so they are
+        # parsed as float and the rest as int.
         tiering = {field: _to_int(info.get(field)) for field in TIERING_INFO_FIELDS}
+        tiering.update(
+            {field: _to_float(info.get(field)) for field in TIERING_INFO_FLOAT_FIELDS}
+        )
         dram_value_hits = tiering["dram_value_hits"]
         completion_read_ok = tiering["completion_read_ok"]
 
@@ -612,12 +716,20 @@ class MetricsSampler:
         return round(tick_delta / (interval * _CLK_TCK) * 100, 2)
 
     def _disk_metrics(self, interval: Optional[float]) -> Dict[str, Any]:
-        """Derive disk IOPS and throughput as deltas over the interval."""
+        """Derive the block device columns from /sys/block stat deltas."""
         metrics: Dict[str, Any] = {
             "disk_read_iops": 0.0,
             "disk_write_iops": 0.0,
             "disk_read_mb": 0.0,
             "disk_write_mb": 0.0,
+            "disk_read_merges_ps": 0.0,
+            "disk_write_merges_ps": 0.0,
+            "disk_r_await_ms": 0.0,
+            "disk_w_await_ms": 0.0,
+            "disk_aqu_sz": 0.0,
+            "disk_util_pct": 0.0,
+            "disk_in_flight": 0,
+            "disk_req_sz_kb": 0.0,
         }
         if not self.block_device:
             return metrics
@@ -630,20 +742,41 @@ class MetricsSampler:
             )
             return metrics
 
+        # A gauge rather than a counter, so it is read on every sample.
+        metrics["disk_in_flight"] = counters["in_flight"]
+
         if self._prev_disk is not None and interval:
             prev = self._prev_disk
-            metrics["disk_read_iops"] = self._rate(
-                counters["read_ios"] - prev["read_ios"], interval
-            )
-            metrics["disk_write_iops"] = self._rate(
-                counters["write_ios"] - prev["write_ios"], interval
-            )
+            delta = {name: counters[name] - prev[name] for name, _ in _DISK_STAT_FIELDS}
+            interval_ms = interval * 1000
+            total_ios = delta["read_ios"] + delta["write_ios"]
+            total_sectors = delta["read_sectors"] + delta["write_sectors"]
+
+            metrics["disk_read_iops"] = self._rate(delta["read_ios"], interval)
+            metrics["disk_write_iops"] = self._rate(delta["write_ios"], interval)
             metrics["disk_read_mb"] = self._sector_rate_mb(
-                counters["read_sectors"] - prev["read_sectors"], interval
+                delta["read_sectors"], interval
             )
             metrics["disk_write_mb"] = self._sector_rate_mb(
-                counters["write_sectors"] - prev["write_sectors"], interval
+                delta["write_sectors"], interval
             )
+            metrics["disk_read_merges_ps"] = self._rate(delta["read_merges"], interval)
+            metrics["disk_write_merges_ps"] = self._rate(
+                delta["write_merges"], interval
+            )
+            metrics["disk_r_await_ms"] = self._per_io_ms(
+                delta["read_ticks"], delta["read_ios"]
+            )
+            metrics["disk_w_await_ms"] = self._per_io_ms(
+                delta["write_ticks"], delta["write_ios"]
+            )
+            metrics["disk_aqu_sz"] = self._queue_length(
+                delta["time_in_queue"], interval_ms
+            )
+            metrics["disk_util_pct"] = self._busy_percent(
+                delta["io_ticks"], interval_ms
+            )
+            metrics["disk_req_sz_kb"] = self._request_size_kb(total_sectors, total_ios)
         self._prev_disk = counters
         return metrics
 
@@ -660,3 +793,35 @@ class MetricsSampler:
         if sector_delta <= 0 or interval <= 0:
             return 0.0
         return round(sector_delta * _SECTOR_BYTES / _BYTES_PER_MB / interval, 2)
+
+    @staticmethod
+    def _per_io_ms(tick_delta: int, io_delta: int) -> float:
+        """Return mean milliseconds per IO, 0.0 when no IO completed."""
+        if tick_delta <= 0 or io_delta <= 0:
+            return 0.0
+        return round(tick_delta / io_delta, 2)
+
+    @staticmethod
+    def _queue_length(queue_tick_delta: int, interval_ms: float) -> float:
+        """Return mean queue depth: queued milliseconds over the interval."""
+        if queue_tick_delta <= 0 or interval_ms <= 0:
+            return 0.0
+        return round(queue_tick_delta / interval_ms, 2)
+
+    @staticmethod
+    def _busy_percent(io_tick_delta: int, interval_ms: float) -> float:
+        """Return device busy percent over the interval, capped at 100.0.
+
+        io ticks is wall-clock busy time on a queue that can be served
+        concurrently, so the raw ratio can exceed 1 on an NVMe device.
+        """
+        if io_tick_delta <= 0 or interval_ms <= 0:
+            return 0.0
+        return round(min(100.0, io_tick_delta / interval_ms * 100), 2)
+
+    @staticmethod
+    def _request_size_kb(sector_delta: int, io_delta: int) -> float:
+        """Return mean IO size in KB, 0.0 when no IO completed."""
+        if sector_delta <= 0 or io_delta <= 0:
+            return 0.0
+        return round(sector_delta * _SECTOR_BYTES / io_delta / 1024, 2)

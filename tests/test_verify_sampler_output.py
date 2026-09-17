@@ -3,7 +3,8 @@
 The verifier decides whether the smoke workflow passes, so each assertion it
 makes is exercised against a fabricated results tree: a passing two-scenario
 series, plus one failure per check (clobbered scenario, nonzero tiering counter,
-non-increasing elapsed_sec, missing config_set, no time series file at all).
+non-increasing elapsed_sec, missing config_set, missing disk column, no time
+series file at all).
 """
 
 import json
@@ -36,6 +37,10 @@ def _row(scenario, elapsed_sec, **overrides):
     }
     for column in verify_sampler_output.TIERING_COLUMNS:
         row[column] = 0
+    # Disk columns are checked for presence, so these carry the kind of
+    # nonzero values a busy runner reports.
+    for index, column in enumerate(verify_sampler_output.DISK_COLUMNS):
+        row[column] = float(index + 1)
     row.update(overrides)
     return row
 
@@ -147,6 +152,44 @@ class TestVerifyFails:
 
         with pytest.raises(AssertionError, match="completion_read_ok is 17"):
             verify_sampler_output.verify(results_dir, config_path)
+
+    def test_nonzero_throttle_counter_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[2]["throttle_total_throttled"] = 5
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="throttle_total_throttled is 5"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_nonzero_spill_pipeline_counter_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[5]["inflight_spill_ram_bytes"] = 4096
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="inflight_spill_ram_bytes is 4096"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_missing_disk_column_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        del rows[1]["disk_r_await_ms"]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="disk column disk_r_await_ms missing"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_zero_disk_column_passes(self, tmp_path):
+        # Disk values are the runner's own activity, so 0 is not a failure.
+        rows = [
+            _row("a", elapsed, disk_util_pct=0.0, disk_in_flight=0)
+            for elapsed in range(MIN_ROWS)
+        ]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        verify_sampler_output.verify(results_dir, config_path)
 
     def test_non_increasing_elapsed_sec_fails(self, tmp_path):
         rows = _scenario_rows("a")

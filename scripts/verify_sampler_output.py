@@ -13,6 +13,8 @@ without identity:
   - `used_memory` is nonzero on every row (INFO was actually sampled) and
     `ops_per_sec` is nonzero somewhere in each scenario (traffic was sampled)
   - every tiering counter is 0, which is what a stock upstream server reports
+  - every disk column is present, checked for presence rather than value
+    because the runner has real disk activity of its own
   - the context columns are on every row
 
 The first and last row of each file are printed so a CI log shows the shape of
@@ -31,8 +33,35 @@ TIERING_COLUMNS = (
     "total_num_items_spilled_to_ext_storage",
     "total_num_items_fetched_from_ext_storage",
     "num_items_spilling_to_ext_storage",
+    "kbc_fetching_block",
     "completion_read_ok",
     "dram_value_hits",
+    "throttle_total_throttled",
+    "throttle_queued_clients",
+    "throttle_current_rate",
+    "throttle_allowed_tps",
+    "spill_attempts",
+    "spill_submitted_count",
+    "spill_serialized_count",
+    "mean_spill_ram",
+    "inflight_spill_ram_bytes",
+    "oom_reject_write_count",
+)
+# Disk columns are derived from the host's block device, which is busy with
+# work unrelated to the benchmark, so these are checked for presence only.
+DISK_COLUMNS = (
+    "disk_read_iops",
+    "disk_write_iops",
+    "disk_read_mb",
+    "disk_write_mb",
+    "disk_read_merges_ps",
+    "disk_write_merges_ps",
+    "disk_r_await_ms",
+    "disk_w_await_ms",
+    "disk_aqu_sz",
+    "disk_util_pct",
+    "disk_in_flight",
+    "disk_req_sz_kb",
 )
 CONTEXT_COLUMNS = ("commit", "scenario", "command")
 # config_set is an empty dict when the config declares no config_sets,
@@ -98,6 +127,10 @@ def verify_timeseries_file(path: Path, expected_scenarios: Set[str]) -> None:
                     f"{label} row {index}: {column} is {row[column]}, "
                     "expected 0 on a stock server"
                 )
+            for column in DISK_COLUMNS:
+                assert (
+                    column in row
+                ), f"{label} row {index}: disk column {column} missing"
             for column in CONTEXT_COLUMNS:
                 assert row.get(
                     column
