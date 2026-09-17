@@ -62,8 +62,9 @@ class TestBuildServerCommandCustomConfigsAppended:
         assert "300" in cmd
 
     def test_configs_appear_BEFORE_benchmark_defaults(self, launcher):
-        """Custom configs must come before the defaults block so last-wins
-        semantics give defaults precedence."""
+        """Custom configs must come before the defaults block, so that last-wins
+        semantics give the PROTECTED defaults precedence. Non-protected defaults
+        are skipped on collision instead of relying on ordering."""
         launcher.config = {"custom-server-configs": {"maxmemory": "4gb"}}
         cmd = _call_build(launcher)
         save_idx = cmd.index("--save")
@@ -100,20 +101,76 @@ class TestBuildServerCommandNumericStringification:
         assert cmd[idx + 1] == "10.5"
 
 
-class TestBuildServerCommandDefenseInDepth:
-    """Even if a reserved key bypassed validation, harness defaults still win
-    via valkey CLI last-wins semantics (defaults come after custom configs)."""
+class TestBuildServerCommandPrecedenceOnCollision:
+    """A user-supplied key wins over the matching benchmark default, unless the
+    key is in PROTECTED_SERVER_DEFAULTS (harness plumbing the framework owns)."""
 
-    def test_benchmark_defaults_win_on_collision(self, launcher):
-        # Bypass validation by setting config directly on launcher.
+    def test_user_maxmemory_policy_wins(self, launcher):
         launcher.config = {"custom-server-configs": {"maxmemory-policy": "noeviction"}}
         cmd = _call_build(launcher)
-        # Both should be present; the LAST occurrence is what valkey honors.
-        assert cmd.count("--maxmemory-policy") == 2
-        last_idx = len(cmd) - 1 - cmd[::-1].index("--maxmemory-policy")
+        # The default is skipped entirely, so the flag appears exactly once.
+        assert cmd.count("--maxmemory-policy") == 1
+        idx = cmd.index("--maxmemory-policy")
+        assert cmd[idx + 1] == "noeviction"
+        assert "allkeys-lru" not in cmd
+
+    def test_protected_default_still_wins_on_collision(self, launcher):
+        launcher.config = {"custom-server-configs": {"daemonize": "no"}}
+        cmd = _call_build(launcher)
+        # Protected keys keep today's behavior: both present, default last.
+        assert cmd.count("--daemonize") == 2
+        last_idx = len(cmd) - 1 - cmd[::-1].index("--daemonize")
         assert (
-            cmd[last_idx + 1] == "allkeys-lru"
-        ), "benchmark default must come last (and therefore win)"
+            cmd[last_idx + 1] == "yes"
+        ), "protected default must come last (and therefore win)"
+
+    @pytest.mark.parametrize(
+        "key,user_value,default_value",
+        [
+            ("cluster-enabled", "yes", "no"),
+            ("daemonize", "no", "yes"),
+            ("appendonly", "yes", "no"),
+            ("protected-mode", "yes", "no"),
+            ("logfile", "/tmp/user.log", "/tmp/test.log"),
+            ("save", "900 1", "''"),
+        ],
+    )
+    def test_every_protected_key_keeps_default(
+        self, launcher, key, user_value, default_value
+    ):
+        launcher.config = {"custom-server-configs": {key: user_value}}
+        cmd = _call_build(launcher)
+        assert cmd.count(f"--{key}") == 2
+        last_idx = len(cmd) - 1 - cmd[::-1].index(f"--{key}")
+        assert cmd[last_idx + 1] == default_value
+
+    def test_no_collision_command_unchanged(self, launcher):
+        """Non-colliding customs leave the defaults region exactly as before."""
+        launcher.config = {
+            "custom-server-configs": {
+                "maxmemory": "16gb",
+                "timeout": 0,
+                "maxclients": 10000,
+            }
+        }
+        cmd = _call_build(launcher)
+        save_idx = cmd.index("--save")
+        assert cmd[save_idx - 12 :] == [
+            "--cluster-enabled",
+            "no",
+            "--daemonize",
+            "yes",
+            "--maxmemory-policy",
+            "allkeys-lru",
+            "--appendonly",
+            "no",
+            "--protected-mode",
+            "no",
+            "--logfile",
+            "/tmp/test.log",
+            "--save",
+            "''",
+        ]
 
 
 # ---------------------------------------------------------------------------
