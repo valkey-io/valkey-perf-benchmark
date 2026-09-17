@@ -1178,30 +1178,15 @@ series that every scenario the config defines has rows in the one appended file 
 what proves appending did not clobber), that `elapsed_sec` starts at 0 and increases within
 each scenario's rows, that `used_memory` and `ops_per_sec` are real, that the context
 fields including `config_set` are on every row, and that every tiering counter is 0 as
-expected on a server without data tiering.
+expected on a server without data tiering. Those assertions live in
+`scripts/verify_sampler_output.py`, which the workflow invokes and
+`tests/test_verify_sampler_output.py` covers directly.
 
-### Per-Second Time Series Table
+### Per-Second Time Series Output
 
-`dashboards/schema.sql` defines `benchmark_metrics_tiering_ts`, one row per (commit,
-scenario, `elapsed_sec`), fed by `push_to_postgres.py --table tiering_ts`.
-
-**The table name is a development placeholder and is not final.** Renaming it means
-editing its block in `schema.sql`, the `--table` value in the workflow, and any dashboard
-JSON that queries it. Nothing else references it yet, so the rename is cheap.
-
-Run identity columns (`timestamp`, `commit`, `command`, `data_size`, `pipeline`,
-`clients`) are denormalized onto every per-second row so that `create_indexes()` in
-`utils/push_to_postgres.py`, which hardcodes those names, runs unmodified.
-
-`config_set` is declared `TEXT`. `convert_metrics_to_rows()` in
-`utils/push_to_postgres.py` wraps it in psycopg2's `Json` adapter, so it arrives as
-serialized JSON text, and a config_set with several keys runs past the 255 characters a
-`VARCHAR(255)` would allow.
-
-**Create the time series table from `schema.sql` before the first push.** The dynamic
-table-creation path in `utils/push_to_postgres.py` infers `INTEGER` for Python ints, which
-overflows for byte counters such as `used_memory` on a large-memory host. `schema.sql`
-declares those columns `BIGINT`.
+Rows land in `<results_dir>/<commit>/timeseries.json` and nowhere else. The Postgres
+time series table and the push step that loads it arrive in a follow-up PR, so nothing
+here writes to a database.
 
 ## Performance Profiling
 

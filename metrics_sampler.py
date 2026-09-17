@@ -70,11 +70,9 @@ A zero denominator yields 0.0 for both forms (not null, not an error), matching
 the reference CSV, which emits 0.0 for the first ten-plus samples of its run
 while `dram_value_hits` is still 0.
 
-Column names follow the reference dashboard CSV
+Column names match the reference dashboard CSV
 (valkey-data-tiering/benchmark_dashboard/data/zipfian-80-20.csv) wherever this
-slice covers the same metric, so the existing chart definitions port over. The
-CSV header, not the collector README, is the authority: the README documents an
-older column set.
+module covers the same metric, so the existing chart definitions port over.
 
 Deltas
 ------
