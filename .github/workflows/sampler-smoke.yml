@@ -82,6 +82,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          from collections import defaultdict
           from pathlib import Path
 
           # Tiering counters must sample as 0 on a stock upstream server: the
@@ -94,45 +95,80 @@ jobs:
               "dram_value_hits",
           )
           CONTEXT_COLUMNS = ("commit", "scenario", "command")
+          # config_set is an empty dict when the config declares no config_sets,
+          # so it is checked for presence rather than truthiness.
+          PRESENT_COLUMNS = ("config_set",)
           MIN_ROWS = 8
 
-          paths = sorted(Path("results").glob("*/timeseries_*.json"))
-          assert paths, "no timeseries_*.json written under results/"
+          config = json.loads(Path("configs/sampler-smoke.json").read_text())
+          expected_scenarios = {
+              scenario["id"]
+              for entry in config
+              for group in entry.get("test_groups", [])
+              for scenario in group.get("scenarios", [])
+          }
+          assert expected_scenarios, "smoke config declares no scenarios"
+
+          paths = sorted(Path("results").glob("*/timeseries.json"))
+          assert paths, "no timeseries.json written under results/"
           print(f"Found {len(paths)} time series file(s)")
 
           for path in paths:
               rows = json.loads(path.read_text())
               print(f"--- {path}: {len(rows)} rows")
-              assert len(rows) >= MIN_ROWS, f"{path}: {len(rows)} rows < {MIN_ROWS}"
               print(f"first row: {json.dumps(rows[0], indent=2)}")
               print(f"last row: {json.dumps(rows[-1], indent=2)}")
 
-              assert rows[0]["elapsed_sec"] == 0, (
-                  f"{path}: first elapsed_sec is {rows[0]['elapsed_sec']}, not 0"
-              )
-              elapsed = [row["elapsed_sec"] for row in rows]
-              assert all(
-                  later > earlier for earlier, later in zip(elapsed, elapsed[1:])
-              ), f"{path}: elapsed_sec not strictly increasing: {elapsed}"
+              # Every scenario appends to this one file, so a missing scenario
+              # means a later write clobbered an earlier one.
+              by_scenario = defaultdict(list)
+              for row in rows:
+                  by_scenario[row.get("scenario")].append(row)
+              print(f"scenarios present: {sorted(by_scenario)}")
+              missing = expected_scenarios - set(by_scenario)
+              assert not missing, f"{path}: no rows for scenario(s) {sorted(missing)}"
 
-              for index, row in enumerate(rows):
-                  assert row["used_memory"] > 0, (
-                      f"{path} row {index}: used_memory is {row['used_memory']}, "
-                      "so INFO was not sampled"
+              for scenario_id in sorted(expected_scenarios):
+                  scenario_rows = by_scenario[scenario_id]
+                  label = f"{path} scenario {scenario_id}"
+                  assert len(scenario_rows) >= MIN_ROWS, (
+                      f"{label}: {len(scenario_rows)} rows < {MIN_ROWS}"
                   )
-                  for column in TIERING_COLUMNS:
-                      assert row[column] == 0, (
-                          f"{path} row {index}: {column} is {row[column]}, "
-                          "expected 0 on a stock server"
-                      )
-                  for column in CONTEXT_COLUMNS:
-                      assert row.get(column), (
-                          f"{path} row {index}: context column {column} missing"
-                      )
 
-              assert any(row["ops_per_sec"] > 0 for row in rows), (
-                  f"{path}: ops_per_sec is 0 on every row, so no traffic was sampled"
-              )
+                  # elapsed_sec restarts per scenario, so it increases within a
+                  # scenario's rows rather than across the whole file.
+                  assert scenario_rows[0]["elapsed_sec"] == 0, (
+                      f"{label}: first elapsed_sec is "
+                      f"{scenario_rows[0]['elapsed_sec']}, not 0"
+                  )
+                  elapsed = [row["elapsed_sec"] for row in scenario_rows]
+                  assert all(
+                      later > earlier for earlier, later in zip(elapsed, elapsed[1:])
+                  ), f"{label}: elapsed_sec not strictly increasing: {elapsed}"
+
+                  for index, row in enumerate(scenario_rows):
+                      assert row["used_memory"] > 0, (
+                          f"{label} row {index}: used_memory is "
+                          f"{row['used_memory']}, so INFO was not sampled"
+                      )
+                      for column in TIERING_COLUMNS:
+                          assert row[column] == 0, (
+                              f"{label} row {index}: {column} is {row[column]}, "
+                              "expected 0 on a stock server"
+                          )
+                      for column in CONTEXT_COLUMNS:
+                          assert row.get(column), (
+                              f"{label} row {index}: context column {column} missing"
+                          )
+                      for column in PRESENT_COLUMNS:
+                          assert column in row, (
+                              f"{label} row {index}: context column {column} missing"
+                          )
+
+                  assert any(row["ops_per_sec"] > 0 for row in scenario_rows), (
+                      f"{label}: ops_per_sec is 0 on every row, so no traffic "
+                      "was sampled"
+                  )
 
           print("Sampler smoke assertions passed")
           PY
