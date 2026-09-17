@@ -14,6 +14,21 @@ VALKEY_SERVER = "src/valkey-server"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
 
+# Server settings the harness always controls, even when the benchmark config
+# sets the same key in "custom-server-configs". These keys are process
+# plumbing (daemonization, log capture, persistence, cluster wiring) that the
+# framework depends on, so their defaults are always emitted last and win by
+# valkey's last-wins CLI semantics. Every other default is a workload
+# parameter and yields to a user-supplied value.
+PROTECTED_SERVER_DEFAULTS = {
+    "cluster-enabled",
+    "daemonize",
+    "logfile",
+    "save",
+    "appendonly",
+    "protected-mode",
+}
+
 
 def apply_config_to_servers(
     config_set: dict,
@@ -221,36 +236,36 @@ class ServerLauncher:
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
 
-        # Apply custom-server-configs from benchmark config. These are added
-        # BEFORE the benchmark defaults block so that, by valkey CLI last-wins
-        # semantics, the harness's defaults always take precedence over any
-        # user-supplied value for the same key.
+        # Apply custom-server-configs from benchmark config. These are emitted
+        # BEFORE the benchmark defaults block. Because valkey applies last-wins
+        # semantics for repeated flags, a default emitted afterwards would
+        # override the user's value, so the defaults block is appended only for
+        # keys the user did not set, or for keys in PROTECTED_SERVER_DEFAULTS,
+        # which the harness always controls.
         custom_configs = (
             (self.config or {}).get("custom-server-configs")
             if hasattr(self, "config")
             else None
-        )
-        if custom_configs:
-            for key, value in custom_configs.items():
-                cmd += [f"--{key}", str(value)]
+        ) or {}
+        for key, value in custom_configs.items():
+            cmd += [f"--{key}", str(value)]
 
-        # Common server configuration (benchmark defaults — always win).
-        cmd += [
-            "--cluster-enabled",
-            "yes" if cluster_mode else "no",
-            "--daemonize",
-            "yes",
-            "--maxmemory-policy",
-            "allkeys-lru",
-            "--appendonly",
-            "no",
-            "--protected-mode",
-            "no",
-            "--logfile",
-            log_file,
-            "--save",
-            "''",
-        ]
+        # Common server configuration (benchmark defaults). Emitted in a fixed
+        # order; a default is skipped when the user set the same key and that
+        # key is not protected.
+        benchmark_defaults = {
+            "cluster-enabled": "yes" if cluster_mode else "no",
+            "daemonize": "yes",
+            "maxmemory-policy": "allkeys-lru",
+            "appendonly": "no",
+            "protected-mode": "no",
+            "logfile": log_file,
+            "save": "''",
+        }
+        for key, value in benchmark_defaults.items():
+            if key in custom_configs and key not in PROTECTED_SERVER_DEFAULTS:
+                continue
+            cmd += [f"--{key}", value]
 
         return cmd
 

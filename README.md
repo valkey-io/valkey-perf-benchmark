@@ -358,15 +358,17 @@ Combine with a baseline `.conf` file:
 | `custom-server-configs` | Additional server configuration options the benchmark does not manage (e.g. `{"maxmemory": "4gb", "timeout": "300"}`). | Object (key-value pairs) | No |
 | `custom-server-config-file` | Path to a Valkey-format `.conf` file passed positionally to `valkey-server`. Used as a baseline configuration. | String (path) | No |
 
-**Note on `custom-server-configs`**: This field lets you pass *additional* configuration options to the Valkey server at startup — settings the benchmark itself does not manage (e.g. `maxmemory`, `timeout`, `maxclients`, `tcp-keepalive`, `hz`).
+**Note on `custom-server-configs`**: This field lets you pass extra configuration options to the Valkey server at startup (e.g. `maxmemory`, `timeout`, `maxclients`, `tcp-keepalive`, `hz`), and to override a benchmark-managed default such as `maxmemory-policy`.
 
 **Precedence**: Configs are applied in this order on the `valkey-server` command line:
 
-1. `custom-server-config-file` (positional, parsed first — lowest priority)
-2. `custom-server-configs` (`--key value` flags)
-3. Benchmark-managed defaults (`--key value` flags — highest priority via Valkey's last-wins semantics)
+1. `custom-server-config-file` (positional, parsed first, lowest priority)
+2. Benchmark-managed defaults (`--key value` flags)
+3. `custom-server-configs` (`--key value` flags, highest priority)
 
-This means harness-critical settings (`port`, `daemonize`, `logfile`, `cluster-*`, etc.) always take effect regardless of what the user supplies. Setting them in `custom-server-configs` is allowed but has no effect.
+A key you set in `custom-server-configs` wins over the benchmark default for that key: the framework skips its own default instead of appending it afterwards. For example, setting `"maxmemory-policy": "noeviction"` takes effect even though the default is `allkeys-lru`.
+
+The exception is a small protected set the harness always controls, because the framework depends on it for process management and log capture: `cluster-enabled`, `daemonize`, `logfile`, `save`, `appendonly`, `protected-mode`. Setting one of these in `custom-server-configs` is allowed but has no effect. The same is true of flags the framework sets from other config fields (`port`, `bind`, `io-threads`, `cluster-config-file`, `loadmodule`, TLS paths).
 
 When `warmup` is provided for read commands, the benchmark performs three stages:
 
