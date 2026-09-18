@@ -111,6 +111,76 @@ class TestValidateConfigTestGroupsFormat:
         validate_config(minimal_test_groups_config)  # should not raise
 
 
+class TestValidateIterations:
+    def test_accepts_iterations_and_selected_scenarios(
+        self, minimal_test_groups_config
+    ):
+        minimal_test_groups_config["test_groups"][0]["iterations"] = {
+            "count": 3,
+            "scenarios": [
+                {
+                    "id": "sample",
+                    "command": "GET item:{iteration}",
+                    "on_iterations": [1, 3],
+                },
+            ],
+        }
+
+        validate_config(minimal_test_groups_config)
+
+    @pytest.mark.parametrize(
+        ("iterations", "error"),
+        [
+            ([], "must be a dictionary"),
+            ({"scenarios": [{"id": "step"}]}, "missing 'count' field"),
+            ({"count": 2}, "missing 'scenarios' field"),
+            ({"count": 0, "scenarios": [{"id": "step"}]}, "positive integer"),
+            ({"count": 2, "scenarios": []}, "must be a non-empty list"),
+            ({"count": 2, "scenarios": ["bad"]}, "must be a dictionary"),
+            (
+                {
+                    "count": 2,
+                    "scenarios": [
+                        {
+                            "id": "step",
+                            "command": "GET key",
+                            "on_iterations": "1",
+                        }
+                    ],
+                },
+                "must be a list of positive integers",
+            ),
+            (
+                {
+                    "count": 2,
+                    "scenarios": [
+                        {
+                            "id": "sample",
+                            "command": "GET key",
+                            "on_iterations": [3],
+                        }
+                    ],
+                },
+                "cannot exceed iteration count",
+            ),
+            (
+                {"count": 2, "scenarios": [{"id": "step"}]},
+                "exactly one of 'test' or 'command'",
+            ),
+        ],
+    )
+    def test_rejects_invalid_iterations(
+        self,
+        minimal_test_groups_config,
+        iterations,
+        error,
+    ):
+        minimal_test_groups_config["test_groups"][0]["iterations"] = iterations
+
+        with pytest.raises(ValueError, match=error):
+            validate_config(minimal_test_groups_config)
+
+
 # ---------------------------------------------------------------------------
 # validate_config — mutation of cluster_mode / tls_mode
 # ---------------------------------------------------------------------------

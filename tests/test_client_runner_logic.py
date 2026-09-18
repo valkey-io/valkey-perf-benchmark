@@ -409,12 +409,14 @@ class TestCreateFailureMarker:
             "pipeline": fields.pop("pipeline"),
             "clients": fields.pop("clients"),
         }
+        if "iteration" in fields:
+            workload["iteration"] = fields.pop("iteration")
         return runner._create_failure_marker(
             self._processor(runner), workload, **fields
         )
 
     def test_marker_base_identity_and_config_fields(self, minimal_client_runner):
-        marker = self._marker(minimal_client_runner, config_set={})
+        marker = self._marker(minimal_client_runner, config_set={}, iteration=2)
 
         assert marker["test_id"] == "1_test1"
         assert marker["test_phase"] == "write"
@@ -433,6 +435,7 @@ class TestCreateFailureMarker:
         assert marker["clients"] == 50
         assert marker["requests"] == 1000
         assert marker["benchmark_mode"] == "requests"
+        assert marker["iteration"] == 2
 
     def test_marker_has_no_performance_fields_and_unset_axes_absent(
         self, minimal_client_runner
@@ -531,6 +534,60 @@ class TestIterateTestGroupsScenarios:
             results_dir=Path("/tmp"),
             valkey_path="/tmp/valkey",
             valkey_benchmark_path="src/valkey-benchmark",
+        )
+
+    def test_builds_iteration_sequence(self, minimal_valid_config):
+        test_groups = [
+            {
+                "group": 1,
+                "scenarios": [
+                    {"id": "load", "command": "SET item:0 value", "type": "write"}
+                ],
+                "iterations": {
+                    "count": 3,
+                    "scenarios": [
+                        {
+                            "id": "mutate",
+                            "command": "SET item:{iteration} value",
+                            "dataset": "updates-{iteration}.csv",
+                            "type": "write",
+                        },
+                        {
+                            "id": "sample",
+                            "command": "GET item:{iteration}",
+                            "on_iterations": [1, 3],
+                            "type": "read",
+                        },
+                    ],
+                },
+            }
+        ]
+        runner = self._runner_with_groups(minimal_valid_config, test_groups)
+
+        scenarios = [
+            item["scenario"] for item in runner._iterate_test_groups_scenarios()
+        ]
+
+        assert [scenario["id"] for scenario in scenarios] == [
+            "load",
+            "mutate",
+            "sample",
+            "mutate",
+            "mutate",
+            "sample",
+        ]
+        assert [scenario.get("iteration") for scenario in scenarios] == [
+            None,
+            1,
+            1,
+            2,
+            3,
+            3,
+        ]
+        assert scenarios[1]["command"] == "SET item:1 value"
+        assert scenarios[4]["dataset"] == "updates-3.csv"
+        assert test_groups[0]["iterations"]["scenarios"][0]["command"] == (
+            "SET item:{iteration} value"
         )
 
     def test_yields_group_description(self, minimal_valid_config):
@@ -1861,6 +1918,7 @@ class TestBuildScenarioMetricsAggregatedRow:
             "id": "a",
             "type": "read",
             "cluster_execution": "parallel",
+            "iteration": 2,
             **workload,
         }
         label = next(iter(workload.values()))
@@ -1880,6 +1938,7 @@ class TestBuildScenarioMetricsAggregatedRow:
         assert result is not None
         assert result["status"] == "success"
         assert result["test_id"] == "1_a"
+        assert result["iteration"] == 2
         metrics_processor.create_metrics.assert_called_once()
         call = metrics_processor.create_metrics.call_args
         assert call.args[:2] == (aggregated, label)

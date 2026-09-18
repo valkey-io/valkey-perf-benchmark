@@ -69,6 +69,32 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _iterate_group_scenarios(test_group: dict) -> Iterable[dict]:
+    """Yield initial scenarios followed by the configured iteration sequence."""
+    yield from test_group.get("scenarios", [])
+
+    iterations = test_group.get("iterations")
+    if iterations is None:
+        return
+
+    for iteration in range(1, iterations["count"] + 1):
+        for scenario in iterations["scenarios"]:
+            on_iterations = scenario.get("on_iterations")
+            if on_iterations is not None and iteration not in on_iterations:
+                continue
+
+            repeated_scenario = copy.deepcopy(scenario)
+            repeated_scenario["iteration"] = iteration
+            for field in ("command", "dataset"):
+                value = repeated_scenario.get(field)
+                if isinstance(value, str):
+                    repeated_scenario[field] = value.replace(
+                        "{iteration}",
+                        str(iteration),
+                    )
+            yield repeated_scenario
+
+
 class ClientRunner:
     """Run ``valkey-benchmark`` for a given commit and configuration."""
 
@@ -385,7 +411,7 @@ class ClientRunner:
                 else:
                     logging.info(f"=== Group {group_id}: {group_description or ''} ===")
 
-                for scenario in test_group.get("scenarios", []):
+                for scenario in _iterate_group_scenarios(test_group):
                     # Cluster mode is scalarized only at execution time.
                     test_cmd = scenario.get("test")
                     if test_cmd in ("MSET", "MGET") and self.cluster_mode:
@@ -617,6 +643,7 @@ class ClientRunner:
         group_description: Optional[str] = None,
         scenario_description: Optional[str] = None,
         dataset: Optional[str] = None,
+        iteration: Optional[int] = None,
     ) -> None:
         """Stamp shared scenario identity fields onto ``metrics`` in place.
 
@@ -640,6 +667,8 @@ class ClientRunner:
             metrics["module_commit_timestamp"] = self.module_commit_timestamp
         if dataset:
             metrics["dataset"] = dataset
+        if iteration is not None:
+            metrics["iteration"] = iteration
 
     def _create_failure_marker(
         self,
@@ -683,6 +712,7 @@ class ClientRunner:
             group_description=group_description,
             scenario_description=parent.get("description"),
             dataset=workload.get("dataset"),
+            iteration=parent.get("iteration"),
         )
         return marker
 
@@ -748,6 +778,7 @@ class ClientRunner:
         scenario_type = scenario.get("type", "test")
         scenario_id = scenario.get("id", "unknown")
         origin_simple = scenario.get(ORIGIN_FIELD) == ORIGIN_SIMPLE
+        iteration = scenario.get("iteration", None)
 
         logging.info(f"Running scenario: {scenario_id} (type: {scenario_type})")
 
@@ -758,6 +789,8 @@ class ClientRunner:
         effective_profiling = self._resolve_effective_profiling(scenario)
         scenario_profiling_enabled = effective_profiling.get("enabled", False)
         profile_id = f"group{group_id}_{scenario_type}_{scenario_id}_{config_suffix}"
+        if iteration is not None:
+            profile_id += f"_iteration_{iteration}"
 
         warmup_duration = scenario.get("warmup", 0)
         try:
@@ -1090,6 +1123,7 @@ class ClientRunner:
             group_description=group_description,
             scenario_description=scenario.get("description"),
             dataset=scenario.get("dataset"),
+            iteration=scenario.get("iteration"),
         )
         return metrics
 
@@ -1314,6 +1348,7 @@ class ClientRunner:
             group_description=group_description,
             scenario_description=parent_scenario.get("description"),
             dataset=sub_cfg.get("dataset"),
+            iteration=parent_scenario.get("iteration"),
         )
         return metrics
 
