@@ -131,6 +131,37 @@ class TestValidateConfigMutation:
 
 
 # ---------------------------------------------------------------------------
+# validate_config — post_commands
+# ---------------------------------------------------------------------------
+
+
+class TestValidateConfigPostCommands:
+    """validate_config SHALL accept a list of command strings and reject
+    malformed entries."""
+
+    def test_command_strings_accepted(self, minimal_valid_config):
+        minimal_valid_config["post_commands"] = ["INFO memory", "MEMORY STATS"]
+        validate_config(minimal_valid_config)
+
+    def test_empty_list_accepted(self, minimal_valid_config):
+        minimal_valid_config["post_commands"] = []
+        validate_config(minimal_valid_config)
+
+    def test_not_a_list(self, minimal_valid_config):
+        minimal_valid_config["post_commands"] = "INFO memory"
+        with pytest.raises(ValueError, match="'post_commands' must be a list"):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("entry", ["", "  ", 123, None, {"cmd": "INFO"}])
+    def test_invalid_entry_rejected(self, minimal_valid_config, entry):
+        minimal_valid_config["post_commands"] = [entry]
+        with pytest.raises(
+            ValueError, match=r"post_commands\[0\]' must be a non-empty string"
+        ):
+            validate_config(minimal_valid_config)
+
+
+# ---------------------------------------------------------------------------
 # parse_bool
 # ---------------------------------------------------------------------------
 
@@ -417,6 +448,26 @@ class TestValidateTestGroups:
                 },
                 "combines 'mixed' with 'populate_with'",
             ),
+            # scenario-level post_commands get the same shape checks
+            (
+                {"id": "s1", "test": "GET", "post_commands": "INFO memory"},
+                r"scenarios\[0\]\.post_commands' must be a list",
+            ),
+            (
+                {"id": "s1", "test": "GET", "post_commands": [{"cmd": "INFO"}]},
+                r"scenarios\[0\]\.post_commands\[0\]' must be a non-empty string",
+            ),
+            # mixed scenarios are validated before the early continue
+            (
+                {
+                    "id": "s1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "command": "SET foo bar"}],
+                    "reads": [{"id": "r", "command": "GET foo"}],
+                    "post_commands": [""],
+                },
+                r"scenarios\[0\]\.post_commands\[0\]' must be a non-empty",
+            ),
         ],
     )
     def test_invalid_scenario_raises(self, scenario, match):
@@ -449,6 +500,15 @@ class TestValidateTestGroups:
                 "writes": [{"id": "w1", "command": "HSET k f v"}],
                 "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
             },
+            # scenario-level post_commands, mirroring setup_commands
+            {
+                "id": "s1",
+                "test": "GET",
+                "setup_commands": ["FT.CREATE idx ON HASH SCHEMA t TEXT"],
+                "post_commands": ["INFO memory", "FT.INFO idx"],
+            },
+            # an empty list is valid and simply runs nothing
+            {"id": "s1", "test": "GET", "post_commands": []},
         ],
     )
     def test_valid_scenario_passes(self, scenario):
