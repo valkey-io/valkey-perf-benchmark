@@ -2017,3 +2017,96 @@ class TestProfilingAlwaysStopped:
 
         assert result == expected
         assert profiler.stop_profiling.call_count == 1
+
+
+class TestRunPostCommands:
+    """post_commands SHALL run after a scenario's benchmark run, fall back to the
+    config-level list, reuse one connection, and swallow failures."""
+
+    def _patch_client(self, runner, execute_return=None, side_effect=None):
+        client = MagicMock()
+        if side_effect is not None:
+            client.execute_command.side_effect = side_effect
+        else:
+            client.execute_command.return_value = execute_return
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=client)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return patch.object(runner, "_client_context", return_value=ctx), client
+
+    def test_noop_when_absent(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config.pop("post_commands", None)
+        patcher, client = self._patch_client(runner, "ok")
+        with patcher:
+            runner._run_post_commands({"id": "s1"})
+        client.execute_command.assert_not_called()
+
+    def test_runs_each_command_in_order(self, minimal_client_runner):
+        runner = minimal_client_runner
+        scenario = {"post_commands": ["INFO memory", "DBSIZE"]}
+        patcher, client = self._patch_client(runner, "ok")
+        with patcher:
+            runner._run_post_commands(scenario)
+
+        assert [c.args for c in client.execute_command.call_args_list] == [
+            ("INFO", "memory"),
+            ("DBSIZE",),
+        ]
+
+    def test_logs_command_and_result(self, minimal_client_runner, caplog):
+        runner = minimal_client_runner
+        scenario = {"post_commands": ["INFO memory"]}
+        patcher, _ = self._patch_client(runner, "used_memory:42")
+        with patcher, caplog.at_level(logging.INFO):
+            runner._run_post_commands(scenario)
+
+        messages = [r.message for r in caplog.records]
+        assert "Executing post command: INFO memory" in messages
+        assert "Post command result: used_memory:42" in messages
+
+    def test_failure_swallowed_and_later_commands_still_run(
+        self, minimal_client_runner, caplog
+    ):
+        runner = minimal_client_runner
+        scenario = {"post_commands": ["BOGUS", "DBSIZE"]}
+        patcher, client = self._patch_client(
+            runner, side_effect=[RuntimeError("boom"), 7]
+        )
+        with patcher, caplog.at_level(logging.WARNING):
+            runner._run_post_commands(scenario)
+
+        assert client.execute_command.call_count == 2
+        assert any(
+            "Failed to execute post command 'BOGUS'" in r.message
+            for r in caplog.records
+        )
+
+    def test_falls_back_to_config_level(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["post_commands"] = ["INFO memory"]
+        patcher, client = self._patch_client(runner, "ok")
+        with patcher:
+            runner._run_post_commands({"id": "s1"})
+
+        assert [c.args for c in client.execute_command.call_args_list] == [
+            ("INFO", "memory")
+        ]
+
+    def test_scenario_overrides_config_level(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["post_commands"] = ["INFO memory"]
+        patcher, client = self._patch_client(runner, "ok")
+        with patcher:
+            runner._run_post_commands({"post_commands": ["DBSIZE"]})
+
+        assert [c.args for c in client.execute_command.call_args_list] == [("DBSIZE",)]
+
+    def test_empty_scenario_list_opts_out_of_config_level(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["post_commands"] = ["INFO memory"]
+        patcher, client = self._patch_client(runner, "ok")
+        with patcher:
+            runner._run_post_commands({"post_commands": []})
+
+        client.execute_command.assert_not_called()

@@ -782,7 +782,7 @@ class ClientRunner:
                         warmup_duration,
                         group_description=group_description,
                     )
-                    return metrics_list if metrics_list else None
+                    return metrics_list
 
                 # Invocation errors reach the outer scenario error policy.
                 proc, aggregated_row = self._execute_benchmark_run(scenario, seed_val)
@@ -835,6 +835,7 @@ class ClientRunner:
                 self._stop_scenario_profiling(
                     profiler, scenario_profiling_enabled, profile_id
                 )
+                self._run_post_commands(scenario)
 
         except Exception as e:
             if origin_simple:
@@ -1092,6 +1093,42 @@ class ClientRunner:
             dataset=scenario.get("dataset"),
         )
         return metrics
+
+    def _run_post_commands(self, scenario: dict) -> None:
+        """Run post_commands once a scenario's benchmark run has finished.
+
+        Runs whether or not the run succeeded, so the state behind a failure is
+        still captured, and skips the whole list when the server is unreachable.
+        A scenario's own list wins, otherwise the config-level list applies, so a
+        scenario opts out with an empty list. Failures are logged and swallowed,
+        a diagnostic command will never fail the benchmark.
+        """
+        if "post_commands" in scenario:
+            post_commands = scenario["post_commands"]
+        else:
+            post_commands = self.config.get("post_commands", [])
+        if not post_commands:
+            return
+
+        with self._client_context() as client:
+            client.connection_pool.connection_kwargs["socket_timeout"] = 300
+            try:
+                client.ping()
+            except Exception as e:
+                logging.warning(
+                    f"Skipping {len(post_commands)} post command(s), "
+                    f"server is not reachable: {e}"
+                )
+                return
+
+            for cmd_str in post_commands:
+                logging.info(f"Executing post command: {cmd_str}")
+                try:
+                    # Logged as the server returned it.
+                    result = client.execute_command(*shlex.split(cmd_str))
+                    logging.info(f"Post command result: {result}")
+                except Exception as e:
+                    logging.warning(f"Failed to execute post command '{cmd_str}': {e}")
 
     def _execute_setup_command(self, cmd_str: str) -> None:
         """Execute a setup command via valkey client."""
