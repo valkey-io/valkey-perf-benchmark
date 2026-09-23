@@ -456,6 +456,112 @@
             }
           }
         ]
+      },
+      {
+        "group": 5,
+        "description": "P5 - FT.HYBRID HNSW",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "description": "Load 100K vector hybrid docs (HNSW index) for FT.HYBRID",
+            "setup_commands": [
+              "FT.CREATE rd0 ON HASH PREFIX 1 rd0- SCHEMA title TEXT price NUMERIC category TAG SEPARATOR | embedding VECTOR HNSW 10 DIM 256 DISTANCE_METRIC L2 TYPE FLOAT32 M 16 EF_CONSTRUCTION 200"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/vector_hybrid_100k.npy",
+            "maxdocs": 100000,
+            "clients": 1000,
+            "duration": 120,
+            "sequential": true,
+            "command": "HSET rd0-{tag}:__rand_int__ title \"__field:title__\" price \"__field:price__\" category \"__field:category__\" embedding \"__field:embedding__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID baseline (text + vector, RRF)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "c",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID baseline (text + vector, LINEAR)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 COMBINE LINEAR 6 ALPHA 0.5 BETA 0.5 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "d",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID with VSIM tag filter",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 FILTER \"@category:{electronics}\" COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "e",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID with SEARCH numeric filter",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__ @price:[100 500]\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "f",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID with both arms constrained",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__ @price:[100 500]\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 FILTER \"@category:{electronics}\" COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "g",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID baseline - latency (10 clients)",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 10,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          }
+        ]
       }
     ],
     "port": 6379,
