@@ -579,6 +579,20 @@
             "id": "i",
             "type": "read",
             "cluster_execution": "single",
+            "description": "FT.HYBRID SEARCH prefix query in content arm",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:__field:search_term__*\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "j",
+            "type": "read",
+            "cluster_execution": "single",
             "description": "FT.HYBRID retrieval path with filter (LOAD fields)",
             "dataset": "datasets/vector_queries_100.npy",
             "clients": 1000,
@@ -590,7 +604,21 @@
             }
           },
           {
-            "id": "j",
+            "id": "k",
+            "type": "read",
+            "cluster_execution": "single",
+            "description": "FT.HYBRID SEARCH fuzzy query in content arm",
+            "dataset": "datasets/vector_queries_100.npy",
+            "clients": 1000,
+            "duration": 90,
+            "warmup": 30,
+            "command": "FT.HYBRID rd0 SEARCH \"@title:%__field:search_term__%\" VSIM @embedding $vec KNN 4 K 10 EF_RUNTIME 100 COMBINE RRF 4 CONSTANT 60 WINDOW 20 PARAMS 2 vec \"__field:query_vector__\" DIALECT 2 LIMIT 0 10",
+            "options": {
+              "": ""
+            }
+          },
+          {
+            "id": "l",
             "type": "read",
             "cluster_execution": "single",
             "description": "FT.HYBRID baseline - latency (10 clients)",
