@@ -417,6 +417,78 @@ class TestValidateTestGroups:
                 },
                 "combines 'mixed' with 'populate_with'",
             ),
+            # benchmark_args must be a list of strings
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": "--zipfian 1.0"},
+                "'benchmark_args' must be a list of strings",
+            ),
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": ["--keysize", 100]},
+                "'benchmark_args' must be a list of strings",
+            ),
+            # checked on a mixed parent too, before the mixed early-return
+            (
+                {
+                    "id": "m1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "command": "SET foo bar"}],
+                    "reads": [{"id": "r", "command": "GET foo"}],
+                    "benchmark_args": {"--zipfian": "1.0"},
+                },
+                "'benchmark_args' must be a list of strings",
+            ),
+            # mixed children are validated at their own location
+            (
+                {
+                    "id": "m1",
+                    "type": "mixed",
+                    "writes": [
+                        {"id": "w", "test": "SET", "benchmark_args": "--zipfian 1.0"}
+                    ],
+                    "reads": [{"id": "r", "test": "GET"}],
+                },
+                r"scenarios\[0\]\.writes\[0\] 'benchmark_args' must be a list of strings",
+            ),
+            (
+                {
+                    "id": "m1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "test": "SET"}],
+                    "reads": [
+                        {"id": "r1", "test": "GET"},
+                        {
+                            "id": "r2",
+                            "test": "GET",
+                            "benchmark_args": ["--keysize", 100],
+                        },
+                    ],
+                },
+                r"scenarios\[0\]\.reads\[1\] 'benchmark_args' must be a list of strings",
+            ),
+            # flags the framework emits itself are rejected
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": ["-c 50"]},
+                "'benchmark_args' sets '-c', which the framework emits itself",
+            ),
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": ["--duration=30"]},
+                "'benchmark_args' sets '--duration', which the framework emits itself",
+            ),
+            (
+                {"id": "s1", "test": "GET", "benchmark_args": ["-- SET foo bar"]},
+                "'benchmark_args' sets '--', which the framework emits itself",
+            ),
+            (
+                {
+                    "id": "m1",
+                    "type": "mixed",
+                    "writes": [
+                        {"id": "w", "test": "SET", "benchmark_args": ["--seed 7"]}
+                    ],
+                    "reads": [{"id": "r", "test": "GET"}],
+                },
+                r"scenarios\[0\]\.writes\[0\] 'benchmark_args' sets '--seed'",
+            ),
         ],
     )
     def test_invalid_scenario_raises(self, scenario, match):
@@ -449,6 +521,37 @@ class TestValidateTestGroups:
                 "writes": [{"id": "w1", "command": "HSET k f v"}],
                 "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
             },
+            # benchmark_args as a list of strings, on a test scenario
+            {
+                "id": "s1",
+                "test": "GET",
+                "benchmark_args": ["--zipfian 1.0", "--keysize 100"],
+            },
+            # an empty benchmark_args list is accepted
+            {"id": "s1", "command": "GET key", "benchmark_args": []},
+            # benchmark_args on a mixed parent, for its children to inherit
+            {
+                "id": "m1",
+                "type": "mixed",
+                "writes": [{"id": "w1", "test": "SET"}],
+                "reads": [{"id": "r1", "test": "GET"}],
+                "benchmark_args": ["--zipfian 1.0"],
+            },
+            # benchmark_args on a mixed child
+            {
+                "id": "m1",
+                "type": "mixed",
+                "writes": [
+                    {
+                        "id": "w1",
+                        "test": "SET",
+                        "benchmark_args": ["--zipfian 1.0", "--keysize 100"],
+                    }
+                ],
+                "reads": [{"id": "r1", "test": "GET"}],
+            },
+            # a negative value token is not a protected flag
+            {"id": "s1", "test": "GET", "benchmark_args": ["--zipfian -1.0"]},
         ],
     )
     def test_valid_scenario_passes(self, scenario):
