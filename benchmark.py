@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import platform
+import shlex
 from itertools import product
 from pathlib import Path
 from typing import List, Optional
@@ -65,6 +66,33 @@ OPTIONAL_CONF_KEYS = [
     "custom-server-configs",
     "custom-server-config-file",
 ]
+
+# valkey-benchmark flags emitted by _build_benchmark_command; a duplicate in
+# benchmark_args would silently override the value recorded in metrics.json.
+PROTECTED_BENCHMARK_ARGS = {
+    "-h",
+    "-p",
+    "-c",
+    "-P",
+    "-d",
+    "-n",
+    "-r",
+    "-t",
+    "--duration",
+    "--seed",
+    "--sequential",
+    "--threads",
+    "--warmup",
+    "--cluster",
+    "--tls",
+    "--cert",
+    "--key",
+    "--cacert",
+    "--csv",
+    "--dataset",
+    "--maxdocs",
+    "--xml-root-element",
+}
 
 
 # ---------- CLI --------------------------------------------------------------
@@ -517,6 +545,29 @@ def validate_cpu_allocation(cfg: dict) -> None:
         validate_explicit_cpu_ranges(cfg["server_cpu_range"], cfg["client_cpu_range"])
 
 
+def _validate_benchmark_args(scenario: dict, location: str) -> None:
+    """Validate a scenario's optional benchmark_args passthrough list."""
+    if "benchmark_args" not in scenario:
+        return
+
+    benchmark_args = scenario["benchmark_args"]
+    if not isinstance(benchmark_args, list) or not all(
+        isinstance(arg, str) for arg in benchmark_args
+    ):
+        raise ValueError(f"{location} 'benchmark_args' must be a list of strings")
+
+    for arg in benchmark_args:
+        for token in shlex.split(arg):
+            if not token.startswith("-"):
+                continue
+            flag = token.split("=", 1)[0]
+            if flag in PROTECTED_BENCHMARK_ARGS:
+                raise ValueError(
+                    f"{location} 'benchmark_args' sets {flag!r}, which the "
+                    "framework emits itself; use the scenario field for it instead"
+                )
+
+
 def validate_test_groups(cfg: dict) -> None:
     """Validate test_groups structure."""
     if "test_groups" not in cfg:
@@ -540,17 +591,10 @@ def validate_test_groups(cfg: dict) -> None:
             if not isinstance(scenario, dict):
                 raise ValueError(f"test_groups[{i}].scenarios[{j}] must be a dict")
 
+            location = f"test_groups[{i}].scenarios[{j}]"
             # Checked before the mixed early-return below, because a mixed
             # parent may carry benchmark_args for its children to inherit.
-            if "benchmark_args" in scenario:
-                benchmark_args = scenario["benchmark_args"]
-                if not isinstance(benchmark_args, list) or not all(
-                    isinstance(arg, str) for arg in benchmark_args
-                ):
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'benchmark_args' must "
-                        "be a list of strings"
-                    )
+            _validate_benchmark_args(scenario, location)
 
             if scenario.get("type") == "mixed":
                 if "populate_with" in scenario:
@@ -559,6 +603,10 @@ def validate_test_groups(cfg: dict) -> None:
                         "with 'populate_with'; mixed scenarios seed the "
                         "keyspace through their own 'writes' sub-scenarios"
                     )
+                for side in ("writes", "reads"):
+                    for k, child in enumerate(scenario.get(side, [])):
+                        if isinstance(child, dict):
+                            _validate_benchmark_args(child, f"{location}.{side}[{k}]")
                 continue
 
             if ("test" in scenario) == ("command" in scenario):
