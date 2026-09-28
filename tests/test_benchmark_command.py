@@ -1,10 +1,12 @@
 """Unit tests for ClientRunner._build_benchmark_command."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from benchmark import validate_config
+from benchmark import PROTECTED_BENCHMARK_ARGS, validate_config
+from valkey_benchmark import ClientRunner
 
 
 def _compiled_basic_scenario(command):
@@ -505,6 +507,49 @@ class TestBuildBenchmarkCommandBenchmarkArgs:
             "42",
             "--csv",
         ]
+
+
+class TestProtectedBenchmarkArgsCoverEmitter:
+    """PROTECTED_BENCHMARK_ARGS must name every flag _build_benchmark_command emits."""
+
+    def _emitted_flags(self, minimal_valid_config):
+        runner = ClientRunner(
+            commit_id="abc123",
+            config=minimal_valid_config,
+            cluster_mode=True,
+            tls_mode=True,
+            target_ip="127.0.0.1",
+            results_dir=Path("/tmp/test_results"),
+            valkey_path="/tmp/valkey",
+            valkey_benchmark_path="src/valkey-benchmark",
+            benchmark_threads=4,
+        )
+        scenarios = [
+            {"test": "GET", "duration": 10, "warmup_inline": 5, "sequential": True},
+            {"test": "GET", "requests": 100},
+            {
+                "command": "HSET doc:__rand_int__ f v",
+                "type": "write",
+                "dataset": "data.xml",
+                "xml_root_element": "doc",
+                "maxdocs": 100,
+                "clients": 4,
+                "pipeline": 2,
+                "data_size": 64,
+                "duration": 10,
+            },
+            {"command": "GET key", "type": "read", "requests": 100},
+        ]
+        argv = []
+        for scenario in scenarios:
+            argv += runner._build_benchmark_command(scenario, seed_val=1)
+        argv += runner._build_benchmark_command(scenarios[0], warmup_mode=True)
+        return {token.split("=", 1)[0] for token in argv if token.startswith("-")}
+
+    def test_every_emitted_flag_is_protected(self, minimal_valid_config):
+        emitted = self._emitted_flags(minimal_valid_config)
+        assert "-t" in emitted and "--tls" in emitted and "--cluster" in emitted
+        assert emitted <= PROTECTED_BENCHMARK_ARGS, emitted - PROTECTED_BENCHMARK_ARGS
 
 
 class TestBenchmarkArgsMixedInheritance:

@@ -475,6 +475,10 @@ class TestValidateTestGroups:
                 "'benchmark_args' sets '--duration', which the framework emits itself",
             ),
             (
+                {"id": "s1", "test": "GET", "benchmark_args": ["-- SET foo bar"]},
+                "'benchmark_args' sets '--', which the framework emits itself",
+            ),
+            (
                 {
                     "id": "m1",
                     "type": "mixed",

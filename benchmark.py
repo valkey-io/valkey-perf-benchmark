@@ -69,7 +69,9 @@ OPTIONAL_CONF_KEYS = [
 
 # valkey-benchmark flags emitted by _build_benchmark_command; a duplicate in
 # benchmark_args would silently override the value recorded in metrics.json.
+# The bare separator is included so --csv can never land inside the command.
 PROTECTED_BENCHMARK_ARGS = {
+    "--",
     "-h",
     "-p",
     "-c",
