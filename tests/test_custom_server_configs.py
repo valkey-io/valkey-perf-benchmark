@@ -1,8 +1,11 @@
 """Unit tests for custom-server-configs in ServerLauncher._build_server_command."""
 
+import copy
+
 import pytest
 
-from valkey_server import ServerLauncher
+from benchmark import validate_config
+from valkey_server import FRAMEWORK_SERVER_FLAGS, ServerLauncher
 
 
 @pytest.fixture
@@ -62,9 +65,8 @@ class TestBuildServerCommandCustomConfigsAppended:
         assert "300" in cmd
 
     def test_configs_appear_BEFORE_benchmark_defaults(self, launcher):
-        """Custom configs must come before the defaults block, so that last-wins
-        semantics give the PROTECTED defaults precedence. Non-protected defaults
-        are skipped on collision instead of relying on ordering."""
+        """Custom configs come before the defaults block. A default that
+        collides with a custom key is skipped rather than reordered."""
         launcher.config = {"custom-server-configs": {"maxmemory": "4gb"}}
         cmd = _call_build(launcher)
         save_idx = cmd.index("--save")
@@ -102,8 +104,8 @@ class TestBuildServerCommandNumericStringification:
 
 
 class TestBuildServerCommandPrecedenceOnCollision:
-    """A user-supplied key wins over the matching benchmark default, unless the
-    key is in PROTECTED_SERVER_DEFAULTS (harness plumbing the framework owns)."""
+    """A user-supplied key wins over the matching benchmark default: the default
+    is skipped so the flag appears exactly once."""
 
     def test_user_maxmemory_policy_wins(self, launcher):
         launcher.config = {"custom-server-configs": {"maxmemory-policy": "noeviction"}}
@@ -113,36 +115,6 @@ class TestBuildServerCommandPrecedenceOnCollision:
         idx = cmd.index("--maxmemory-policy")
         assert cmd[idx + 1] == "noeviction"
         assert "allkeys-lru" not in cmd
-
-    def test_protected_default_still_wins_on_collision(self, launcher):
-        launcher.config = {"custom-server-configs": {"daemonize": "no"}}
-        cmd = _call_build(launcher)
-        # Protected keys keep today's behavior: both present, default last.
-        assert cmd.count("--daemonize") == 2
-        last_idx = len(cmd) - 1 - cmd[::-1].index("--daemonize")
-        assert (
-            cmd[last_idx + 1] == "yes"
-        ), "protected default must come last (and therefore win)"
-
-    @pytest.mark.parametrize(
-        "key,user_value,default_value",
-        [
-            ("cluster-enabled", "yes", "no"),
-            ("daemonize", "no", "yes"),
-            ("appendonly", "yes", "no"),
-            ("protected-mode", "yes", "no"),
-            ("logfile", "/tmp/user.log", "/tmp/test.log"),
-            ("save", "900 1", "''"),
-        ],
-    )
-    def test_every_protected_key_keeps_default(
-        self, launcher, key, user_value, default_value
-    ):
-        launcher.config = {"custom-server-configs": {key: user_value}}
-        cmd = _call_build(launcher)
-        assert cmd.count(f"--{key}") == 2
-        last_idx = len(cmd) - 1 - cmd[::-1].index(f"--{key}")
-        assert cmd[last_idx + 1] == default_value
 
     def test_no_collision_command_unchanged(self, launcher):
         """Non-colliding customs leave the defaults region exactly as before."""
@@ -215,3 +187,89 @@ class TestBuildServerCommandCustomConfigFile:
         assert "/path/to/x.conf" in cmd
         # Last config pair should still be --save '' (no inline appended)
         assert cmd[-2:] == ["--save", "''"]
+
+
+# ---------------------------------------------------------------------------
+# validate_config: custom-server-configs key rejection
+# ---------------------------------------------------------------------------
+
+
+class TestCustomServerConfigsValidation:
+    """Keys the framework manages are rejected, everything else passes."""
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "port",
+            "io-threads",
+            "tls-port",
+            "loadmodule",
+            "cluster-config-file",
+            "daemonize",
+            "logfile",
+            "save",
+        ],
+    )
+    def test_framework_managed_key_rejected(self, minimal_valid_config, key):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {key: "x"}
+        with pytest.raises(ValueError) as exc:
+            validate_config(cfg)
+        msg = str(exc.value)
+        assert repr(key) in msg
+        assert "is managed by the framework" in msg
+        assert FRAMEWORK_SERVER_FLAGS[key] in msg
+
+    def test_unmanaged_keys_accepted(self, minimal_valid_config):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {
+            "maxmemory-policy": "noeviction",
+            "maxmemory": "1gb",
+            "hz": 20,
+        }
+        validate_config(cfg)
+
+
+class TestFrameworkServerFlagsCoverEmitter:
+    """Every flag _build_server_command emits is either a framework flag or a
+    benchmark default, so FRAMEWORK_SERVER_FLAGS cannot drift from the emitter."""
+
+    BENCHMARK_DEFAULTS = {
+        "cluster-enabled",
+        "daemonize",
+        "maxmemory-policy",
+        "appendonly",
+        "protected-mode",
+        "logfile",
+        "save",
+    }
+
+    def test_all_emitted_flags_are_known(self, launcher):
+        launcher.valkey_path = "/tmp/valkey"
+        launcher.config = {"cluster_config_dir": "."}
+        launcher.modules = [
+            {"path": "/x.so", "startup_args": ["--a"]},
+            {"path": "/y.so"},
+        ]
+        cmd = launcher._build_server_command(
+            port=6379,
+            bind_ip="10.0.0.1",
+            cpu_range=None,
+            tls_mode=True,
+            cluster_mode=True,
+            io_threads=4,
+            module_path=None,
+            log_file="/tmp/t.log",
+        )
+        emitted = {tok.split()[0][2:] for tok in cmd if tok.split()[0].startswith("--")}
+        known = set(FRAMEWORK_SERVER_FLAGS) | self.BENCHMARK_DEFAULTS
+        assert emitted <= known, f"unlisted flags: {sorted(emitted - known)}"
+        for flag in (
+            "port",
+            "tls-port",
+            "io-threads",
+            "loadmodule",
+            "cluster-config-file",
+            "bind",
+        ):
+            assert flag in emitted

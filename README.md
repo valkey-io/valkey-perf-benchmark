@@ -368,7 +368,7 @@ Combine with a baseline `.conf` file:
 
 A key you set in `custom-server-configs` wins over the benchmark default for that key: the framework skips its own default instead of appending it afterwards. For example, setting `"maxmemory-policy": "noeviction"` takes effect even though the default is `allkeys-lru`.
 
-The exception is a small protected set the harness always controls, because the framework depends on it for process management and log capture: `cluster-enabled`, `daemonize`, `logfile`, `save`, `appendonly`, `protected-mode`. Setting one of these in `custom-server-configs` is allowed but has no effect. The same is true of flags the framework sets from other config fields (`port`, `bind`, `io-threads`, `cluster-config-file`, `loadmodule`, TLS paths).
+`custom-server-configs` is for settings the framework does not manage. A key the framework sets from another config field (`port`, `io-threads`, `tls_mode`, `modules`, `cluster_mode`, `cluster_nodes`, `cluster_config_dir`) or needs for process management (`daemonize`, `logfile`, `save`, `appendonly`, `protected-mode`) is rejected at config validation with a message naming the reason.
 
 When `warmup` is provided for read commands, the benchmark performs three stages:
 

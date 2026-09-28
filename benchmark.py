@@ -12,7 +12,11 @@ import sys
 
 
 from valkey_build import ServerBuilder
-from valkey_server import ServerLauncher, apply_config_to_servers
+from valkey_server import (
+    FRAMEWORK_SERVER_FLAGS,
+    ServerLauncher,
+    apply_config_to_servers,
+)
 from valkey_benchmark import (
     ClientRunner,
     ORIGIN_FIELD,
@@ -411,6 +415,11 @@ def validate_config(cfg: dict) -> None:
             if not isinstance(key, str):
                 raise ValueError(
                     f"'custom-server-configs' keys must be strings, got: {type(key)}"
+                )
+            if key in FRAMEWORK_SERVER_FLAGS:
+                raise ValueError(
+                    f"'custom-server-configs' key {key!r} is managed by the framework "
+                    f"({FRAMEWORK_SERVER_FLAGS[key]}) and cannot be set here"
                 )
             # Note: bool is a subclass of int in Python, so check bool first.
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
