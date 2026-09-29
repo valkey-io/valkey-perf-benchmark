@@ -426,6 +426,11 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(
                     f"'custom-server-configs' values must be strings or numbers, got: {type(value)}"
                 )
+        if "io-threads" in cfg["custom-server-configs"] and "io-threads" in cfg:
+            raise ValueError(
+                "'custom-server-configs' sets 'io-threads' while the top-level "
+                "'io-threads' field is also set; use one or the other"
+            )
     if "custom-server-config-file" in cfg:
         if not isinstance(cfg["custom-server-config-file"], str):
             raise ValueError("'custom-server-config-file' must be a string path")
@@ -660,6 +665,27 @@ def run_benchmark_matrix(
             builder.terminate_and_clean_valkey()
 
 
+def _resolve_io_threads_list(cfg: dict) -> list:
+    """Return the io-threads values to sweep for a config.
+
+    A value set through "custom-server-configs" is reflected here so the
+    recorded io_threads metric matches what the server ran.
+    """
+    value = cfg.get("io-threads")
+    if isinstance(value, int):
+        return [value]
+    if value is not None:
+        return value
+
+    custom = cfg.get("custom-server-configs", {}).get("io-threads")
+    if custom is None:
+        return [None]
+    try:
+        return [int(custom)]
+    except (TypeError, ValueError):
+        return [None]
+
+
 def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):
     """Generate all execution configurations from config and CLI args."""
     # Normalize cluster_modes
@@ -680,11 +706,7 @@ def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):
         config_sets = [{}]
 
     # Normalize io_threads
-    io_threads_list = cfg.get("io-threads")
-    if io_threads_list is None:
-        io_threads_list = [None]
-    elif isinstance(io_threads_list, int):
-        io_threads_list = [io_threads_list]
+    io_threads_list = _resolve_io_threads_list(cfg)
 
     # Generate all combinations
     for cluster_mode in cluster_modes:

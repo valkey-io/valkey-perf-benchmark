@@ -25,7 +25,6 @@ FRAMEWORK_SERVER_FLAGS: Dict[str, str] = {
     "bind": "set from 'cluster_nodes'",
     "cluster-announce-ip": "set from 'cluster_nodes'",
     "cluster-config-file": "set from 'cluster_config_dir'",
-    "io-threads": "set from the 'io-threads' field",
     "loadmodule": "set from 'modules'",
     "cluster-enabled": "set from 'cluster_mode'",
     "daemonize": "required for process management",
@@ -34,6 +33,9 @@ FRAMEWORK_SERVER_FLAGS: Dict[str, str] = {
     "appendonly": "required for process management",
     "protected-mode": "required for process management",
 }
+
+# Flags the framework emits that "custom-server-configs" may override.
+OVERRIDABLE_SERVER_FLAGS = {"io-threads", "maxmemory-policy"}
 
 
 def apply_config_to_servers(
@@ -220,8 +222,17 @@ class ServerLauncher:
         if bind_ip:
             cmd += ["--bind", bind_ip]
 
+        # custom-server-configs: user settings the framework does not manage,
+        # plus the flags in OVERRIDABLE_SERVER_FLAGS. Validation has already
+        # rejected any key in FRAMEWORK_SERVER_FLAGS.
+        custom_configs = (
+            (self.config or {}).get("custom-server-configs")
+            if hasattr(self, "config")
+            else None
+        ) or {}
+
         # Optional configurations
-        if io_threads is not None:
+        if io_threads is not None and "io-threads" not in custom_configs:
             cmd += ["--io-threads", str(io_threads)]
 
         # Modules
@@ -242,13 +253,6 @@ class ServerLauncher:
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
 
-        # custom-server-configs: user settings the framework does not manage.
-        # Validation has already rejected any key in FRAMEWORK_SERVER_FLAGS.
-        custom_configs = (
-            (self.config or {}).get("custom-server-configs")
-            if hasattr(self, "config")
-            else None
-        ) or {}
         for key, value in custom_configs.items():
             cmd += [f"--{key}", str(value)]
 

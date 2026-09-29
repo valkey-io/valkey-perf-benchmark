@@ -368,7 +368,7 @@ Combine with a baseline `.conf` file:
 
 A key you set in `custom-server-configs` wins over the benchmark default for that key: the framework skips its own default instead of appending it afterwards. For example, setting `"maxmemory-policy": "noeviction"` takes effect even though the default is `allkeys-lru`.
 
-`custom-server-configs` is for settings the framework does not manage. A key the framework sets from another config field (`port`, `io-threads`, `tls_mode`, `modules`, `cluster_mode`, `cluster_nodes`, `cluster_config_dir`) or needs for process management (`daemonize`, `logfile`, `save`, `appendonly`, `protected-mode`) is rejected at config validation with a message naming the reason.
+`custom-server-configs` is for settings the framework does not manage. A key the framework sets from another config field (`port`, `tls_mode`, `modules`, `cluster_mode`, `cluster_nodes`, `cluster_config_dir`) or needs for process management (`daemonize`, `logfile`, `save`, `appendonly`, `protected-mode`) is rejected at config validation with a message naming the reason. `io-threads` may be set through `custom-server-configs`, but not at the same time as the top-level `io-threads` field, which sweeps multiple values.
 
 When `warmup` is provided for read commands, the benchmark performs three stages:
 

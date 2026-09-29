@@ -5,7 +5,11 @@ import copy
 import pytest
 
 from benchmark import validate_config
-from valkey_server import FRAMEWORK_SERVER_FLAGS, ServerLauncher
+from valkey_server import (
+    FRAMEWORK_SERVER_FLAGS,
+    OVERRIDABLE_SERVER_FLAGS,
+    ServerLauncher,
+)
 
 
 @pytest.fixture
@@ -150,6 +154,49 @@ class TestBuildServerCommandPrecedenceOnCollision:
 # ---------------------------------------------------------------------------
 
 
+class TestBuildServerCommandIoThreads:
+    """io-threads may come from the framework or from custom-server-configs,
+    and the flag is emitted exactly once either way."""
+
+    def test_custom_io_threads_emitted_once(self, launcher):
+        launcher.config = {"custom-server-configs": {"io-threads": "9"}}
+        cmd = _call_build(launcher)
+        assert cmd.count("--io-threads") == 1
+        idx = cmd.index("--io-threads")
+        assert cmd[idx + 1] == "9"
+
+    def test_custom_io_threads_wins_over_framework_value(self, launcher):
+        launcher.config = {"custom-server-configs": {"io-threads": "9"}}
+        cmd = launcher._build_server_command(
+            port=6379,
+            bind_ip=None,
+            cpu_range=None,
+            tls_mode=False,
+            cluster_mode=False,
+            io_threads=4,
+            module_path=None,
+            log_file="/tmp/test.log",
+        )
+        assert cmd.count("--io-threads") == 1
+        idx = cmd.index("--io-threads")
+        assert cmd[idx + 1] == "9"
+
+    def test_framework_io_threads_emitted_once_without_custom(self, launcher):
+        cmd = launcher._build_server_command(
+            port=6379,
+            bind_ip=None,
+            cpu_range=None,
+            tls_mode=False,
+            cluster_mode=False,
+            io_threads=4,
+            module_path=None,
+            log_file="/tmp/test.log",
+        )
+        assert cmd.count("--io-threads") == 1
+        idx = cmd.index("--io-threads")
+        assert cmd[idx + 1] == "4"
+
+
 class TestBuildServerCommandCustomConfigFile:
     """Optional positional config file passed right after the binary."""
 
@@ -201,7 +248,6 @@ class TestCustomServerConfigsValidation:
         "key",
         [
             "port",
-            "io-threads",
             "tls-port",
             "loadmodule",
             "cluster-config-file",
@@ -220,6 +266,18 @@ class TestCustomServerConfigsValidation:
         assert "is managed by the framework" in msg
         assert FRAMEWORK_SERVER_FLAGS[key] in msg
 
+    def test_io_threads_alone_accepted(self, minimal_valid_config):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {"io-threads": 9}
+        validate_config(cfg)
+
+    def test_io_threads_in_both_places_rejected(self, minimal_valid_config):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["io-threads"] = [1, 4]
+        cfg["custom-server-configs"] = {"io-threads": 9}
+        with pytest.raises(ValueError, match="use one or the other"):
+            validate_config(cfg)
+
     def test_unmanaged_keys_accepted(self, minimal_valid_config):
         cfg = copy.deepcopy(minimal_valid_config)
         cfg["custom-server-configs"] = {
@@ -231,8 +289,9 @@ class TestCustomServerConfigsValidation:
 
 
 class TestFrameworkServerFlagsCoverEmitter:
-    """Every flag _build_server_command emits is either a framework flag or a
-    benchmark default, so FRAMEWORK_SERVER_FLAGS cannot drift from the emitter."""
+    """Every flag _build_server_command emits is a framework flag, a benchmark
+    default, or an overridable flag, so the flag sets cannot drift from the
+    emitter."""
 
     BENCHMARK_DEFAULTS = {
         "cluster-enabled",
@@ -262,7 +321,11 @@ class TestFrameworkServerFlagsCoverEmitter:
             log_file="/tmp/t.log",
         )
         emitted = {tok.split()[0][2:] for tok in cmd if tok.split()[0].startswith("--")}
-        known = set(FRAMEWORK_SERVER_FLAGS) | self.BENCHMARK_DEFAULTS
+        known = (
+            set(FRAMEWORK_SERVER_FLAGS)
+            | self.BENCHMARK_DEFAULTS
+            | OVERRIDABLE_SERVER_FLAGS
+        )
         assert emitted <= known, f"unlisted flags: {sorted(emitted - known)}"
         for flag in (
             "port",
