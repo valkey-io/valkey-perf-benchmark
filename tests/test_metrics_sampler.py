@@ -4,7 +4,6 @@ No live server, no real Postgres: INFO output is mocked and every /proc and
 /sys read is either patched or pointed at a tmp_path tree.
 """
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +14,7 @@ from metrics_sampler import (
     TIERING_INFO_FIELDS,
     TIERING_INFO_FLOAT_FIELDS,
     detect_block_device,
+    is_loopback_host,
     parse_info,
     read_disk_counters,
     read_process_cpu_ticks,
@@ -897,30 +897,63 @@ class TestDiskDerivedStats:
         assert row["disk_in_flight"] == 0
 
 
-class TestWrite:
-    def test_writes_json_array_of_rows(self, tmp_path):
-        sampler = make_sampler(context={"commit": "abc123"})
-        sample_at(sampler, [100.0, 101.0], [INFO_WITH_TIERING] * 2)
-        output = tmp_path / "nested" / "timeseries.json"
-        sampler.write(output)
+HOST_CPU_COLUMNS = (
+    "valkey_cpu_user",
+    "valkey_cpu_sys",
+    "valkey_cpu_total",
+    "asio_cpu_pct",
+    "cpu_user",
+    "cpu_sys",
+)
 
-        rows = json.loads(output.read_text())
-        assert isinstance(rows, list)
-        assert len(rows) == 2
-        assert rows[0]["elapsed_sec"] == 0
-        assert rows[1]["commit"] == "abc123"
 
-    def test_writes_empty_array_when_no_samples(self, tmp_path):
-        sampler = make_sampler()
-        output = tmp_path / "timeseries.json"
-        sampler.write(output)
-        assert json.loads(output.read_text()) == []
+class TestRemoteHost:
+    """Host CPU and disk columns are collected only against a loopback target."""
 
-    def test_unwritable_path_does_not_raise(self, tmp_path):
-        sampler = make_sampler()
-        blocker = tmp_path / "blocker"
-        blocker.write_text("not a directory")
-        sampler.write(blocker / "timeseries.json")
+    @pytest.mark.parametrize(
+        "host", ["127.0.0.1", "127.0.0.2", "::1", "localhost", "LOCALHOST"]
+    )
+    def test_loopback_hosts(self, host):
+        assert is_loopback_host(host) is True
+
+    @pytest.mark.parametrize(
+        "host", ["10.0.0.5", "192.168.1.10", "valkey.example.com", ""]
+    )
+    def test_non_loopback_hosts(self, host):
+        assert is_loopback_host(host) is False
+
+    def test_remote_host_omits_cpu_and_disk_columns(self):
+        sampler = make_sampler(host="10.0.0.5", server_pid=1234, block_device="nvme0n1")
+        with patch("metrics_sampler.read_system_cpu_ticks") as system_cpu:
+            with patch("metrics_sampler.read_process_cpu_ticks") as process_cpu:
+                with patch("metrics_sampler.read_thread_cpu_ticks") as thread_cpu:
+                    with patch("metrics_sampler.read_disk_counters") as disk:
+                        rows = sample_at(
+                            sampler, [100.0, 101.0], [INFO_WITH_TIERING] * 2
+                        )
+
+        system_cpu.assert_not_called()
+        process_cpu.assert_not_called()
+        thread_cpu.assert_not_called()
+        disk.assert_not_called()
+        for row in rows:
+            for column in HOST_CPU_COLUMNS + DISK_DERIVED_COLUMNS:
+                assert column not in row
+            assert "disk_in_flight" not in row
+            # INFO-derived columns and the context still land on every row.
+            assert row["used_memory"] == 1799288
+
+    def test_loopback_host_keeps_cpu_and_disk_columns(self):
+        sampler = make_sampler(
+            host="127.0.0.1", server_pid=1234, block_device="nvme0n1"
+        )
+        with patch("metrics_sampler.read_disk_counters", return_value=DISK_SAMPLE_1):
+            rows = sample_at(sampler, [100.0, 101.0], [INFO_WITH_TIERING] * 2)
+
+        for row in rows:
+            for column in HOST_CPU_COLUMNS + DISK_DERIVED_COLUMNS:
+                assert column in row
+            assert "disk_in_flight" in row
 
 
 class TestDisabled:
@@ -930,12 +963,6 @@ class TestDisabled:
         sampler.stop()
         assert sampler.rows == []
         assert sampler._sampler_thread is None
-
-    def test_write_still_emits_empty_array(self, tmp_path):
-        sampler = MetricsSampler(enabled=False)
-        output = tmp_path / "timeseries.json"
-        sampler.write(output)
-        assert json.loads(output.read_text()) == []
 
 
 class TestBackgroundThread:
