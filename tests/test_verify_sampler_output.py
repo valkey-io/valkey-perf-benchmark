@@ -21,6 +21,11 @@ import verify_sampler_output  # noqa: E402
 
 MIN_ROWS = verify_sampler_output.MIN_ROWS
 
+# The benchmarked command of the fabricated rows, with ordered percentiles.
+PASSING_LATENCY = {
+    "set": {"calls": 400, "p50_usec": 8, "p99_usec": 64, "p999_usec": 128}
+}
+
 
 def _row(scenario, elapsed_sec, **overrides):
     """Build one sampled row that passes every check unless overridden."""
@@ -42,6 +47,16 @@ def _row(scenario, elapsed_sec, **overrides):
     for index, column in enumerate(verify_sampler_output.DISK_COLUMNS):
         row[column] = float(index + 1)
     row.update(overrides)
+    # Derived from the final used_memory so an override stays self-consistent.
+    row.setdefault(
+        "info",
+        {
+            "used_memory": row["used_memory"],
+            "valkey_version": "8.0.1",
+            "db0": {"keys": 10000, "expires": 0},
+        },
+    )
+    row.setdefault("latency", dict(PASSING_LATENCY))
     return row
 
 
@@ -256,4 +271,151 @@ class TestVerifyFails:
         config_path = _write_config(tmp_path, ["a"])
 
         with pytest.raises(AssertionError, match="no timeseries.json written under"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+
+class TestInfoSnapshotChecks:
+    """The full INFO snapshot must be on every row and agree with its column."""
+
+    def test_missing_info_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        del rows[2]["info"]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="info is .*, not a dict"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_non_integer_used_memory_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[1]["info"] = {"used_memory": "1799288"}
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="not an int"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_used_memory_disagreeing_with_the_column_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[0]["info"] = {"used_memory": 42}
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="info.used_memory is 42"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+
+class TestLatencyChecks:
+    """Per-interval latency must be present, own-command free and ordered."""
+
+    def test_missing_latency_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        del rows[3]["latency"]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="latency is .*, not a dict"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_empty_latency_on_some_rows_passes(self, tmp_path):
+        # The first tick of a scenario has no predecessor to delta against.
+        rows = _scenario_rows("a")
+        rows[0]["latency"] = {}
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        verify_sampler_output.verify(results_dir, config_path)
+
+    def test_sampler_info_command_in_latency_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[2]["latency"]["info"] = {
+            "calls": 1,
+            "p50_usec": 8,
+            "p99_usec": 8,
+            "p999_usec": 8,
+        }
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match=r"own command\(s\) \['info'\]"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_cli_handshake_command_in_latency_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[2]["latency"]["hello"] = {
+            "calls": 1,
+            "p50_usec": 8,
+            "p99_usec": 8,
+            "p999_usec": 8,
+        }
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match=r"own command\(s\) \['hello'\]"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_sampler_latency_command_in_latency_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        rows[2]["latency"]["latency|histogram"] = {
+            "calls": 1,
+            "p50_usec": 8,
+            "p99_usec": 8,
+            "p999_usec": 8,
+        }
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="latency.histogram"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_no_calls_for_the_benchmarked_command_fails(self, tmp_path):
+        rows = [_row("a", elapsed, latency={}) for elapsed in range(MIN_ROWS)]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="no row reports latency calls"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_unordered_percentiles_fail(self, tmp_path):
+        rows = [
+            _row(
+                "a",
+                elapsed,
+                latency={
+                    "set": {
+                        "calls": 400,
+                        "p50_usec": 64,
+                        "p99_usec": 8,
+                        "p999_usec": 128,
+                    }
+                },
+            )
+            for elapsed in range(MIN_ROWS)
+        ]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="are not ordered"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_zero_p50_fails(self, tmp_path):
+        rows = [
+            _row(
+                "a",
+                elapsed,
+                latency={
+                    "set": {
+                        "calls": 400,
+                        "p50_usec": 0,
+                        "p99_usec": 64,
+                        "p999_usec": 128,
+                    }
+                },
+            )
+            for elapsed in range(MIN_ROWS)
+        ]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="are not ordered"):
             verify_sampler_output.verify(results_dir, config_path)

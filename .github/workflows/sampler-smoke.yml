@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - 'metrics_sampler.py'
+      - 'samplers/**'
       - 'valkey_benchmark.py'
       - 'configs/sampler-smoke.json'
       - 'scripts/verify_sampler_output.py'

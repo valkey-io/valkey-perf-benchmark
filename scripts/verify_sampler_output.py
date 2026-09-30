@@ -13,6 +13,10 @@ without identity:
   - `used_memory` is nonzero on every row (INFO was actually sampled) and
     `ops_per_sec` is nonzero somewhere in each scenario (traffic was sampled)
   - every tiering counter is 0, which is what a stock upstream server reports
+  - every row carries the full `info` snapshot and it agrees with the
+    `used_memory` column
+  - every row carries a `latency` dict, it never reports the sampler's own
+    commands, and the benchmarked command has ordered percentiles on some row
   - every disk column is present, checked for presence rather than value
     because the runner has real disk activity of its own
   - the context columns are on every row
@@ -64,6 +68,10 @@ DISK_COLUMNS = (
     "disk_req_sz_kb",
 )
 CONTEXT_COLUMNS = ("commit", "scenario", "command")
+# Commands the sampler itself issues, which the latency source drops so the
+# series describes the benchmark load rather than the measurement of it.
+SAMPLER_COMMANDS = frozenset({"info", "hello", "config|get"})
+SAMPLER_COMMAND_PREFIX = "latency"
 # config_set is an empty dict when the config declares no config_sets,
 # so it is checked for presence rather than truthiness.
 PRESENT_COLUMNS = ("config_set",)
@@ -122,6 +130,8 @@ def verify_timeseries_file(path: Path, expected_scenarios: Set[str]) -> None:
                 f"{label} row {index}: used_memory is "
                 f"{row['used_memory']}, so INFO was not sampled"
             )
+            verify_info_snapshot(row, f"{label} row {index}")
+            verify_latency_shape(row, f"{label} row {index}")
             for column in TIERING_COLUMNS:
                 assert row[column] == 0, (
                     f"{label} row {index}: {column} is {row[column]}, "
@@ -143,6 +153,53 @@ def verify_timeseries_file(path: Path, expected_scenarios: Set[str]) -> None:
         assert any(
             row["ops_per_sec"] > 0 for row in scenario_rows
         ), f"{label}: ops_per_sec is 0 on every row, so no traffic was sampled"
+
+        verify_benchmarked_command_latency(scenario_rows, label)
+
+
+def verify_info_snapshot(row: Dict[str, Any], label: str) -> None:
+    """Assert one row carries the full INFO snapshot and it agrees with a column."""
+    info = row.get("info")
+    assert isinstance(info, dict), f"{label}: info is {type(info)}, not a dict"
+    used_memory = info.get("used_memory")
+    assert isinstance(
+        used_memory, int
+    ), f"{label}: info.used_memory is {used_memory!r}, not an int"
+    assert used_memory == row["used_memory"], (
+        f"{label}: info.used_memory is {used_memory}, "
+        f"but the used_memory column is {row['used_memory']}"
+    )
+
+
+def verify_latency_shape(row: Dict[str, Any], label: str) -> None:
+    """Assert one row carries a latency dict free of the sampler's own commands."""
+    latency = row.get("latency")
+    assert isinstance(latency, dict), f"{label}: latency is {type(latency)}, not a dict"
+    own = [
+        command
+        for command in latency
+        if command in SAMPLER_COMMANDS or command.startswith(SAMPLER_COMMAND_PREFIX)
+    ]
+    assert not own, f"{label}: latency reports the sampler's own command(s) {own}"
+
+
+def verify_benchmarked_command_latency(rows: List[Dict[str, Any]], label: str) -> None:
+    """Assert the benchmarked command has a sane latency entry on some row."""
+    command = rows[0]["command"].lower()
+    measured = [
+        row["latency"][command]
+        for row in rows
+        if row["latency"].get(command, {}).get("calls", 0) > 0
+    ]
+    assert measured, f"{label}: no row reports latency calls for command {command}"
+
+    entry = measured[0]
+    p50 = entry["p50_usec"]
+    p99 = entry["p99_usec"]
+    p999 = entry["p999_usec"]
+    assert (
+        p999 >= p99 >= p50 > 0
+    ), f"{label}: latency percentiles for {command} are not ordered: {entry}"
 
 
 def verify(results_dir: Path, config_path: Path) -> None:
