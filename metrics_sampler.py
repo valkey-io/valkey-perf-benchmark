@@ -152,7 +152,7 @@ completed no IO at all. `disk_in_flight` is a gauge, not a delta, so it is read
 on every sample including the first.
 """
 
-import json
+import ipaddress
 import logging
 import os
 import subprocess
@@ -268,6 +268,21 @@ def parse_info(text: str) -> Dict[str, str]:
     return fields
 
 
+def is_loopback_host(host: str) -> bool:
+    """Return True when host names this machine's loopback interface.
+
+    Accepts the literal name "localhost" in any case, and any address string
+    that parses as a loopback IP. A hostname that is not an IP literal is not
+    resolved, so it is treated as remote.
+    """
+    if str(host).strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def detect_block_device() -> Optional[str]:
     """Return the largest NVMe or SCSI whole-disk device name, or None.
 
@@ -381,7 +396,8 @@ class MetricsSampler:
     Emits one row per sample. Every row carries `elapsed_sec` (integer seconds
     since start), an absolute `timestamp` for provenance, and every key of the
     injected `context` dict so rows are self-describing once loaded into a
-    dashboard.
+    dashboard. Host CPU and disk columns are collected only when `host` is a
+    loopback address, since they describe the machine the sampler runs on.
     """
 
     def __init__(
@@ -411,6 +427,7 @@ class MetricsSampler:
         """
         self.enabled = enabled
         self.host = host
+        self.local_host = is_loopback_host(host)
         self.port = port
         self.cli_path = cli_path
         self.server_pid = server_pid
@@ -450,7 +467,13 @@ class MetricsSampler:
             logging.warning("Metrics sampler already started, ignoring start()")
             return
 
-        if self.block_device is None:
+        if not self.local_host:
+            self._warn_once(
+                "remote_host",
+                f"Target {self.host} is not a loopback address, skipping host CPU "
+                "and disk metrics",
+            )
+        elif self.block_device is None:
             self.block_device = detect_block_device()
             if self.block_device is None:
                 self._warn_once(
@@ -480,18 +503,6 @@ class MetricsSampler:
             self._sampler_thread = None
 
         logging.info(f"Stopped metrics sampler after {len(self._rows)} samples")
-
-    def write(self, path: Any) -> None:
-        """Write the collected rows to path as a JSON array of row dicts."""
-        rows = self.rows
-        try:
-            output_path = Path(path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w") as handle:
-                json.dump(rows, handle, indent=2)
-            logging.info(f"Wrote {len(rows)} metric samples to {output_path}")
-        except OSError as e:
-            logging.warning(f"Failed to write metric samples to {path}: {e}")
 
     def _warn_once(self, key: str, message: str) -> None:
         """Log a warning the first time key is seen, to avoid 1 Hz log spam."""
@@ -527,8 +538,9 @@ class MetricsSampler:
             "elapsed_sec": int(round(now - start)),
         }
         row.update(self._info_metrics(self._read_info(), interval))
-        row.update(self._cpu_metrics(interval))
-        row.update(self._disk_metrics(interval))
+        if self.local_host:
+            row.update(self._cpu_metrics(interval))
+            row.update(self._disk_metrics(interval))
         # Context last so run identity always survives a name collision.
         row.update(self.context)
 
