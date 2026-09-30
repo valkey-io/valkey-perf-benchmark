@@ -33,7 +33,6 @@ class SamplerContext:
     cli_path: str = "valkey-cli"
     server_pid: Optional[int] = None
     block_device: Optional[str] = None
-    asio_thread_name: str = ASIO_THREAD_NAME
     warn_once: Callable[[str, str], None] = field(default=log_warning)
 
 
@@ -51,8 +50,7 @@ class SampleSource:
         """Return this source's columns for one tick.
 
         interval is the measured seconds since the previous tick, and None on
-        the first tick of a run, where nothing has a predecessor to delta
-        against.
+        the first tick of a run.
         """
         raise NotImplementedError
 
@@ -90,11 +88,7 @@ def _command_label(args: Tuple[str, ...]) -> str:
 
 
 def run_cli(ctx: SamplerContext, *args: str) -> Optional[str]:
-    """Return valkey-cli stdout for args, or None when the call fails.
-
-    At 1 Hz the process spawn cost is negligible, and it keeps TLS and cluster
-    invocation a matter of extra CLI args rather than client wiring.
-    """
+    """Return valkey-cli stdout for args, or None when the call fails."""
     label = _command_label(args)
     cmd = [ctx.cli_path, "-h", ctx.host, "-p", str(ctx.port), *args]
     try:

@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from .base import SampleSource, read_text
+from .base import ASIO_THREAD_NAME, SampleSource, read_text
 
 # Kernel clock ticks per second, used to convert /proc CPU times to seconds.
 _CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -21,10 +21,10 @@ _PROC_STAT_PATH = "/proc/stat"
 
 
 def read_system_cpu_ticks() -> Optional[Tuple[int, int, int]]:
-    """Return (user_ticks, system_ticks, total_ticks) from /proc/stat.
+    """Return (user+nice, system, total) ticks from /proc/stat, or None.
 
-    user includes nice, and total is the sum of every reported bucket, so the
-    derived percentages account for iowait, irq, softirq and steal.
+    total is the sum of every reported bucket, so the derived percentages
+    account for iowait, irq, softirq and steal.
     """
     first_line = read_text(_PROC_STAT_PATH).split("\n", 1)[0]
     parts = first_line.split()
@@ -39,11 +39,7 @@ def read_system_cpu_ticks() -> Optional[Tuple[int, int, int]]:
 
 
 def _parse_proc_stat_ticks(stat_line: str) -> Optional[Tuple[int, int]]:
-    """Return (utime, stime) ticks from a /proc/<pid>/stat or task stat line.
-
-    The comm field can contain spaces and parentheses, so the line is split on
-    the last ") " and indexed from the state field onwards.
-    """
+    """Return (utime, stime) ticks from a stat line, split after the comm field."""
     _, _, tail = stat_line.partition(") ")
     parts = tail.split()
     # tail starts at field 3 (state), so utime (field 14) is index 11.
@@ -64,11 +60,10 @@ def read_process_cpu_ticks(pid: int) -> Optional[Tuple[int, int]]:
 
 
 def read_thread_cpu_ticks(pid: int, thread_name: str) -> Optional[int]:
-    """Return summed user+system ticks of a process's threads named thread_name.
+    """Return summed user+system ticks of threads named thread_name.
 
-    Returns 0 when the process has no such thread (a server with the async IO
-    worker absent is a normal state), and None when the task directory itself
-    cannot be listed.
+    Returns 0 when the process has no such thread, and None when the task
+    directory cannot be listed.
     """
     try:
         task_dirs = list((_PROC_DIR / str(pid) / "task").iterdir())
@@ -158,9 +153,7 @@ class ProcessCpuSource(SampleSource):
                 )
             self._prev_process_cpu = process_cpu
 
-        asio_ticks = read_thread_cpu_ticks(
-            self.ctx.server_pid, self.ctx.asio_thread_name
-        )
+        asio_ticks = read_thread_cpu_ticks(self.ctx.server_pid, ASIO_THREAD_NAME)
         if asio_ticks is None:
             self.ctx.warn_once(
                 "no_task_dir",

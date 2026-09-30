@@ -1,42 +1,12 @@
 """Per-interval command latency source for the per-second metrics sampler.
 
 Runs `valkey-cli --json LATENCY HISTOGRAM` once per tick and emits the
-percentiles of the calls served since the previous tick under the key `latency`.
-
-Reply shape
------------
-`--json` sets the output mode to JSON and requests RESP3 implicitly, keeping an
-explicit `-2` or `-3` (valkey src/valkey-cli.c:2637). Under RESP3 a map reply
-renders as a JSON object with its keys coerced to strings
-(`cliFormatReplyJson`, valkey src/valkey-cli.c:2094). Because the implicit
-request tolerates a failed `HELLO 3` (valkey src/valkey-cli.c:1614), a
-RESP2-only server answers with arrays instead, which render as flat
-`[key, value, key, value]` JSON lists. Both forms are read.
-
-`LATENCY HISTOGRAM` with no command names replies with a map of command name to
-`{calls, histogram_usec}`, where `histogram_usec` maps a bucket's upper bound in
-microseconds to the cumulative call count at that bound. A bucket is emitted
-only when the cumulative count increased, so the map is sparse and its largest
-bucket carries the command's total (`fillCommandCDF`, valkey src/latency.c:507).
-
-Per-interval percentiles
-------------------------
-Both CDFs are step functions, so the previous cumulative count at a current
-bucket b is the previous value at the largest previous bucket <= b, and 0 when
-there is none. Subtracting that from the current cumulative count at b gives the
-interval's own cumulative count at b, which is non-decreasing in b because the
-current histogram contains every sample the previous one did. The interval total
-is that value at the largest current bucket, and percentile p is the smallest
-bucket whose interval cumulative count reaches p of the total.
-
-A command is reported only when its `calls` increased since the previous tick.
-A command that was not in the previous reply is measured against a zero
-baseline, so its first appearance is reported in full. A command whose counter
-went down after a server restart or a `CONFIG RESETSTAT` is omitted, and the
-tick's own reply becomes its new baseline. A tick with no reply at all leaves no
-baseline, so the tick after it is reported empty rather than as one large
-interval. The sampler's own commands are dropped so the series describes the
-benchmark load rather than the measurement of it.
+percentiles of the calls served since the previous tick under the key
+`latency`. Both replies are cumulative sparse CDFs, so an interval count at a
+bucket is the current count there minus the previous count at the largest
+previous bucket at or below it, and percentile p is the smallest bucket whose
+interval count reaches p of the interval total. The commands the sampler issues
+itself are excluded.
 """
 
 import json
@@ -61,15 +31,6 @@ class CommandHistogram:
     buckets: Dict[int, int] = field(default_factory=dict)
 
 
-def _as_mapping(value: Any) -> Optional[Dict[Any, Any]]:
-    """Return value as a mapping, pairing up a flat [k, v, k, v] list."""
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, list) and len(value) % 2 == 0:
-        return dict(zip(value[::2], value[1::2]))
-    return None
-
-
 def parse_histogram(text: Optional[str]) -> Dict[str, CommandHistogram]:
     """Return one CommandHistogram per command in a LATENCY HISTOGRAM reply."""
     if not text:
@@ -79,20 +40,18 @@ def parse_histogram(text: Optional[str]) -> Dict[str, CommandHistogram]:
     except ValueError:
         return {}
 
-    commands = _as_mapping(payload)
-    if commands is None:
+    if not isinstance(payload, dict):
         return {}
 
     parsed: Dict[str, CommandHistogram] = {}
-    for name, body in commands.items():
-        entry = _as_mapping(body)
-        if entry is None:
+    for name, body in payload.items():
+        if not isinstance(body, dict):
             continue
-        buckets = _as_mapping(entry.get("histogram_usec"))
-        if buckets is None:
+        buckets = body.get("histogram_usec")
+        if not isinstance(buckets, dict):
             continue
         parsed[str(name)] = CommandHistogram(
-            calls=int(entry.get("calls", 0)),
+            calls=int(body.get("calls", 0)),
             buckets={int(bucket): int(count) for bucket, count in buckets.items()},
         )
     return parsed

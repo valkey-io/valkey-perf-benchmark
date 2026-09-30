@@ -1,20 +1,10 @@
 """Per-second metrics sampler for Valkey data tiering benchmarks.
 
-Samples the server and the host once per interval (1 Hz by default) for the
-duration of a benchmark's measured phase, and emits one row per sample. The
-rows form a time series that a per-commit deep-dive dashboard can chart, with
-`elapsed_sec` as the x-axis so several commits overlay on one chart.
-
-Design notes
-------------
-Sampling runs on a background daemon thread and never raises into the caller.
-Each source is sampled inside its own guard, so one unreadable source leaves the
-other columns intact and logs a warning once per distinct failure. Sources that
-read /proc or /sys describe the machine the sampler runs on, so they are dropped
-when the target is not a loopback address.
-
-The thread can be pinned with `cpu_range`, which keeps the sampler and the
-valkey-cli children it spawns off the cores under measurement.
+Emits one row per sample of a benchmark's measured phase, with `elapsed_sec` as
+the x-axis so several commits overlay on one chart. Sampling runs on a
+background daemon thread and never raises into the caller, and each source is
+guarded so one unreadable source leaves the other columns intact. Sources that
+read /proc or /sys are dropped when the target is not a loopback address.
 """
 
 import ipaddress
@@ -25,7 +15,6 @@ import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from samplers import DEFAULT_SOURCES, SOURCES, SamplerContext, SampleSource
-from samplers.base import ASIO_THREAD_NAME
 from utils.cpu_utils import parse_core_range
 
 _JOIN_TIMEOUT_SEC = 5
@@ -34,9 +23,7 @@ _JOIN_TIMEOUT_SEC = 5
 def is_loopback_host(host: str) -> bool:
     """Return True when host names this machine's loopback interface.
 
-    Accepts the literal name "localhost" in any case, and any address string
-    that parses as a loopback IP. A hostname that is not an IP literal is not
-    resolved, so it is treated as remote.
+    A hostname that is not an IP literal is not resolved, so it is remote.
     """
     if str(host).strip().lower() == "localhost":
         return True
@@ -47,13 +34,7 @@ def is_loopback_host(host: str) -> bool:
 
 
 class MetricsSampler:
-    """Sample a set of sources on a background thread at a fixed rate.
-
-    Emits one row per sample. Every row carries `elapsed_sec` (integer seconds
-    since start), an absolute `timestamp` for provenance, and every key of the
-    injected `context` dict so rows are self-describing once loaded into a
-    dashboard.
-    """
+    """Sample a set of sources on a background thread at a fixed rate."""
 
     def __init__(
         self,
@@ -62,10 +43,8 @@ class MetricsSampler:
         cli_path: str = "valkey-cli",
         server_pid: Optional[int] = None,
         interval: float = 1.0,
-        enabled: bool = True,
         context: Optional[Dict[str, Any]] = None,
         block_device: Optional[str] = None,
-        asio_thread_name: str = ASIO_THREAD_NAME,
         sources: Optional[Sequence[str]] = None,
         cpu_range: Optional[str] = None,
     ):
@@ -77,14 +56,11 @@ class MetricsSampler:
             cli_path: valkey-cli executable used to issue commands
             server_pid: valkey-server pid, for per-process and per-thread CPU
             interval: seconds between samples
-            enabled: when False, start/stop are no-ops and no rows are produced
             context: run-identity fields merged into every emitted row
             block_device: block device name to sample, auto-detected when None
-            asio_thread_name: thread name isolated as the async IO worker
             sources: source names to sample, DEFAULT_SOURCES when None
             cpu_range: cores to pin the sampler thread to, unpinned when None
         """
-        self.enabled = enabled
         self.host = host
         self.local_host = is_loopback_host(host)
         self.port = port
@@ -93,7 +69,6 @@ class MetricsSampler:
         self.interval = interval
         self.context = dict(context or {})
         self.block_device = block_device
-        self.asio_thread_name = asio_thread_name
         self.source_names = tuple(sources) if sources else DEFAULT_SOURCES
         self.cpu_range = cpu_range
 
@@ -113,9 +88,7 @@ class MetricsSampler:
             return list(self._rows)
 
     def start(self) -> None:
-        """Start sampling on a background thread. Safe to call when disabled."""
-        if not self.enabled:
-            return
+        """Start sampling on a background thread."""
         if self._sampler_thread is not None:
             logging.warning("Metrics sampler already started, ignoring start()")
             return
@@ -133,9 +106,6 @@ class MetricsSampler:
 
     def stop(self) -> None:
         """Stop sampling and join the background thread."""
-        if not self.enabled:
-            return
-
         self._stop_event.set()
         if self._sampler_thread is not None:
             self._sampler_thread.join(timeout=_JOIN_TIMEOUT_SEC)
@@ -172,7 +142,6 @@ class MetricsSampler:
             cli_path=self.cli_path,
             server_pid=self.server_pid,
             block_device=self.block_device,
-            asio_thread_name=self.asio_thread_name,
             warn_once=self._warn_once,
         )
 
@@ -189,11 +158,7 @@ class MetricsSampler:
         return started
 
     def _pin_thread(self) -> None:
-        """Pin the calling thread to `cpu_range`.
-
-        pid 0 means the calling thread on Linux, and the valkey-cli children it
-        spawns inherit the mask.
-        """
+        """Pin the sampler thread and the valkey-cli children it spawns to cores."""
         if self.cpu_range is None:
             return
         try:

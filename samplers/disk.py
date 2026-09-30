@@ -1,43 +1,10 @@
 """Block device source for the per-second metrics sampler.
 
 Reads /sys/block, so it describes the machine the sampler runs on and is
-collected only against a loopback target.
-
-Every column except `disk_in_flight` is derived from deltas of
-`/sys/block/<dev>/stat` between consecutive samples. That file holds, in order:
-read ios, read merges, read sectors, read ticks, write ios, write merges, write
-sectors, write ticks, in flight, io ticks, time in queue. Sector counts are in
-512-byte units and all three tick fields are milliseconds.
-
-`interval` below is the measured wall-clock seconds between samples, and
-`interval_ms` is that times 1000.
-
-| Column                | Derivation                                          |
-| --------------------- | --------------------------------------------------- |
-| disk_read_iops        | delta read ios / interval                           |
-| disk_write_iops       | delta write ios / interval                          |
-| disk_read_mb          | delta read sectors * 512 / 1 MiB / interval         |
-| disk_write_mb         | delta write sectors * 512 / 1 MiB / interval        |
-| disk_read_merges_ps   | delta read merges / interval                        |
-| disk_write_merges_ps  | delta write merges / interval                       |
-| disk_r_await_ms       | delta read ticks / delta read ios                   |
-| disk_w_await_ms       | delta write ticks / delta write ios                 |
-| disk_aqu_sz           | delta time in queue / interval_ms                   |
-| disk_util_pct         | delta io ticks / interval_ms * 100, capped at 100.0 |
-| disk_in_flight        | in flight, read directly                            |
-| disk_req_sz_kb        | delta sectors * 512 / delta ios / 1024              |
-
-The two await columns divide by the ios completed in the interval, so each is
-the mean service time of one IO rather than a rate. `disk_req_sz_kb` combines
-reads and writes in both its numerator and its denominator, so it is the mean
-size of any IO on the device. `disk_util_pct` is capped because io ticks is
-wall-clock busy time on a queue that can be served concurrently, so on an NVMe
-device the raw ratio can exceed 1.
-
-A zero denominator yields 0.0, which covers both the first sample of a run (no
-predecessor to take a delta against) and an interval in which the device
-completed no IO at all. `disk_in_flight` is a gauge, not a delta, so it is read
-on every sample including the first.
+collected only against a loopback target. Every column except `disk_in_flight`
+is derived from deltas of `/sys/block/<dev>/stat` between consecutive samples,
+and a zero denominator yields 0.0, which covers both the first sample of a run
+and an interval in which the device completed no IO.
 """
 
 from pathlib import Path
@@ -78,9 +45,8 @@ _DISK_STAT_MIN_FIELDS = len(_DISK_STAT_FIELDS)
 def detect_block_device() -> Optional[str]:
     """Return the largest NVMe or SCSI whole-disk device name, or None.
 
-    Prefers NVMe over SCSI because the tiering data device is an instance-store
-    NVMe on the benchmark hosts, then picks the largest candidate within the
-    preferred class so a small root volume is not chosen over the data device.
+    Size breaks the tie so a small root volume is not picked over the data
+    device.
     """
     try:
         names = sorted(entry.name for entry in _SYS_BLOCK_DIR.iterdir())
@@ -99,13 +65,7 @@ def detect_block_device() -> Optional[str]:
 
 
 def read_disk_counters(device: str) -> Optional[Dict[str, int]]:
-    """Return the /sys/block/<device>/stat counters, or None if unreadable.
-
-    Returns every field named in `_DISK_STAT_FIELDS`. A stat line with fewer
-    fields than that yields None rather than a partial dict, so a device the
-    kernel describes in less detail leaves the disk columns at 0 instead of
-    producing derived values from fields that are not there.
-    """
+    """Return the /sys/block/<device>/stat counters, or None when incomplete."""
     parts = read_text(str(_SYS_BLOCK_DIR / device / "stat")).split()
     if len(parts) < _DISK_STAT_MIN_FIELDS:
         return None
@@ -144,11 +104,9 @@ def queue_length(queue_tick_delta: int, interval_ms: float) -> float:
 
 
 def busy_percent(io_tick_delta: int, interval_ms: float) -> float:
-    """Return device busy percent over the interval, capped at 100.0.
-
-    io ticks is wall-clock busy time on a queue that can be served
-    concurrently, so the raw ratio can exceed 1 on an NVMe device.
-    """
+    """Return device busy percent over the interval, capped at 100.0."""
+    # io ticks is wall-clock busy time on a queue that can be served
+    # concurrently, so the raw ratio can exceed 1 on an NVMe device.
     if io_tick_delta <= 0 or interval_ms <= 0:
         return 0.0
     return round(min(100.0, io_tick_delta / interval_ms * 100), 2)
