@@ -12,6 +12,7 @@ from benchmark import (
     validate_cpu_allocation,
     validate_test_groups,
     _get_active_ports,
+    _resolve_io_threads_list,
 )
 
 # ---------------------------------------------------------------------------
@@ -634,6 +635,24 @@ class TestCustomServerConfigsValidation:
         minimal_valid_config["custom-server-configs"] = {"k": bad_value}
         with pytest.raises(ValueError, match="values must be strings or numbers"):
             validate_config(minimal_valid_config)
+
+
+class TestResolveIoThreadsList:
+    """The sweep list comes from the top-level field, falling back to an
+    io-threads value in custom-server-configs."""
+
+    def test_absent_field_and_no_custom(self):
+        assert _resolve_io_threads_list({}) == [None]
+
+    def test_list_field_passes_through(self):
+        assert _resolve_io_threads_list({"io-threads": [1, 4]}) == [1, 4]
+
+    def test_scalar_field_wrapped(self):
+        assert _resolve_io_threads_list({"io-threads": 8}) == [8]
+
+    def test_custom_value_used_when_field_absent(self):
+        cfg = {"custom-server-configs": {"io-threads": "9"}}
+        assert _resolve_io_threads_list(cfg) == [9]
 
 
 class TestCustomServerConfigFileValidation:

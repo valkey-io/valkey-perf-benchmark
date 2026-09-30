@@ -5,7 +5,7 @@ import subprocess
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import valkey
 
@@ -13,6 +13,29 @@ import valkey
 VALKEY_SERVER = "src/valkey-server"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
+
+# valkey-server flags the framework sets itself. Config validation rejects
+# these keys in "custom-server-configs", using the value as the reason.
+FRAMEWORK_SERVER_FLAGS: Dict[str, str] = {
+    "port": "set from the 'port' field",
+    "tls-port": "set from 'tls_mode'",
+    "tls-cert-file": "set from 'tls_mode'",
+    "tls-key-file": "set from 'tls_mode'",
+    "tls-ca-cert-file": "set from 'tls_mode'",
+    "bind": "set from 'cluster_nodes'",
+    "cluster-announce-ip": "set from 'cluster_nodes'",
+    "cluster-config-file": "set from 'cluster_config_dir'",
+    "loadmodule": "set from 'modules'",
+    "cluster-enabled": "set from 'cluster_mode'",
+    "daemonize": "required for process management",
+    "logfile": "required for process management",
+    "save": "required for process management",
+    "appendonly": "required for process management",
+    "protected-mode": "required for process management",
+}
+
+# Flags the framework emits that "custom-server-configs" may override.
+OVERRIDABLE_SERVER_FLAGS = {"io-threads", "maxmemory-policy"}
 
 
 def apply_config_to_servers(
@@ -199,8 +222,17 @@ class ServerLauncher:
         if bind_ip:
             cmd += ["--bind", bind_ip]
 
+        # custom-server-configs: user settings the framework does not manage,
+        # plus the flags in OVERRIDABLE_SERVER_FLAGS. Validation has already
+        # rejected any key in FRAMEWORK_SERVER_FLAGS.
+        custom_configs = (
+            (self.config or {}).get("custom-server-configs")
+            if hasattr(self, "config")
+            else None
+        ) or {}
+
         # Optional configurations
-        if io_threads is not None:
+        if io_threads is not None and "io-threads" not in custom_configs:
             cmd += ["--io-threads", str(io_threads)]
 
         # Modules
@@ -221,36 +253,24 @@ class ServerLauncher:
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
 
-        # Apply custom-server-configs from benchmark config. These are added
-        # BEFORE the benchmark defaults block so that, by valkey CLI last-wins
-        # semantics, the harness's defaults always take precedence over any
-        # user-supplied value for the same key.
-        custom_configs = (
-            (self.config or {}).get("custom-server-configs")
-            if hasattr(self, "config")
-            else None
-        )
-        if custom_configs:
-            for key, value in custom_configs.items():
-                cmd += [f"--{key}", str(value)]
+        for key, value in custom_configs.items():
+            cmd += [f"--{key}", str(value)]
 
-        # Common server configuration (benchmark defaults — always win).
-        cmd += [
-            "--cluster-enabled",
-            "yes" if cluster_mode else "no",
-            "--daemonize",
-            "yes",
-            "--maxmemory-policy",
-            "allkeys-lru",
-            "--appendonly",
-            "no",
-            "--protected-mode",
-            "no",
-            "--logfile",
-            log_file,
-            "--save",
-            "''",
-        ]
+        # Benchmark defaults, emitted in a fixed order. A default is skipped
+        # when the user set the same key so the user's value is the only one.
+        benchmark_defaults = {
+            "cluster-enabled": "yes" if cluster_mode else "no",
+            "daemonize": "yes",
+            "maxmemory-policy": "allkeys-lru",
+            "appendonly": "no",
+            "protected-mode": "no",
+            "logfile": log_file,
+            "save": "''",
+        }
+        for key, value in benchmark_defaults.items():
+            if key in custom_configs:
+                continue
+            cmd += [f"--{key}", value]
 
         return cmd
 

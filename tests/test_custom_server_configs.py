@@ -1,8 +1,15 @@
 """Unit tests for custom-server-configs in ServerLauncher._build_server_command."""
 
+import copy
+
 import pytest
 
-from valkey_server import ServerLauncher
+from benchmark import validate_config
+from valkey_server import (
+    FRAMEWORK_SERVER_FLAGS,
+    OVERRIDABLE_SERVER_FLAGS,
+    ServerLauncher,
+)
 
 
 @pytest.fixture
@@ -62,8 +69,8 @@ class TestBuildServerCommandCustomConfigsAppended:
         assert "300" in cmd
 
     def test_configs_appear_BEFORE_benchmark_defaults(self, launcher):
-        """Custom configs must come before the defaults block so last-wins
-        semantics give defaults precedence."""
+        """Custom configs come before the defaults block. A default that
+        collides with a custom key is skipped rather than reordered."""
         launcher.config = {"custom-server-configs": {"maxmemory": "4gb"}}
         cmd = _call_build(launcher)
         save_idx = cmd.index("--save")
@@ -100,25 +107,94 @@ class TestBuildServerCommandNumericStringification:
         assert cmd[idx + 1] == "10.5"
 
 
-class TestBuildServerCommandDefenseInDepth:
-    """Even if a reserved key bypassed validation, harness defaults still win
-    via valkey CLI last-wins semantics (defaults come after custom configs)."""
+class TestBuildServerCommandPrecedenceOnCollision:
+    """A user-supplied key wins over the matching benchmark default: the default
+    is skipped so the flag appears exactly once."""
 
-    def test_benchmark_defaults_win_on_collision(self, launcher):
-        # Bypass validation by setting config directly on launcher.
+    def test_user_maxmemory_policy_wins(self, launcher):
         launcher.config = {"custom-server-configs": {"maxmemory-policy": "noeviction"}}
         cmd = _call_build(launcher)
-        # Both should be present; the LAST occurrence is what valkey honors.
-        assert cmd.count("--maxmemory-policy") == 2
-        last_idx = len(cmd) - 1 - cmd[::-1].index("--maxmemory-policy")
-        assert (
-            cmd[last_idx + 1] == "allkeys-lru"
-        ), "benchmark default must come last (and therefore win)"
+        # The default is skipped entirely, so the flag appears exactly once.
+        assert cmd.count("--maxmemory-policy") == 1
+        idx = cmd.index("--maxmemory-policy")
+        assert cmd[idx + 1] == "noeviction"
+        assert "allkeys-lru" not in cmd
+
+    def test_no_collision_command_unchanged(self, launcher):
+        """Non-colliding customs leave the defaults region exactly as before."""
+        launcher.config = {
+            "custom-server-configs": {
+                "maxmemory": "16gb",
+                "timeout": 0,
+                "maxclients": 10000,
+            }
+        }
+        cmd = _call_build(launcher)
+        save_idx = cmd.index("--save")
+        assert cmd[save_idx - 12 :] == [
+            "--cluster-enabled",
+            "no",
+            "--daemonize",
+            "yes",
+            "--maxmemory-policy",
+            "allkeys-lru",
+            "--appendonly",
+            "no",
+            "--protected-mode",
+            "no",
+            "--logfile",
+            "/tmp/test.log",
+            "--save",
+            "''",
+        ]
 
 
 # ---------------------------------------------------------------------------
 # _build_server_command — custom-server-config-file
 # ---------------------------------------------------------------------------
+
+
+class TestBuildServerCommandIoThreads:
+    """io-threads may come from the framework or from custom-server-configs,
+    and the flag is emitted exactly once either way."""
+
+    def test_custom_io_threads_emitted_once(self, launcher):
+        launcher.config = {"custom-server-configs": {"io-threads": "9"}}
+        cmd = _call_build(launcher)
+        assert cmd.count("--io-threads") == 1
+        idx = cmd.index("--io-threads")
+        assert cmd[idx + 1] == "9"
+
+    def test_custom_io_threads_wins_over_framework_value(self, launcher):
+        launcher.config = {"custom-server-configs": {"io-threads": "9"}}
+        cmd = launcher._build_server_command(
+            port=6379,
+            bind_ip=None,
+            cpu_range=None,
+            tls_mode=False,
+            cluster_mode=False,
+            io_threads=4,
+            module_path=None,
+            log_file="/tmp/test.log",
+        )
+        assert cmd.count("--io-threads") == 1
+        idx = cmd.index("--io-threads")
+        assert cmd[idx + 1] == "9"
+
+    def test_framework_io_threads_emitted_once_without_custom(self, launcher):
+        cmd = launcher._build_server_command(
+            port=6379,
+            bind_ip=None,
+            cpu_range=None,
+            tls_mode=False,
+            cluster_mode=False,
+            io_threads=4,
+            module_path=None,
+            log_file="/tmp/test.log",
+        )
+        assert cmd.count("--io-threads") == 1
+        idx = cmd.index("--io-threads")
+        assert cmd[idx + 1] == "4"
 
 
 class TestBuildServerCommandCustomConfigFile:
@@ -158,3 +234,120 @@ class TestBuildServerCommandCustomConfigFile:
         assert "/path/to/x.conf" in cmd
         # Last config pair should still be --save '' (no inline appended)
         assert cmd[-2:] == ["--save", "''"]
+
+
+# ---------------------------------------------------------------------------
+# validate_config: custom-server-configs key rejection
+# ---------------------------------------------------------------------------
+
+
+class TestCustomServerConfigsValidation:
+    """Keys the framework manages are rejected, everything else passes."""
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "port",
+            "tls-port",
+            "loadmodule",
+            "cluster-config-file",
+            "daemonize",
+            "logfile",
+            "save",
+        ],
+    )
+    def test_framework_managed_key_rejected(self, minimal_valid_config, key):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {key: "x"}
+        with pytest.raises(ValueError) as exc:
+            validate_config(cfg)
+        msg = str(exc.value)
+        assert repr(key) in msg
+        assert "is managed by the framework" in msg
+        assert FRAMEWORK_SERVER_FLAGS[key] in msg
+
+    def test_io_threads_alone_accepted(self, minimal_valid_config):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {"io-threads": 9}
+        validate_config(cfg)
+
+    @pytest.mark.parametrize("value", [9, "9"])
+    def test_io_threads_integer_forms_accepted(self, minimal_valid_config, value):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {"io-threads": value}
+        validate_config(cfg)
+
+    @pytest.mark.parametrize("value", ["abc", 9.5, "9.5", 0, "0", -1, "-1", ""])
+    def test_io_threads_non_positive_integer_rejected(
+        self, minimal_valid_config, value
+    ):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {"io-threads": value}
+        with pytest.raises(ValueError, match="'io-threads' must be a positive integer"):
+            validate_config(cfg)
+
+    def test_io_threads_in_both_places_rejected(self, minimal_valid_config):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["io-threads"] = [1, 4]
+        cfg["custom-server-configs"] = {"io-threads": 9}
+        with pytest.raises(ValueError, match="use one or the other"):
+            validate_config(cfg)
+
+    def test_unmanaged_keys_accepted(self, minimal_valid_config):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {
+            "maxmemory-policy": "noeviction",
+            "maxmemory": "1gb",
+            "hz": 20,
+        }
+        validate_config(cfg)
+
+
+class TestFrameworkServerFlagsCoverEmitter:
+    """Every flag _build_server_command emits is a framework flag, a benchmark
+    default, or an overridable flag, so the flag sets cannot drift from the
+    emitter."""
+
+    BENCHMARK_DEFAULTS = {
+        "cluster-enabled",
+        "daemonize",
+        "maxmemory-policy",
+        "appendonly",
+        "protected-mode",
+        "logfile",
+        "save",
+    }
+
+    def test_all_emitted_flags_are_known(self, launcher):
+        launcher.valkey_path = "/tmp/valkey"
+        launcher.config = {"cluster_config_dir": "."}
+        launcher.modules = [
+            {"path": "/x.so", "startup_args": ["--a"]},
+            {"path": "/y.so"},
+        ]
+        cmd = launcher._build_server_command(
+            port=6379,
+            bind_ip="10.0.0.1",
+            cpu_range=None,
+            tls_mode=True,
+            cluster_mode=True,
+            io_threads=4,
+            module_path=None,
+            log_file="/tmp/t.log",
+        )
+        emitted = {tok.split()[0][2:] for tok in cmd if tok.split()[0].startswith("--")}
+        known = (
+            set(FRAMEWORK_SERVER_FLAGS)
+            | self.BENCHMARK_DEFAULTS
+            | OVERRIDABLE_SERVER_FLAGS
+        )
+        assert emitted <= known, f"unlisted flags: {sorted(emitted - known)}"
+        for flag in (
+            "port",
+            "tls-port",
+            "io-threads",
+            "loadmodule",
+            "cluster-config-file",
+            "bind",
+        ):
+            assert flag in emitted

@@ -13,7 +13,11 @@ import sys
 
 
 from valkey_build import ServerBuilder
-from valkey_server import ServerLauncher, apply_config_to_servers
+from valkey_server import (
+    FRAMEWORK_SERVER_FLAGS,
+    ServerLauncher,
+    apply_config_to_servers,
+)
 from valkey_benchmark import (
     ClientRunner,
     ORIGIN_FIELD,
@@ -442,10 +446,29 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(
                     f"'custom-server-configs' keys must be strings, got: {type(key)}"
                 )
+            if key in FRAMEWORK_SERVER_FLAGS:
+                raise ValueError(
+                    f"'custom-server-configs' key {key!r} is managed by the framework "
+                    f"({FRAMEWORK_SERVER_FLAGS[key]}) and cannot be set here"
+                )
             # Note: bool is a subclass of int in Python, so check bool first.
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 raise ValueError(
                     f"'custom-server-configs' values must be strings or numbers, got: {type(value)}"
+                )
+        if "io-threads" in cfg["custom-server-configs"] and "io-threads" in cfg:
+            raise ValueError(
+                "'custom-server-configs' sets 'io-threads' while the top-level "
+                "'io-threads' field is also set; use one or the other"
+            )
+        if "io-threads" in cfg["custom-server-configs"]:
+            io_threads = cfg["custom-server-configs"]["io-threads"]
+            if isinstance(io_threads, str) and io_threads.isdigit():
+                io_threads = int(io_threads)
+            if not isinstance(io_threads, int) or io_threads <= 0:
+                raise ValueError(
+                    "'custom-server-configs' 'io-threads' must be a positive "
+                    f"integer, got: {cfg['custom-server-configs']['io-threads']!r}"
                 )
     if "custom-server-config-file" in cfg:
         if not isinstance(cfg["custom-server-config-file"], str):
@@ -713,6 +736,24 @@ def run_benchmark_matrix(
             builder.terminate_and_clean_valkey()
 
 
+def _resolve_io_threads_list(cfg: dict) -> list:
+    """Return the io-threads values to sweep for a config.
+
+    A value set through "custom-server-configs" is reflected here so the
+    recorded io_threads metric matches what the server ran.
+    """
+    value = cfg.get("io-threads")
+    if isinstance(value, int):
+        return [value]
+    if value is not None:
+        return value
+
+    custom = cfg.get("custom-server-configs", {}).get("io-threads")
+    if custom is None:
+        return [None]
+    return [int(custom)]
+
+
 def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):
     """Generate all execution configurations from config and CLI args."""
     # Normalize cluster_modes
@@ -733,11 +774,7 @@ def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):
         config_sets = [{}]
 
     # Normalize io_threads
-    io_threads_list = cfg.get("io-threads")
-    if io_threads_list is None:
-        io_threads_list = [None]
-    elif isinstance(io_threads_list, int):
-        io_threads_list = [io_threads_list]
+    io_threads_list = _resolve_io_threads_list(cfg)
 
     # Generate all combinations
     for cluster_mode in cluster_modes:
