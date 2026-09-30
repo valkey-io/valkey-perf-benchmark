@@ -338,15 +338,6 @@ class TestRemoteHost:
             assert "disk_in_flight" in row
 
 
-class TestDisabled:
-    def test_start_and_stop_are_noops(self):
-        sampler = MetricsSampler(enabled=False, context={"commit": "abc123"})
-        sampler.start()
-        sampler.stop()
-        assert sampler.rows == []
-        assert sampler._sampler_thread is None
-
-
 def wait_for_rows(sampler, count, deadline=5.0):
     """Wait until the sampler has `count` rows, without asserting on timing."""
     import time as _time

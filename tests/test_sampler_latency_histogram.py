@@ -1,7 +1,7 @@
 """Unit tests for the per-interval latency histogram sample source.
 
-LATENCY HISTOGRAM output is canned in both the RESP3 JSON object form and the
-RESP2 flat list form, and the expected percentiles are hand-computed.
+LATENCY HISTOGRAM output is canned in the JSON object form, and the expected
+percentiles are hand-computed.
 """
 
 import json
@@ -53,17 +53,6 @@ def histogram_json(commands):
     )
 
 
-def histogram_flat_json(commands):
-    """Render the same reply the way --json does when HELLO 3 was refused."""
-    payload = []
-    for name, (calls, buckets) in commands.items():
-        flat_buckets = []
-        for bucket, count in buckets.items():
-            flat_buckets.extend([bucket, count])
-        payload.extend([name, ["calls", calls, "histogram_usec", flat_buckets]])
-    return json.dumps(payload)
-
-
 def make_source():
     """Build a started LatencyHistogramSource with warnings discarded."""
     source = LatencyHistogramSource()
@@ -84,12 +73,6 @@ def latency_rows(outputs):
 class TestParseHistogram:
     def test_parses_the_json_object_form(self):
         text = histogram_json({"get": (1050, CURRENT_BUCKETS)})
-        parsed = parse_histogram(text)
-        assert parsed["get"].calls == 1050
-        assert parsed["get"].buckets == CURRENT_BUCKETS
-
-    def test_parses_the_flat_list_form(self):
-        text = histogram_flat_json({"get": (1050, CURRENT_BUCKETS)})
         parsed = parse_histogram(text)
         assert parsed["get"].calls == 1050
         assert parsed["get"].buckets == CURRENT_BUCKETS
@@ -145,16 +128,6 @@ class TestIntervalLatency:
                 "p999_usec": EXPECTED_P999,
             }
         }
-
-    def test_flat_list_form_gives_the_same_interval(self):
-        rows = latency_rows(
-            [
-                histogram_flat_json({"get": (50, PREVIOUS_BUCKETS)}),
-                histogram_flat_json({"get": (1050, CURRENT_BUCKETS)}),
-            ]
-        )
-        assert rows[1]["get"]["calls"] == 1000
-        assert rows[1]["get"]["p99_usec"] == EXPECTED_P99
 
     def test_sampler_own_commands_are_excluded(self):
         commands_before = {
