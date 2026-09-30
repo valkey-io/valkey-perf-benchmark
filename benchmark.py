@@ -431,6 +431,15 @@ def validate_config(cfg: dict) -> None:
                 "'custom-server-configs' sets 'io-threads' while the top-level "
                 "'io-threads' field is also set; use one or the other"
             )
+        if "io-threads" in cfg["custom-server-configs"]:
+            io_threads = cfg["custom-server-configs"]["io-threads"]
+            if isinstance(io_threads, str) and io_threads.isdigit():
+                io_threads = int(io_threads)
+            if not isinstance(io_threads, int) or io_threads <= 0:
+                raise ValueError(
+                    "'custom-server-configs' 'io-threads' must be a positive "
+                    f"integer, got: {cfg['custom-server-configs']['io-threads']!r}"
+                )
     if "custom-server-config-file" in cfg:
         if not isinstance(cfg["custom-server-config-file"], str):
             raise ValueError("'custom-server-config-file' must be a string path")
@@ -680,10 +689,7 @@ def _resolve_io_threads_list(cfg: dict) -> list:
     custom = cfg.get("custom-server-configs", {}).get("io-threads")
     if custom is None:
         return [None]
-    try:
-        return [int(custom)]
-    except (TypeError, ValueError):
-        return [None]
+    return [int(custom)]
 
 
 def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):

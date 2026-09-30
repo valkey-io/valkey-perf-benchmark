@@ -271,6 +271,21 @@ class TestCustomServerConfigsValidation:
         cfg["custom-server-configs"] = {"io-threads": 9}
         validate_config(cfg)
 
+    @pytest.mark.parametrize("value", [9, "9"])
+    def test_io_threads_integer_forms_accepted(self, minimal_valid_config, value):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {"io-threads": value}
+        validate_config(cfg)
+
+    @pytest.mark.parametrize("value", ["abc", 9.5, "9.5", 0, "0", -1, "-1", ""])
+    def test_io_threads_non_positive_integer_rejected(
+        self, minimal_valid_config, value
+    ):
+        cfg = copy.deepcopy(minimal_valid_config)
+        cfg["custom-server-configs"] = {"io-threads": value}
+        with pytest.raises(ValueError, match="'io-threads' must be a positive integer"):
+            validate_config(cfg)
+
     def test_io_threads_in_both_places_rejected(self, minimal_valid_config):
         cfg = copy.deepcopy(minimal_valid_config)
         cfg["io-threads"] = [1, 4]

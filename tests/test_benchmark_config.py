@@ -551,10 +551,6 @@ class TestResolveIoThreadsList:
         cfg = {"custom-server-configs": {"io-threads": "9"}}
         assert _resolve_io_threads_list(cfg) == [9]
 
-    def test_non_numeric_custom_value_ignored(self):
-        cfg = {"custom-server-configs": {"io-threads": "abc"}}
-        assert _resolve_io_threads_list(cfg) == [None]
-
 
 class TestCustomServerConfigFileValidation:
     """Tests for custom-server-config-file validation in validate_config."""
