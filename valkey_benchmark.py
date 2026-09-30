@@ -16,7 +16,8 @@ import valkey
 from process_metrics import MetricsProcessor
 from valkey_server import ServerLauncher, apply_config_to_servers
 from profiler import PerformanceProfiler
-from metrics_sampler import MetricsSampler, parse_info
+from metrics_sampler import MetricsSampler
+from samplers.valkey_info import parse_info
 from utils.git_utils import resolve_ref, get_commit_timestamp
 from utils.cpu_utils import format_core_list, parse_core_range
 from environment_metadata import collect_environment_metadata
@@ -1090,13 +1091,21 @@ class ClientRunner:
         if self.architecture is not None:
             context["architecture"] = self.architecture
 
+        options = self._per_second_sampling_options()
         return MetricsSampler(
             host=self.target_ip,
             port=self._get_active_ports()[0],
             cli_path=str(self.valkey_path / VALKEY_CLI),
             server_pid=self._resolve_server_pid(),
             context=context,
+            sources=options.get("sources"),
+            cpu_range=options.get("cpu_range"),
         )
+
+    def _per_second_sampling_options(self) -> dict:
+        """Return the per_second_sampling object, empty when it is a bool."""
+        value = self.config.get("per_second_sampling")
+        return value if isinstance(value, dict) else {}
 
     def _start_metrics_sampler(
         self, scenario: dict, group_id
@@ -1149,7 +1158,8 @@ class ClientRunner:
         benchmark run.
         """
         sampler = None
-        if self.config.get("per_second_sampling"):
+        value = self.config.get("per_second_sampling")
+        if value is True or isinstance(value, dict):
             sampler = self._start_metrics_sampler(scenario, group_id)
         try:
             yield

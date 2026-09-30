@@ -105,6 +105,12 @@ valkey-perf-benchmark/
 ├── cpu_monitor.py           # CPU monitoring during tests
 ├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
 ├── metrics_sampler.py       # 1 Hz per-second sampler for data tiering (opt-in via per_second_sampling)
+├── samplers/                # Pluggable sample sources the sampler selects between
+│   ├── base.py             # SamplerContext, SampleSource, shared CLI and file helpers
+│   ├── valkey_info.py      # INFO ALL columns, tiering counters, hit ratios, full snapshot
+│   ├── latency_histogram.py # Per-interval command latency percentiles
+│   ├── process_cpu.py      # Host, server process and async IO worker CPU (local only)
+│   └── disk.py             # Block device counters and derived stats (local only)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
@@ -1137,19 +1143,61 @@ carries:
   (`disk_hit_pct_interval`, `mem_hit_pct_interval`, from the deltas between consecutive
   samples, so a per-second chart can show transients). A zero denominator yields 0.0.
 - Memory, keyspace hit/miss, and throughput derived from `total_commands_processed` deltas
-- Per-process Valkey CPU and the async IO worker thread CPU, isolated by thread name
+- Host CPU, per-process Valkey CPU, and the async IO worker thread CPU isolated by thread
+  name
 - Block device detail, on an auto-detected NVMe or SCSI device: IOPS and MB/s, merges per
   second, how long the average read and the average write waited, the average queue depth,
   how busy the device was, how many requests are in flight, and the average request size
+- `info`, the whole `INFO ALL` reply as a nested dict
+- `latency`, per-interval command latency percentiles
 
 It reads `INFO ALL` by shelling out to `valkey-cli`, runs on a background daemon thread,
-and never raises into its caller: an unreadable source becomes 0 plus a warning logged
-once. A server without tiering, or with tiering disabled, samples cleanly with the tiering
+and never raises into its caller. An unreadable value becomes 0, an unavailable `info` or
+`latency` reply becomes `{}`, and a source that fails outright is skipped for that tick
+without affecting the others, each with a warning logged once. A server without tiering, or with tiering disabled, samples cleanly with the tiering
 columns at 0.
 
-**It is opt-in.** Set the root config key `per_second_sampling` to `true` to enable it; when
-the key is absent or `false` the sampler class is never constructed and a run behaves exactly
-as before. When enabled, `valkey_benchmark.py` starts one sampler immediately before each
+**It is opt-in.** The root config key `per_second_sampling` takes either form:
+
+```json
+"per_second_sampling": true
+```
+
+```json
+"per_second_sampling": {
+  "sources": ["valkey_info", "latency_histogram"],
+  "cpu_range": "56-63"
+}
+```
+
+`true` samples every source, unpinned. An object enables sampling by being present, and
+both its keys are optional: `sources` selects a subset, and `cpu_range` pins the sampler
+thread (and the `valkey-cli` children it spawns) to those cores. When the key is absent or
+`false` the sampler class is never constructed.
+
+The sources live in `samplers/`:
+
+| Source              | Columns                                                       |
+| ------------------- | ------------------------------------------------------------- |
+| `valkey_info`       | memory, throughput, keyspace, tiering counters, hit ratios, plus `info` |
+| `latency_histogram` | per-interval command latency percentiles, under `latency`      |
+| `process_cpu`       | host, server process and async IO worker CPU (local only)      |
+| `disk`              | block device IOPS, throughput, latency, utilization (local only) |
+
+`process_cpu` and `disk` read `/proc` and `/sys`, so they describe the machine the sampler
+runs on and are skipped with one warning when the target host is not a loopback address.
+
+`info` is the whole `INFO ALL` reply as a dict, so a field with no derived column of its own
+is still recoverable from a stored row: keys are verbatim, a wholly numeric value becomes an
+int or a float, and a `k=v,k=v` value (a Commandstats or Keyspace line) becomes a nested
+dict. `latency` maps each command whose call count grew during the interval to
+`{calls, p50_usec, p99_usec, p999_usec}`, computed from the delta between two
+`LATENCY HISTOGRAM` CDFs. The commands the sampler issues itself are dropped, so `info`,
+`hello`, `config|get` and any name starting with `latency` never appear in it. Each key is
+present whenever its source is enabled, and `latency` is `{}` on the first tick of a
+scenario, which has no predecessor to delta against.
+
+When enabled, `valkey_benchmark.py` starts one sampler immediately before each
 scenario's measured benchmark process and stops it plus writes its rows immediately after.
 Sampling covers the measured phase only: not the flush, not `setup_commands`, not the
 populate pass, and not the separate warmup run. A `type: mixed` scenario gets exactly one
@@ -1177,7 +1225,8 @@ row is unaffected. Sampler failures are contained the same way: any exception fr
 construction, `start()`, `stop()` or the row append is logged and swallowed, so sampling can
 never fail a benchmark run.
 
-`tests/test_metrics_sampler.py` covers the sampler directly and
+`tests/test_metrics_sampler.py` covers the loop, `tests/test_sampler_*.py` cover the
+sources, `tests/test_sampler_golden.py` pins the output columns against stored rows, and
 `tests/test_client_runner_logic.py` covers the wiring. Because those are unit tests,
 `.github/workflows/sampler-smoke.yml` closes the remaining gap against a live server: it
 builds upstream valkey on a GitHub runner, runs `configs/sampler-smoke.json` (a tiny
@@ -1186,7 +1235,9 @@ series that every scenario the config defines has rows in the one appended file 
 what proves appending did not clobber), that `elapsed_sec` starts at 0 and increases within
 each scenario's rows, that `used_memory` and `ops_per_sec` are real, that the context
 fields including `config_set` are on every row, that every tiering counter is 0 as
-expected on a server without data tiering, and that every disk column is present. The disk
+expected on a server without data tiering, that every disk column is present, that `info`
+agrees with the `used_memory` column, and that `latency` reports ordered percentiles for
+the benchmarked command and never for the sampler's own commands. The disk
 columns are checked for presence rather than value, because the runner's block device is
 busy with work unrelated to the benchmark. Those assertions live in
 `scripts/verify_sampler_output.py`, which the workflow invokes and

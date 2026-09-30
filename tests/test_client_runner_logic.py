@@ -2072,6 +2072,52 @@ class TestPerSecondSamplingWiring:
 
         sampler_cls.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "value", [True, {}, {"sources": ["valkey_info"]}, {"cpu_range": "0-1"}]
+    )
+    def test_true_or_object_constructs_sampler(self, minimal_client_runner, value):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = value
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            self._invoke(runner, _sampling_scenario())
+
+        sampler_cls.assert_called_once()
+
+    def test_bool_form_passes_no_sources_or_cpu_range(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = True
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            self._invoke(runner, _sampling_scenario())
+
+        kwargs = sampler_cls.call_args.kwargs
+        assert kwargs["sources"] is None
+        assert kwargs["cpu_range"] is None
+
+    def test_object_form_passes_sources_and_cpu_range(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = {
+            "sources": ["valkey_info", "disk"],
+            "cpu_range": "56-63",
+        }
+
+        with (
+            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
+            patch.object(runner, "_run", return_value=MagicMock()),
+        ):
+            self._invoke(runner, _sampling_scenario())
+
+        kwargs = sampler_cls.call_args.kwargs
+        assert kwargs["sources"] == ["valkey_info", "disk"]
+        assert kwargs["cpu_range"] == "56-63"
+
     def test_wraps_only_the_measured_phase(self, minimal_client_runner, write_metrics):
         """start() lands after populate and warmup; stop()+write after the run."""
         runner = minimal_client_runner
@@ -2146,9 +2192,8 @@ class TestPerSecondSamplingWiring:
         runner.current_config_set = {"maxmemory": "1gb"}
 
         sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
-        with patch.object(sampler, "_read_info", return_value={}):
-            sampler._sample_once()
-            sampler._sample_once()
+        sampler._sample_once()
+        sampler._sample_once()
 
         rows = sampler.rows
         assert len(rows) == 2
