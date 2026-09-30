@@ -1226,8 +1226,7 @@ construction, `start()`, `stop()` or the row append is logged and swallowed, so 
 never fail a benchmark run.
 
 `tests/test_metrics_sampler.py` covers the loop, `tests/test_sampler_*.py` cover the
-sources, `tests/test_sampler_golden.py` pins the output columns against stored rows, and
-`tests/test_client_runner_logic.py` covers the wiring. Because those are unit tests,
+sources, and `tests/test_client_runner_logic.py` covers the wiring. Because those are unit tests,
 `.github/workflows/sampler-smoke.yml` closes the remaining gap against a live server: it
 builds upstream valkey on a GitHub runner, runs `configs/sampler-smoke.json` (a tiny
 stock-server config with `per_second_sampling` enabled), and asserts on the emitted time
