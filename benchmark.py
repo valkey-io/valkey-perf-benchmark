@@ -330,14 +330,15 @@ def _validate_per_second_sampling(value) -> None:
     """Validate the `per_second_sampling` config value.
 
     A bool keeps the whole default source set, unpinned. An object selects
-    sources and pins the sampler thread, and enables sampling by being present.
+    sources, pins the sampler thread, names the path whose block device is
+    sampled, and enables sampling by being present.
     """
     if isinstance(value, bool):
         return
     if not isinstance(value, dict):
         raise ValueError("'per_second_sampling' must be a boolean or an object")
 
-    unsupported = sorted(set(value) - {"sources", "cpu_range"})
+    unsupported = sorted(set(value) - {"sources", "cpu_range", "disk_path"})
     if unsupported:
         raise ValueError(
             f"'per_second_sampling' does not support key(s): {unsupported}"
@@ -360,6 +361,13 @@ def _validate_per_second_sampling(value) -> None:
 
     if "cpu_range" in value:
         _validate_cpu_range(value["cpu_range"], "per_second_sampling.cpu_range")
+
+    if "disk_path" in value:
+        disk_path = value["disk_path"]
+        if not isinstance(disk_path, str) or not disk_path.strip():
+            raise ValueError(
+                "'per_second_sampling.disk_path' must be a non-empty string"
+            )
 
 
 # ---------- Helpers ----------------------------------------------------------

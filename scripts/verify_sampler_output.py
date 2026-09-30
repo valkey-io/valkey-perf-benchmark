@@ -19,6 +19,7 @@ without identity:
     commands, and the benchmarked command has ordered percentiles on some row
   - every disk column is present, checked for presence rather than value
     because the runner has real disk activity of its own
+  - every CPU column is present, checked for presence for the same reason
   - the context columns are on every row
 
 The first and last row of each file are printed so a CI log shows the shape of
@@ -67,7 +68,18 @@ DISK_COLUMNS = (
     "disk_in_flight",
     "disk_req_sz_kb",
 )
-CONTEXT_COLUMNS = ("commit", "scenario", "command")
+# CPU columns are derived from the host and the server process, whose load is
+# not reproducible, so these are checked for presence only. valkey_cpu_* come
+# from the main thread CPU seconds INFO reports.
+CPU_COLUMNS = (
+    "valkey_cpu_user",
+    "valkey_cpu_sys",
+    "valkey_cpu_total",
+    "asio_cpu_pct",
+    "cpu_user",
+    "cpu_sys",
+)
+CONTEXT_COLUMNS = ("commit", "scenario", "command", "run")
 # Commands the sampler itself issues, which the latency source drops so the
 # series describes the benchmark load rather than the measurement of it.
 SAMPLER_COMMANDS = frozenset({"info", "hello", "config|get"})
@@ -141,6 +153,10 @@ def verify_timeseries_file(path: Path, expected_scenarios: Set[str]) -> None:
                 assert (
                     column in row
                 ), f"{label} row {index}: disk column {column} missing"
+            for column in CPU_COLUMNS:
+                assert (
+                    column in row
+                ), f"{label} row {index}: CPU column {column} missing"
             for column in CONTEXT_COLUMNS:
                 assert row.get(
                     column

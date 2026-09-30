@@ -3,8 +3,8 @@
 The verifier decides whether the smoke workflow passes, so each assertion it
 makes is exercised against a fabricated results tree: a passing two-scenario
 series, plus one failure per check (clobbered scenario, nonzero tiering counter,
-non-increasing elapsed_sec, missing config_set, missing disk column, no time
-series file at all).
+non-increasing elapsed_sec, missing config_set, missing disk column, missing CPU
+column, missing run identity, no time series file at all).
 """
 
 import json
@@ -36,6 +36,7 @@ def _row(scenario, elapsed_sec, **overrides):
         "scenario": scenario,
         "test_id": f"1_{scenario}",
         "command": "SET",
+        "run": 1,
         "config_set": {},
         "used_memory": 1799288,
         "ops_per_sec": 12345.0,
@@ -45,6 +46,8 @@ def _row(scenario, elapsed_sec, **overrides):
     # Disk columns are checked for presence, so these carry the kind of
     # nonzero values a busy runner reports.
     for index, column in enumerate(verify_sampler_output.DISK_COLUMNS):
+        row[column] = float(index + 1)
+    for index, column in enumerate(verify_sampler_output.CPU_COLUMNS):
         row[column] = float(index + 1)
     row.update(overrides)
     # Derived from the final used_memory so an override stays self-consistent.
@@ -230,6 +233,24 @@ class TestVerifyFails:
         config_path = _write_config(tmp_path, ["a"])
 
         with pytest.raises(AssertionError, match="context column config_set missing"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_missing_cpu_column_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        del rows[1]["valkey_cpu_total"]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="CPU column valkey_cpu_total missing"):
+            verify_sampler_output.verify(results_dir, config_path)
+
+    def test_missing_run_context_fails(self, tmp_path):
+        rows = _scenario_rows("a")
+        del rows[0]["run"]
+        results_dir = _write_results(tmp_path, rows)
+        config_path = _write_config(tmp_path, ["a"])
+
+        with pytest.raises(AssertionError, match="context column run missing"):
             verify_sampler_output.verify(results_dir, config_path)
 
     def test_missing_commit_context_fails(self, tmp_path):

@@ -1,43 +1,41 @@
 """Unit tests for the metrics sampler loop.
 
 Covers what the loop owns: elapsed time, context denormalization, source
-selection, remote host filtering, per-source failure isolation, thread pinning
-and the background thread lifecycle. Each source's own columns are covered by
-tests/test_sampler_*.py.
+selection, locality and platform filtering, per-source failure isolation, the
+inline warmup start delay, thread pinning and the background thread lifecycle.
+Each source's own columns are covered by tests/test_sampler_*.py.
 """
 
+import socket
 from contextlib import ExitStack
 from itertools import combinations
 from unittest.mock import patch
 
 import pytest
 
-from metrics_sampler import MetricsSampler, is_loopback_host
+from metrics_sampler import MetricsSampler, is_local_address
 from samplers import DEFAULT_SOURCES, SOURCES, SamplerContext
 from samplers.disk import DiskSource
 from test_sampler_disk import DISK_DERIVED_COLUMNS, DISK_SAMPLE_1
 from test_sampler_process_cpu import CPU_COLUMNS
-from test_sampler_valkey_info import INFO_WITH_TIERING
+from test_sampler_valkey_info import INFO_WITH_TIERING, info_with_main_thread_cpu
 
 WALL_CLOCK = 1782868117
 
 
 def make_sampler(**overrides):
-    """Build a sampler with its sources started against stubbed detection."""
+    """Build a sampler with its sources started against a named block device."""
     kwargs = {
         "context": {},
         "server_pid": None,
-        "block_device": None,
+        "block_device": "nvme0n1",
         "interval": 1.0,
     }
     kwargs.update(overrides)
     sampler = MetricsSampler(**kwargs)
     # start() is bypassed in most tests so time.monotonic can be controlled.
     sampler._start_monotonic = 100.0
-    with patch(
-        "samplers.disk.detect_block_device", return_value=kwargs["block_device"]
-    ):
-        sampler._sources = sampler._build_sources()
+    sampler._sources = sampler._build_sources()
     return sampler
 
 
@@ -173,19 +171,35 @@ class TestRowShape:
 
 
 class TestSourceColumnOwnership:
-    def test_default_source_columns_are_pairwise_disjoint(self):
+    @pytest.mark.parametrize(
+        "info_text", [INFO_WITH_TIERING, info_with_main_thread_cpu(10.0, 4.0)]
+    )
+    def test_default_source_columns_are_pairwise_disjoint(self, info_text):
+        # valkey_cpu_* belong to valkey_info when INFO reports the main thread
+        # CPU seconds and to process_cpu when it does not, never to both.
+        ctx = SamplerContext(
+            block_device="nvme0n1", warn_once=lambda key, message: None
+        )
         columns = {}
         for name in DEFAULT_SOURCES:
             source = SOURCES[name]()
-            with patch("samplers.disk.detect_block_device", return_value="nvme0n1"):
-                source.start(SamplerContext(warn_once=lambda key, message: None))
+            source.start(ctx)
             with ExitStack() as stack:
-                stub_sources(stack, 1)
-                columns[name] = set(source.sample(None))
+                stub_sources(stack, 1, info_texts=[info_text])
+                columns[name] = set(source.sample(100.0))
 
         for first, second in combinations(DEFAULT_SOURCES, 2):
             shared = columns[first] & columns[second]
             assert not shared, f"{first} and {second} both emit {sorted(shared)}"
+
+    def test_main_thread_cpu_columns_are_emitted_exactly_once(self):
+        row = sample_at(
+            make_sampler(server_pid=1234),
+            [100.0],
+            info_texts=[info_with_main_thread_cpu(10.0, 4.0)],
+        )[0]
+        for column in ("valkey_cpu_user", "valkey_cpu_sys", "valkey_cpu_total"):
+            assert column in row
 
 
 class TestSourceSelection:
@@ -204,7 +218,7 @@ class TestSourceSelection:
 
     def test_source_that_fails_to_start_is_dropped(self):
         with patch.object(DiskSource, "start", side_effect=RuntimeError("no device")):
-            sampler = make_sampler(block_device="nvme0n1")
+            sampler = make_sampler()
         names = [source.name for source in sampler._sources]
         assert "disk" not in names
         assert len(names) == len(DEFAULT_SOURCES) - 1
@@ -240,26 +254,28 @@ class TestPerSourceFailureIsolation:
 class TestThreadPinning:
     def test_pins_to_the_parsed_core_set(self):
         sampler = make_sampler(cpu_range="56-58,1")
-        with patch("metrics_sampler.os.sched_setaffinity") as set_affinity:
+        with patch("metrics_sampler.os.sched_setaffinity", create=True) as set_affinity:
             sampler._pin_thread()
         set_affinity.assert_called_once_with(0, {1, 56, 57, 58})
 
     def test_no_cpu_range_leaves_the_thread_unpinned(self):
         sampler = make_sampler()
-        with patch("metrics_sampler.os.sched_setaffinity") as set_affinity:
+        with patch("metrics_sampler.os.sched_setaffinity", create=True) as set_affinity:
             sampler._pin_thread()
         set_affinity.assert_not_called()
 
     def test_pin_failure_does_not_raise(self):
         sampler = make_sampler(cpu_range="0-1")
         with patch(
-            "metrics_sampler.os.sched_setaffinity", side_effect=OSError("denied")
+            "metrics_sampler.os.sched_setaffinity",
+            create=True,
+            side_effect=OSError("denied"),
         ):
             sampler._pin_thread()
 
     def test_unparsable_range_does_not_raise(self):
         sampler = make_sampler(cpu_range="not-a-range")
-        with patch("metrics_sampler.os.sched_setaffinity") as set_affinity:
+        with patch("metrics_sampler.os.sched_setaffinity", create=True) as set_affinity:
             sampler._pin_thread()
         set_affinity.assert_not_called()
 
@@ -276,66 +292,165 @@ class TestThreadPinning:
                 patch("samplers.disk.read_disk_counters", return_value=None)
             )
             set_affinity = stack.enter_context(
-                patch("metrics_sampler.os.sched_setaffinity")
+                patch("metrics_sampler.os.sched_setaffinity", create=True)
             )
             sampler.start()
             wait_for_rows(sampler, 1)
             sampler.stop()
         set_affinity.assert_called_once_with(0, {0})
 
+    def test_platform_without_the_syscall_warns_once_and_still_samples(
+        self, monkeypatch
+    ):
+        monkeypatch.delattr("os.sched_setaffinity", raising=False)
+        sampler = MetricsSampler(interval=0.01, block_device="nvme0n1", cpu_range="0")
+        warnings = []
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("samplers.valkey_info.run_cli", return_value=INFO_WITH_TIERING)
+            )
+            stack.enter_context(
+                patch("samplers.latency_histogram.run_cli", return_value=None)
+            )
+            stack.enter_context(
+                patch("samplers.disk.read_disk_counters", return_value=None)
+            )
+            stack.enter_context(
+                patch("logging.warning", side_effect=lambda msg: warnings.append(msg))
+            )
+            sampler.start()
+            wait_for_rows(sampler, 2)
+            sampler.stop()
 
-HOST_CPU_COLUMNS = CPU_COLUMNS
+        assert len(sampler.rows) >= 2
+        pin_warnings = [
+            message for message in warnings if "CPU pinning is not supported" in message
+        ]
+        assert len(pin_warnings) == 1
 
 
-class TestRemoteHost:
-    """Host CPU and disk columns are collected only against a loopback target."""
+class TestPlatformFiltering:
+    def test_non_linux_drops_the_proc_and_sys_sources(self):
+        warnings = []
+        with patch("metrics_sampler.sys.platform", "darwin"):
+            sampler = MetricsSampler(host="127.0.0.1", block_device="nvme0n1")
+            sampler._warn_once = lambda key, message: warnings.append(message)
+            sampler._start_monotonic = 100.0
+            sampler._sources = sampler._build_sources()
 
-    @pytest.mark.parametrize(
-        "host", ["127.0.0.1", "127.0.0.2", "::1", "localhost", "LOCALHOST"]
-    )
-    def test_loopback_hosts(self, host):
-        assert is_loopback_host(host) is True
+        assert [source.name for source in sampler._sources] == [
+            "valkey_info",
+            "latency_histogram",
+        ]
+        assert len(warnings) == 1
+        assert "process_cpu" in warnings[0]
+        assert "disk" in warnings[0]
 
-    @pytest.mark.parametrize(
-        "host", ["10.0.0.5", "192.168.1.10", "valkey.example.com", ""]
-    )
-    def test_non_loopback_hosts(self, host):
-        assert is_loopback_host(host) is False
+    def test_non_linux_still_samples_the_cli_sources(self):
+        with patch("metrics_sampler.sys.platform", "darwin"):
+            sampler = make_sampler()
+        rows = sample_at(sampler, [100.0, 101.0])
+        for row in rows:
+            assert row["used_memory"] == 1799288
+            assert "latency" in row
+            for column in CPU_COLUMNS + DISK_DERIVED_COLUMNS:
+                assert column not in row
+
+
+class TestStartDelay:
+    def test_rows_start_after_the_delay_at_elapsed_zero(self):
+        sampler = MetricsSampler(interval=0.01, block_device="nvme0n1", start_delay=0.3)
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("samplers.valkey_info.run_cli", return_value=INFO_WITH_TIERING)
+            )
+            stack.enter_context(
+                patch("samplers.latency_histogram.run_cli", return_value=None)
+            )
+            stack.enter_context(
+                patch("samplers.disk.read_disk_counters", return_value=None)
+            )
+            sampler.start()
+            assert sampler.rows == []
+            wait_for_rows(sampler, 2)
+            sampler.stop()
+
+        rows = sampler.rows
+        assert len(rows) >= 2
+        assert rows[0]["elapsed_sec"] == 0
+
+    def test_stop_during_the_delay_yields_no_rows(self):
+        sampler = MetricsSampler(interval=0.01, block_device="nvme0n1", start_delay=30)
+        with patch("samplers.valkey_info.run_cli", return_value=INFO_WITH_TIERING):
+            sampler.start()
+            sampler.stop()
+        assert sampler.rows == []
+        assert sampler._sampler_thread is None
+
+
+class TestLocality:
+    """Host CPU and disk columns are collected only when the server is local."""
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost", "LOCALHOST"])
+    def test_loopback_and_localhost_are_local(self, host):
+        assert is_local_address(host) is True
+
+    def test_this_machine_s_own_address_is_local(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("192.0.2.1", 9))
+            address = sock.getsockname()[0]
+        except OSError:
+            pytest.skip("no routable interface to discover a local address from")
+        finally:
+            sock.close()
+        assert is_local_address(address) is True
+
+    @pytest.mark.parametrize("host", ["192.0.2.1", "no-such-host.invalid", ""])
+    def test_addresses_this_machine_does_not_own_are_not_local(self, host):
+        assert is_local_address(host) is False
 
     def test_remote_host_omits_cpu_and_disk_columns(self):
-        sampler = make_sampler(host="10.0.0.5", server_pid=1234, block_device="nvme0n1")
+        sampler = make_sampler(host="192.0.2.1", server_pid=1234)
         assert [source.name for source in sampler._sources] == [
             "valkey_info",
             "latency_histogram",
         ]
         with patch("samplers.process_cpu.read_system_cpu_ticks") as system_cpu:
-            with patch("samplers.process_cpu.read_process_cpu_ticks") as process_cpu:
-                with patch("samplers.process_cpu.read_thread_cpu_ticks") as thread_cpu:
-                    with patch("samplers.disk.read_disk_counters") as disk:
-                        rows = sample_at(sampler, [100.0, 101.0])
+            with patch("samplers.process_cpu.read_thread_cpu_ticks") as thread_cpu:
+                with patch("samplers.disk.read_disk_counters") as disk:
+                    rows = sample_at(sampler, [100.0, 101.0])
 
         system_cpu.assert_not_called()
-        process_cpu.assert_not_called()
         thread_cpu.assert_not_called()
         disk.assert_not_called()
         for row in rows:
-            for column in HOST_CPU_COLUMNS + DISK_DERIVED_COLUMNS:
+            for column in CPU_COLUMNS + DISK_DERIVED_COLUMNS:
                 assert column not in row
             assert "disk_in_flight" not in row
             # INFO-derived columns and the context still land on every row.
             assert row["used_memory"] == 1799288
 
-    def test_loopback_host_keeps_cpu_and_disk_columns(self):
-        sampler = make_sampler(
-            host="127.0.0.1", server_pid=1234, block_device="nvme0n1"
-        )
+    def test_local_host_keeps_cpu_and_disk_columns(self):
+        sampler = make_sampler(host="127.0.0.1", server_pid=1234)
         rows = sample_at(
             sampler, [100.0, 101.0], disk_counters=[DISK_SAMPLE_1, DISK_SAMPLE_1]
         )
         for row in rows:
-            for column in HOST_CPU_COLUMNS + DISK_DERIVED_COLUMNS:
+            for column in CPU_COLUMNS + DISK_DERIVED_COLUMNS:
                 assert column in row
             assert "disk_in_flight" in row
+
+    def test_server_local_true_keeps_host_sources_for_any_host(self):
+        sampler = make_sampler(host="10.255.255.1", server_local=True)
+        assert [source.name for source in sampler._sources] == list(DEFAULT_SOURCES)
+
+    def test_server_local_false_drops_host_sources_for_loopback(self):
+        sampler = make_sampler(host="127.0.0.1", server_local=False)
+        assert [source.name for source in sampler._sources] == [
+            "valkey_info",
+            "latency_histogram",
+        ]
 
 
 def wait_for_rows(sampler, count, deadline=5.0):

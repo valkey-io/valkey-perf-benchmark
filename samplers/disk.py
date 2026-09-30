@@ -1,16 +1,21 @@
 """Block device source for the per-second metrics sampler.
 
 Reads /sys/block, so it describes the machine the sampler runs on and is
-collected only against a loopback target. Every column except `disk_in_flight`
-is derived from deltas of `/sys/block/<dev>/stat` between consecutive samples,
-and a zero denominator yields 0.0, which covers both the first sample of a run
-and an interval in which the device completed no IO.
+collected only when the server runs there. The device is the whole disk backing
+a configured filesystem path, resolved through the path's st_dev, so no device
+name is ever guessed. Every column except `disk_in_flight` is derived from
+deltas of `/sys/block/<dev>/stat` over the gap since this source's last
+successful read, and a zero denominator yields 0.0, which covers both the first
+sample of a run and an interval in which the device completed no IO. When no
+block device backs the path, the source emits no disk columns at all.
 """
 
+import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .base import SampleSource, read_text, to_int
+from .base import SampleSource, read_text, run_cli
 
 # /sys/block reports transfer sizes in 512-byte sectors regardless of the
 # device's real logical block size.
@@ -18,10 +23,7 @@ _SECTOR_BYTES = 512
 _BYTES_PER_MB = 1024 * 1024
 
 _SYS_BLOCK_DIR = Path("/sys/block")
-
-# Block device name prefixes worth sampling, in preference order. Everything
-# else in /sys/block (loop, ram, dm, zram) is not a benchmark data device.
-_BLOCK_DEVICE_PREFIXES = ("nvme", "sd")
+_SYS_DEV_BLOCK_DIR = Path("/sys/dev/block")
 
 # /sys/block/<dev>/stat field positions, keyed by the name used internally.
 # The kernel emits these eleven in this order for a whole disk, sectors in
@@ -42,26 +44,26 @@ _DISK_STAT_FIELDS = (
 _DISK_STAT_MIN_FIELDS = len(_DISK_STAT_FIELDS)
 
 
-def detect_block_device() -> Optional[str]:
-    """Return the largest NVMe or SCSI whole-disk device name, or None.
+def resolve_block_device(path: str) -> Optional[str]:
+    """Return the whole-disk device name backing path, or None.
 
-    Size breaks the tie so a small root volume is not picked over the data
-    device.
+    None means no block device backs the path, which is the case for tmpfs,
+    overlay and network filesystems and on platforms without /sys.
     """
     try:
-        names = sorted(entry.name for entry in _SYS_BLOCK_DIR.iterdir())
+        st_dev = os.stat(path).st_dev
     except OSError:
         return None
 
-    for prefix in _BLOCK_DEVICE_PREFIXES:
-        candidates = [name for name in names if name.startswith(prefix)]
-        if not candidates:
-            continue
-        return max(
-            candidates,
-            key=lambda name: to_int(read_text(str(_SYS_BLOCK_DIR / name / "size"))),
-        )
-    return None
+    entry = _SYS_DEV_BLOCK_DIR / f"{os.major(st_dev)}:{os.minor(st_dev)}"
+    device = Path(os.path.realpath(str(entry)))
+    if not device.is_dir():
+        return None
+    if (device / "partition").exists():
+        device = device.parent
+    if not (device / "stat").exists():
+        return None
+    return device.name
 
 
 def read_disk_counters(device: str) -> Optional[Dict[str, int]]:
@@ -124,24 +126,45 @@ class DiskSource(SampleSource):
 
     name = "disk"
     local_only = True
+    linux_only = True
 
     def __init__(self):
         """Initialize the counter baseline, empty until the second tick."""
         self.device: Optional[str] = None
         self._prev: Optional[Dict[str, int]] = None
+        self._prev_time: Optional[float] = None
 
     def start(self, ctx) -> None:
-        """Resolve the block device to sample, detecting one when unset."""
+        """Resolve the block device backing the configured path."""
         super().start(ctx)
-        self.device = ctx.block_device or detect_block_device()
+        if ctx.block_device:
+            self.device = ctx.block_device
+            return
+
+        path = ctx.disk_path or ctx.ext_storage_path or self._server_data_dir(ctx)
+        self.device = resolve_block_device(path) if path else None
         if self.device is None:
             ctx.warn_once(
                 "no_block_device",
-                "No NVMe or SCSI block device found, disk metrics will be 0",
+                f"No block device backs {path!r}, disk columns are omitted",
             )
+        else:
+            logging.info(f"Sampling block device {self.device}, resolved from {path!r}")
 
-    def sample(self, interval: Optional[float]) -> Dict[str, Any]:
+    @staticmethod
+    def _server_data_dir(ctx) -> Optional[str]:
+        """Return the server's data directory from CONFIG GET dir, or None."""
+        output = run_cli(ctx, "CONFIG", "GET", "dir")
+        if output is None:
+            return None
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        return lines[1] if len(lines) > 1 else None
+
+    def sample(self, now: float) -> Dict[str, Any]:
         """Derive the block device columns from /sys/block stat deltas."""
+        if not self.device:
+            return {}
+
         metrics: Dict[str, Any] = {
             "disk_read_iops": 0.0,
             "disk_write_iops": 0.0,
@@ -156,8 +179,6 @@ class DiskSource(SampleSource):
             "disk_in_flight": 0,
             "disk_req_sz_kb": 0.0,
         }
-        if not self.device:
-            return metrics
 
         counters = read_disk_counters(self.device)
         if counters is None:
@@ -169,6 +190,11 @@ class DiskSource(SampleSource):
 
         # A gauge rather than a counter, so it is read on every sample.
         metrics["disk_in_flight"] = counters["in_flight"]
+
+        interval = None
+        if self._prev_time is not None:
+            elapsed = now - self._prev_time
+            interval = elapsed if elapsed > 0 else None
 
         if self._prev is not None and interval:
             prev = self._prev
@@ -193,4 +219,5 @@ class DiskSource(SampleSource):
             metrics["disk_util_pct"] = busy_percent(delta["io_ticks"], interval_ms)
             metrics["disk_req_sz_kb"] = request_size_kb(total_sectors, total_ios)
         self._prev = counters
+        self._prev_time = now
         return metrics

@@ -2182,9 +2182,96 @@ class TestPerSecondSamplingWiring:
             "data_size": 64,
             "pipeline": 1,
             "clients": 1,
+            "run": 1,
             "config_set": {"maxmemory": "1gb"},
             "architecture": "aarch64",
         }
+
+    def test_run_number_lands_on_the_context(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.current_run = 3
+        sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
+        assert sampler.context["run"] == 3
+
+    def test_two_runs_produce_contexts_numbered_one_and_two(
+        self, minimal_client_runner
+    ):
+        runner = minimal_client_runner
+        runner.runs = 2
+        runner.config["test_groups"] = [
+            {"group": 1, "scenarios": [_sampling_scenario()]}
+        ]
+
+        runs = []
+        for _ in runner._iterate_test_groups_scenarios():
+            sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
+            runs.append(sampler.context["run"])
+
+        assert runs == [1, 2]
+
+    def test_server_launcher_marks_the_server_local(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.server_launcher = MagicMock()
+        sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
+        assert sampler.server_local is True
+
+    def test_no_server_launcher_leaves_locality_to_the_host(
+        self, minimal_client_runner
+    ):
+        runner = minimal_client_runner
+        runner.server_launcher = None
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(_sampling_scenario(), 1)
+        assert sampler_cls.call_args.kwargs["server_local"] is None
+
+    def test_disk_path_and_ext_storage_path_are_passed(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.config["per_second_sampling"] = {"disk_path": "/mnt/data"}
+        runner.config["custom-server-configs"] = {"ext-storage-path": "/mnt/ext"}
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(_sampling_scenario(), 1)
+        kwargs = sampler_cls.call_args.kwargs
+        assert kwargs["disk_path"] == "/mnt/data"
+        assert kwargs["ext_storage_path"] == "/mnt/ext"
+
+    def test_inline_warmup_delays_the_first_sample(self, minimal_client_runner):
+        runner = minimal_client_runner
+        scenario = {"id": "s1", "type": "write", "test": "SET", "warmup_inline": 20}
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(scenario, 1)
+        assert sampler_cls.call_args.kwargs["start_delay"] == 20
+
+    def test_command_scenario_warmup_inline_does_not_delay(self, minimal_client_runner):
+        """A command scenario's argv carries no --warmup, so nothing to skip."""
+        runner = minimal_client_runner
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(_sampling_scenario(warmup_inline=20), 1)
+        assert sampler_cls.call_args.kwargs["start_delay"] == 0
+
+    def test_no_inline_warmup_samples_immediately(self, minimal_client_runner):
+        runner = minimal_client_runner
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(_sampling_scenario(), 1)
+        assert sampler_cls.call_args.kwargs["start_delay"] == 0
+
+    def test_mixed_scenario_delays_by_the_longest_child_warmup(
+        self, minimal_client_runner
+    ):
+        runner = minimal_client_runner
+        scenario = _mixed_sampling_scenario()
+        scenario["writes"][0] = {"id": "w", "test": "SET", "warmup_inline": 5}
+        scenario["reads"][0] = {"id": "r", "test": "GET", "warmup_inline": 12}
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(scenario, 1)
+        assert sampler_cls.call_args.kwargs["start_delay"] == 12
+
+    def test_mixed_scenario_without_child_warmups_samples_immediately(
+        self, minimal_client_runner
+    ):
+        runner = minimal_client_runner
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(_mixed_sampling_scenario(), 1)
+        assert sampler_cls.call_args.kwargs["start_delay"] == 0
 
     def test_config_set_lands_on_every_sampled_row(self, minimal_client_runner):
         """The context is merged into each row, so identity survives appending."""

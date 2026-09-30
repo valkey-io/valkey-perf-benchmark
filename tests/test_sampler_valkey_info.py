@@ -88,6 +88,17 @@ INFO_COLUMNS = (
     + TIERING_INFO_FLOAT_FIELDS
 )
 
+MAIN_THREAD_CPU_COLUMNS = ("valkey_cpu_user", "valkey_cpu_sys", "valkey_cpu_total")
+
+
+def info_with_main_thread_cpu(user_seconds, sys_seconds):
+    """Return the tiering INFO snapshot plus the main thread CPU seconds."""
+    return (
+        INFO_WITH_TIERING
+        + f"\n# CPU\nused_cpu_user_main_thread:{user_seconds}\n"
+        + f"used_cpu_sys_main_thread:{sys_seconds}\n"
+    )
+
 
 def info_with_counters(dram_value_hits, completion_read_ok):
     """Return the tiering INFO snapshot with the two ratio inputs overridden."""
@@ -105,18 +116,15 @@ def make_source(**ctx_overrides):
     return source
 
 
-def source_rows(info_texts, intervals=None):
-    """Sample once per INFO text, serving `intervals` seconds between ticks.
-
-    The first tick of a run has no predecessor, so its interval is None.
-    """
-    if intervals is None:
-        intervals = [None] + [1.0] * (len(info_texts) - 1)
+def source_rows(info_texts, times=None):
+    """Sample once per INFO text, at `times` seconds on the monotonic clock."""
+    if times is None:
+        times = [100.0 + index for index in range(len(info_texts))]
     source = make_source()
     rows = []
-    for interval, info_text in zip(intervals, info_texts):
+    for now, info_text in zip(times, info_texts):
         with patch.object(source, "read_info", return_value=parse_info(info_text)):
-            rows.append(source.sample(interval))
+            rows.append(source.sample(now))
     return rows
 
 
@@ -363,9 +371,29 @@ class TestCommandDeltas:
             "total_commands_processed:1000", "total_commands_processed:3000"
         )
         # 2s of wall clock between samples, so the same delta halves the rate
-        rows = source_rows([INFO_WITH_TIERING, second], [None, 2.0])
+        rows = source_rows([INFO_WITH_TIERING, second], [100.0, 102.0])
         assert rows[1]["total_commands_delta"] == 2000
         assert rows[1]["ops_per_sec"] == 1000.0
+
+    def test_failed_read_widens_the_next_interval(self):
+        third = INFO_WITH_TIERING.replace(
+            "total_commands_processed:1000", "total_commands_processed:3000"
+        )
+        # INFO is unavailable at 101.0, so the 2000-command delta measured at
+        # 102.0 spans the full 2s gap since the last successful read.
+        rows = source_rows([INFO_WITH_TIERING, "", third], [100.0, 101.0, 102.0])
+        assert rows[1]["total_commands_delta"] == 0
+        assert rows[1]["ops_per_sec"] == 0.0
+        assert rows[2]["total_commands_delta"] == 2000
+        assert rows[2]["ops_per_sec"] == 1000.0
+
+    def test_failed_read_does_not_reset_the_baseline(self):
+        second = INFO_WITH_TIERING.replace(
+            "total_commands_processed:1000", "total_commands_processed:3000"
+        )
+        rows = source_rows([INFO_WITH_TIERING, "", second], [100.0, 101.0, 102.0])
+        # A cleared baseline would report the whole running total of 3000.
+        assert rows[2]["total_commands_delta"] == 2000
 
     def test_counter_reset_clamps_to_zero(self):
         second = INFO_WITH_TIERING.replace(
@@ -428,3 +456,81 @@ class TestInfoCommandFailure:
         mock_run.return_value.stdout = INFO_WITH_TIERING
         mock_run.return_value.stderr = ""
         assert make_source().read_info()["used_memory"] == "1799288"
+
+
+class TestMainThreadCpu:
+    """`valkey_cpu_*` derived from the main thread CPU seconds INFO reports."""
+
+    def test_columns_absent_when_info_omits_the_fields(self):
+        for row in source_rows([INFO_WITH_TIERING, INFO_WITH_TIERING]):
+            for column in MAIN_THREAD_CPU_COLUMNS:
+                assert column not in row
+
+    def test_first_sample_is_zero(self):
+        row = source_rows([info_with_main_thread_cpu(10.0, 4.0)])[0]
+        assert row["valkey_cpu_user"] == 0.0
+        assert row["valkey_cpu_sys"] == 0.0
+        assert row["valkey_cpu_total"] == 0.0
+
+    def test_percent_across_two_samples(self):
+        rows = source_rows(
+            [info_with_main_thread_cpu(10.0, 4.0), info_with_main_thread_cpu(10.8, 4.2)]
+        )
+        # 0.8s of user and 0.2s of system time over a 1s interval
+        assert rows[1]["valkey_cpu_user"] == 80.0
+        assert rows[1]["valkey_cpu_sys"] == 20.0
+        assert rows[1]["valkey_cpu_total"] == 100.0
+
+    def test_percent_normalized_by_the_interval(self):
+        rows = source_rows(
+            [
+                info_with_main_thread_cpu(10.0, 4.0),
+                info_with_main_thread_cpu(10.8, 4.2),
+            ],
+            [100.0, 102.0],
+        )
+        assert rows[1]["valkey_cpu_user"] == 40.0
+        assert rows[1]["valkey_cpu_sys"] == 10.0
+
+    def test_can_exceed_one_hundred_percent_in_total(self):
+        rows = source_rows(
+            [info_with_main_thread_cpu(10.0, 4.0), info_with_main_thread_cpu(11.5, 4.5)]
+        )
+        assert rows[1]["valkey_cpu_total"] == 200.0
+
+    def test_failed_read_widens_the_next_interval(self):
+        rows = source_rows(
+            [
+                info_with_main_thread_cpu(10.0, 4.0),
+                "",
+                info_with_main_thread_cpu(11.6, 4.4),
+            ],
+            [100.0, 101.0, 102.0],
+        )
+        # 1.6s of user time over the full 2s gap since the last good read
+        assert rows[2]["valkey_cpu_user"] == 80.0
+        assert rows[2]["valkey_cpu_sys"] == 20.0
+
+    def test_failed_read_keeps_the_columns_at_zero(self):
+        rows = source_rows([info_with_main_thread_cpu(10.0, 4.0), ""], [100.0, 101.0])
+        for column in MAIN_THREAD_CPU_COLUMNS:
+            assert rows[1][column] == 0.0
+
+    def test_flags_the_context_so_proc_cpu_stands_down(self):
+        source = make_source()
+        assert source.ctx.main_thread_cpu_from_info is False
+        with patch.object(
+            source,
+            "read_info",
+            return_value=parse_info(info_with_main_thread_cpu(10.0, 4.0)),
+        ):
+            source.sample(100.0)
+        assert source.ctx.main_thread_cpu_from_info is True
+
+    def test_context_flag_stays_unset_without_the_fields(self):
+        source = make_source()
+        with patch.object(
+            source, "read_info", return_value=parse_info(INFO_WITH_TIERING)
+        ):
+            source.sample(100.0)
+        assert source.ctx.main_thread_cpu_from_info is False

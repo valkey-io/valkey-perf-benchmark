@@ -700,12 +700,22 @@ class TestPerSecondSamplingValidation:
             {"sources": ["valkey_info"]},
             {"sources": ["valkey_info", "disk"]},
             {"cpu_range": "56-63"},
+            {"disk_path": "/mnt/data"},
             {"sources": ["latency_histogram"], "cpu_range": "56-63,1"},
         ],
     )
     def test_accepts_object_forms(self, minimal_valid_config, good_value):
         minimal_valid_config["per_second_sampling"] = good_value
         validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["", "   ", 1, None, [], {}])
+    def test_reject_bad_disk_path(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"disk_path": bad_value}
+        with pytest.raises(
+            ValueError,
+            match="'per_second_sampling.disk_path' must be a non-empty string",
+        ):
+            validate_config(minimal_valid_config)
 
     def test_reject_unsupported_key(self, minimal_valid_config):
         minimal_valid_config["per_second_sampling"] = {"interval": 2}

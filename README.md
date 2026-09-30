@@ -1131,19 +1131,30 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 scenario's measured benchmark process and emits one row per sample, for a per-commit
 deep-dive dashboard. Each row carries `elapsed_sec` (seconds since the start of the
 measured phase, so several commits can overlay on one chart), an absolute `timestamp`, and
-the columns of every enabled source. Nothing outside the measured phase is sampled.
+the columns of every enabled source. Nothing outside the measured phase is sampled: a
+scenario with an inline `warmup_inline` starts sampling only once that warmup has elapsed,
+so `elapsed_sec` 0 is the first measured second.
 
 The sources live in `samplers/`:
 
 | Source              | Columns                                                       |
 | ------------------- | ------------------------------------------------------------- |
-| `valkey_info`       | memory, throughput, keyspace, tiering counters, hit ratios, plus `info` |
+| `valkey_info`       | memory, throughput, keyspace, tiering counters, hit ratios, `valkey_cpu_*`, plus `info` |
 | `latency_histogram` | per-interval command latency percentiles, under `latency`      |
-| `process_cpu`       | host, server process and async IO worker CPU (local only)      |
-| `disk`              | block device IOPS, throughput, latency, utilization (local only) |
+| `process_cpu`       | host and async IO worker thread CPU (local, Linux only)        |
+| `disk`              | block device IOPS, throughput, latency, utilization (local, Linux only) |
 
 `process_cpu` and `disk` read `/proc` and `/sys`, so they describe the machine the sampler
-runs on and are skipped with one warning when the target host is not a loopback address.
+runs on. They are skipped with one warning on a platform without `/proc` and `/sys`, and
+when the server does not run on this machine. Locality is decided by resolving the target
+host and checking whether any of its addresses is a loopback address or can be bound
+locally, so a self-hosted runner addressed by its own private IP still collects them.
+
+`valkey_cpu_user`, `valkey_cpu_sys` and `valkey_cpu_total` are the server's main thread CPU,
+derived from the `used_cpu_*_main_thread` seconds INFO reports, which excludes the IO worker
+threads reported separately as `asio_cpu_pct`. A server that does not report those INFO
+fields gets them from `/proc/<pid>/task/<pid>/stat` instead, and then only when running
+locally on Linux.
 
 **It is opt-in.** The root config key `per_second_sampling` takes either form:
 
@@ -1154,13 +1165,21 @@ runs on and are skipped with one warning when the target host is not a loopback 
 ```json
 "per_second_sampling": {
   "sources": ["valkey_info", "latency_histogram"],
-  "cpu_range": "56-63"
+  "cpu_range": "56-63",
+  "disk_path": "/mnt/ext-storage"
 }
 ```
 
-`true` samples every source, unpinned. Both keys of the object form are optional: `sources`
-selects a subset, and `cpu_range` pins the sampler thread and the `valkey-cli` children it
-spawns. When the key is absent or `false` the sampler class is never constructed.
+`true` samples every source, unpinned. Every key of the object form is optional: `sources`
+selects a subset, `cpu_range` pins the sampler thread and the `valkey-cli` children it
+spawns, and `disk_path` names the filesystem path whose block device is sampled. When the
+key is absent or `false` the sampler class is never constructed.
+
+The block device is resolved from a path's `st_dev` through `/sys/dev/block`, taking the
+whole disk when the path sits on a partition, so no device name is guessed. The path is
+`disk_path`, else `custom-server-configs.ext-storage-path`, else the server's data directory
+from `CONFIG GET dir`. When no block device backs that path (tmpfs, overlay, a network
+filesystem) the disk columns are omitted entirely rather than reported as zeros.
 
 `info` is the whole `INFO ALL` reply as a dict, so a field with no derived column of its own
 is still recoverable from a stored row. `latency` maps each command whose call count grew
@@ -1168,15 +1187,17 @@ during the interval to `{calls, p50_usec, p99_usec, p999_usec}`, excluding the s
 commands, and is `{}` on the first tick of a scenario.
 
 Sampling never fails a benchmark run: an unreadable value becomes 0, a source that fails is
-skipped for that tick, and any exception from the sampler is logged and swallowed. A server
-without tiering samples cleanly with the tiering columns at 0.
+skipped for that tick, and any exception from the sampler is logged and swallowed. A source
+that derives rates divides by the gap since its own last successful read, so one failed read
+widens the next interval rather than inflating its rate. A server without tiering samples
+cleanly with the tiering columns at 0.
 
 Rows from every scenario are appended to one file, `results/<commit>/timeseries.json`,
 through the same `MetricsProcessor.write_metrics` append that builds `metrics.json`, so
 repeated runs of a scenario never clobber one another. Rows self-identify instead: each
-carries `commit`, `scenario`, `test_id`, `command`, `data_size`, `pipeline`, `clients` and
-`config_set`, plus `io_threads` and `architecture` when set, and repeated runs are told
-apart by the absolute `timestamp`. No Postgres table is written here.
+carries `commit`, `scenario`, `test_id`, `command`, `data_size`, `pipeline`, `clients`,
+`run` and `config_set`, plus `io_threads` and `architecture` when set. No Postgres table is
+written here.
 
 `tests/test_metrics_sampler.py` covers the loop, `tests/test_sampler_*.py` cover the
 sources, and `tests/test_client_runner_logic.py` covers the wiring.

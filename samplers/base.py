@@ -1,9 +1,9 @@
 """Shared plumbing for the pluggable per-second sample sources.
 
 A source owns one group of columns and is asked for them once per tick. The
-sampler loop never inspects a source beyond its `name`, its `local_only` flag
-and the dict it returns, so adding a column group means adding a source and
-naming it in `samplers.SOURCES`.
+sampler loop never inspects a source beyond its `name`, its `local_only` and
+`linux_only` flags and the dict it returns, so adding a column group means
+adding a source and naming it in `samplers.SOURCES`.
 """
 
 import logging
@@ -26,13 +26,21 @@ def log_warning(key: str, message: str) -> None:
 
 @dataclass
 class SamplerContext:
-    """Target identity and shared helpers handed to every source at start."""
+    """Target identity and shared helpers handed to every source at start.
+
+    `main_thread_cpu_from_info` is set by the INFO source when the server
+    reports its main thread CPU seconds, so the /proc source knows to leave
+    those columns to it.
+    """
 
     host: str = "127.0.0.1"
     port: int = 6379
     cli_path: str = "valkey-cli"
     server_pid: Optional[int] = None
     block_device: Optional[str] = None
+    disk_path: Optional[str] = None
+    ext_storage_path: Optional[str] = None
+    main_thread_cpu_from_info: bool = False
     warn_once: Callable[[str, str], None] = field(default=log_warning)
 
 
@@ -41,16 +49,19 @@ class SampleSource:
 
     name: str = ""
     local_only: bool = False
+    linux_only: bool = False
 
     def start(self, ctx: SamplerContext) -> None:
         """Store the context. A source that resolves a target extends this."""
         self.ctx = ctx
 
-    def sample(self, interval: Optional[float]) -> Dict[str, Any]:
+    def sample(self, now: float) -> Dict[str, Any]:
         """Return this source's columns for one tick.
 
-        interval is the measured seconds since the previous tick, and None on
-        the first tick of a run.
+        now is the tick's `time.monotonic()`. A source that derives rates keeps
+        the timestamp of its own last successful read and divides by the gap
+        since then, so a failed read widens the next interval instead of
+        inflating its rate.
         """
         raise NotImplementedError
 

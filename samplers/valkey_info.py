@@ -6,7 +6,9 @@ counters under their own INFO field names, and the whole reply as a nested
 cleanly with its tiering columns at 0. The two throttle rate fields are floats,
 and `spill_submitted_count` is emitted rather than the distinct counter
 `spill_submitted`, because it is the one that pairs with
-`spill_serialized_count`.
+`spill_serialized_count`. `valkey_cpu_user`, `valkey_cpu_sys` and
+`valkey_cpu_total` come from the main thread CPU seconds INFO reports, and are
+omitted when the server does not report them.
 """
 
 import re
@@ -88,20 +90,23 @@ def info_snapshot(fields: Dict[str, str]) -> Dict[str, Any]:
 
 
 class ValkeyInfoSource(SampleSource):
-    """Memory, throughput, keyspace, tiering and hit ratio columns from INFO."""
+    """Memory, throughput, keyspace, tiering, hit ratio and CPU columns."""
 
     name = "valkey_info"
 
     def __init__(self):
         """Initialize the delta state, which is empty until the second tick."""
+        self._last_success_time: Optional[float] = None
         self._prev_total_commands: Optional[int] = None
         self._prev_dram_value_hits: Optional[int] = None
         self._prev_completion_read_ok: Optional[int] = None
+        self._prev_main_thread_cpu: Optional[Tuple[float, float]] = None
+        self._main_thread_cpu_available = False
 
-    def sample(self, interval: Optional[float]) -> Dict[str, Any]:
+    def sample(self, now: float) -> Dict[str, Any]:
         """Return the INFO-derived columns plus the full snapshot."""
         info = self.read_info()
-        metrics = self._info_metrics(info, interval)
+        metrics = self._info_metrics(info, now)
         metrics["info"] = info_snapshot(info)
         return metrics
 
@@ -112,20 +117,67 @@ class ValkeyInfoSource(SampleSource):
             return {}
         return parse_info(output)
 
-    def _info_metrics(
+    def _interval(self, now: float) -> Optional[float]:
+        """Return seconds since this source's last successful read."""
+        if self._last_success_time is None:
+            return None
+        elapsed = now - self._last_success_time
+        return elapsed if elapsed > 0 else None
+
+    def _main_thread_cpu(
         self, info: Dict[str, str], interval: Optional[float]
     ) -> Dict[str, Any]:
+        """Return the main thread CPU percentages, empty when INFO omits them.
+
+        The server reports cumulative main thread seconds, which excludes the
+        IO worker threads reported separately as `asio_cpu_pct`.
+        """
+        user_seconds = info.get("used_cpu_user_main_thread")
+        sys_seconds = info.get("used_cpu_sys_main_thread")
+        if user_seconds is not None and sys_seconds is not None:
+            self._main_thread_cpu_available = True
+            self.ctx.main_thread_cpu_from_info = True
+        if not self._main_thread_cpu_available:
+            return {}
+
+        user_pct = 0.0
+        sys_pct = 0.0
+        current = None
+        if user_seconds is not None and sys_seconds is not None:
+            current = (to_float(user_seconds), to_float(sys_seconds))
+            if self._prev_main_thread_cpu is not None and interval:
+                user_pct = round(
+                    max(0.0, current[0] - self._prev_main_thread_cpu[0])
+                    / interval
+                    * 100,
+                    2,
+                )
+                sys_pct = round(
+                    max(0.0, current[1] - self._prev_main_thread_cpu[1])
+                    / interval
+                    * 100,
+                    2,
+                )
+            self._prev_main_thread_cpu = current
+
+        return {
+            "valkey_cpu_user": user_pct,
+            "valkey_cpu_sys": sys_pct,
+            "valkey_cpu_total": round(user_pct + sys_pct, 2),
+        }
+
+    def _info_metrics(self, info: Dict[str, str], now: float) -> Dict[str, Any]:
         """Derive the INFO-sourced columns, including deltas and hit ratios."""
         if not info:
             self.ctx.warn_once("info_empty", "INFO returned no fields, emitting zeros")
 
+        interval = self._interval(now)
         total_commands = to_int(info.get("total_commands_processed"))
         commands_delta = 0
         ops_per_sec = 0.0
-        if self._prev_total_commands is not None and interval:
+        if info and self._prev_total_commands is not None and interval:
             commands_delta = max(0, total_commands - self._prev_total_commands)
             ops_per_sec = round(commands_delta / interval, 2)
-        self._prev_total_commands = total_commands
 
         # The throttle rate fields are float-formatted by the engine, so they
         # are parsed as float and the rest as int.
@@ -142,17 +194,15 @@ class ValkeyInfoSource(SampleSource):
         # Per-interval hit ratios, from the deltas between consecutive samples.
         dram_delta = 0
         completion_delta = 0
-        if self._prev_dram_value_hits is not None:
+        if info and self._prev_dram_value_hits is not None:
             dram_delta = max(0, dram_value_hits - self._prev_dram_value_hits)
-        if self._prev_completion_read_ok is not None:
+        if info and self._prev_completion_read_ok is not None:
             completion_delta = max(
                 0, completion_read_ok - self._prev_completion_read_ok
             )
         disk_hit_pct_interval, mem_hit_pct_interval = hit_ratios(
             dram_delta, completion_delta
         )
-        self._prev_dram_value_hits = dram_value_hits
-        self._prev_completion_read_ok = completion_read_ok
 
         metrics: Dict[str, Any] = {
             "used_memory": to_int(info.get("used_memory")),
@@ -170,6 +220,13 @@ class ValkeyInfoSource(SampleSource):
             "blocked_clients": to_int(info.get("blocked_clients")),
         }
         metrics.update(tiering)
+        metrics.update(self._main_thread_cpu(info, interval))
+
+        if info:
+            self._prev_total_commands = total_commands
+            self._prev_dram_value_hits = dram_value_hits
+            self._prev_completion_read_ok = completion_read_ok
+            self._last_success_time = now
         return metrics
 
 
