@@ -1,10 +1,12 @@
 """Host and process CPU source for the per-second metrics sampler.
 
 Reads /proc, so it describes the machine the sampler runs on and is collected
-only against a loopback target. CPU percentages are tick deltas over the
-measured interval, where 100.0 means one fully busy core, so a multi-threaded
-server can exceed 100. The async IO worker threads are isolated by thread name
-and reported separately from the rest of the server process.
+only when the server runs there. CPU percentages are tick deltas over the gap
+since this source's last successful read, where 100.0 means one fully busy
+core, so a multi-threaded server can exceed 100. The async IO worker threads
+are isolated by thread name and reported separately from the main thread. The
+`valkey_cpu_*` columns are emitted only when INFO does not report the main
+thread CPU seconds.
 """
 
 import os
@@ -51,9 +53,13 @@ def _parse_proc_stat_ticks(stat_line: str) -> Optional[Tuple[int, int]]:
         return None
 
 
-def read_process_cpu_ticks(pid: int) -> Optional[Tuple[int, int]]:
-    """Return (utime, stime) ticks for a process, or None if unreadable."""
-    stat_line = read_text(str(_PROC_DIR / str(pid) / "stat"))
+def read_main_thread_cpu_ticks(pid: int) -> Optional[Tuple[int, int]]:
+    """Return (utime, stime) ticks of a process's main thread, or None.
+
+    The main thread's task id equals the process id, so this excludes the
+    worker threads the whole-process stat line sums in.
+    """
+    stat_line = read_text(str(_PROC_DIR / str(pid) / "task" / str(pid) / "stat"))
     if not stat_line:
         return None
     return _parse_proc_stat_ticks(stat_line)
@@ -88,27 +94,44 @@ def ticks_to_percent(tick_delta: int, interval: float) -> float:
 
 
 class ProcessCpuSource(SampleSource):
-    """Host CPU, valkey-server CPU and async IO worker thread CPU columns."""
+    """Host CPU, main thread CPU and async IO worker thread CPU columns."""
 
     name = "process_cpu"
     local_only = True
+    linux_only = True
 
     def __init__(self):
         """Initialize the tick baselines, empty until the second tick."""
         self._prev_system_cpu: Optional[Tuple[int, int, int]] = None
-        self._prev_process_cpu: Optional[Tuple[int, int]] = None
+        self._prev_main_thread_cpu: Optional[Tuple[int, int]] = None
         self._prev_asio_ticks: Optional[int] = None
+        self._main_thread_time: Optional[float] = None
+        self._asio_time: Optional[float] = None
 
-    def sample(self, interval: Optional[float]) -> Dict[str, Any]:
-        """Derive host, per-process and async IO thread CPU percentages."""
+    @staticmethod
+    def _interval(last_success: Optional[float], now: float) -> Optional[float]:
+        """Return seconds since a counter's last successful read."""
+        if last_success is None:
+            return None
+        elapsed = now - last_success
+        return elapsed if elapsed > 0 else None
+
+    def sample(self, now: float) -> Dict[str, Any]:
+        """Derive host, main thread and async IO thread CPU percentages."""
         metrics: Dict[str, Any] = {
-            "valkey_cpu_user": 0.0,
-            "valkey_cpu_sys": 0.0,
-            "valkey_cpu_total": 0.0,
             "asio_cpu_pct": 0.0,
             "cpu_user": 0.0,
             "cpu_sys": 0.0,
         }
+        emit_main_thread = not self.ctx.main_thread_cpu_from_info
+        if emit_main_thread:
+            metrics.update(
+                {
+                    "valkey_cpu_user": 0.0,
+                    "valkey_cpu_sys": 0.0,
+                    "valkey_cpu_total": 0.0,
+                }
+            )
 
         system_cpu = read_system_cpu_ticks()
         if system_cpu is None:
@@ -134,24 +157,28 @@ class ProcessCpuSource(SampleSource):
             )
             return metrics
 
-        process_cpu = read_process_cpu_ticks(self.ctx.server_pid)
-        if process_cpu is None:
-            self.ctx.warn_once(
-                "no_proc_pid_stat",
-                f"Cannot read /proc/{self.ctx.server_pid}/stat, process CPU will be 0",
-            )
-        else:
-            if self._prev_process_cpu is not None and interval:
-                metrics["valkey_cpu_user"] = ticks_to_percent(
-                    process_cpu[0] - self._prev_process_cpu[0], interval
+        if emit_main_thread:
+            main_thread_cpu = read_main_thread_cpu_ticks(self.ctx.server_pid)
+            if main_thread_cpu is None:
+                self.ctx.warn_once(
+                    "no_main_thread_stat",
+                    f"Cannot read the main thread stat of pid "
+                    f"{self.ctx.server_pid}, server CPU will be 0",
                 )
-                metrics["valkey_cpu_sys"] = ticks_to_percent(
-                    process_cpu[1] - self._prev_process_cpu[1], interval
-                )
-                metrics["valkey_cpu_total"] = round(
-                    metrics["valkey_cpu_user"] + metrics["valkey_cpu_sys"], 2
-                )
-            self._prev_process_cpu = process_cpu
+            else:
+                interval = self._interval(self._main_thread_time, now)
+                if self._prev_main_thread_cpu is not None and interval:
+                    metrics["valkey_cpu_user"] = ticks_to_percent(
+                        main_thread_cpu[0] - self._prev_main_thread_cpu[0], interval
+                    )
+                    metrics["valkey_cpu_sys"] = ticks_to_percent(
+                        main_thread_cpu[1] - self._prev_main_thread_cpu[1], interval
+                    )
+                    metrics["valkey_cpu_total"] = round(
+                        metrics["valkey_cpu_user"] + metrics["valkey_cpu_sys"], 2
+                    )
+                self._prev_main_thread_cpu = main_thread_cpu
+                self._main_thread_time = now
 
         asio_ticks = read_thread_cpu_ticks(self.ctx.server_pid, ASIO_THREAD_NAME)
         if asio_ticks is None:
@@ -160,10 +187,12 @@ class ProcessCpuSource(SampleSource):
                 f"Cannot list /proc/{self.ctx.server_pid}/task, asio CPU will be 0",
             )
         else:
+            interval = self._interval(self._asio_time, now)
             if self._prev_asio_ticks is not None and interval:
                 metrics["asio_cpu_pct"] = ticks_to_percent(
                     asio_ticks - self._prev_asio_ticks, interval
                 )
             self._prev_asio_ticks = asio_ticks
+            self._asio_time = now
 
         return metrics

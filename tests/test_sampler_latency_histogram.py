@@ -65,8 +65,8 @@ def latency_rows(outputs):
     source = make_source()
     rows = []
     with patch("samplers.latency_histogram.run_cli", side_effect=outputs):
-        for _ in outputs:
-            rows.append(source.sample(1.0)["latency"])
+        for index in range(len(outputs)):
+            rows.append(source.sample(100.0 + index)["latency"])
     return rows
 
 
@@ -175,9 +175,9 @@ class TestIntervalLatency:
         rows = latency_rows([histogram_json({"get": (50, PREVIOUS_BUCKETS)}), None])
         assert rows[1] == {}
 
-    def test_tick_after_an_unavailable_one_is_empty(self):
-        # An unavailable reply leaves no baseline, so the next tick must not
-        # report a command's whole running total as one interval.
+    def test_tick_after_an_unavailable_one_measures_the_whole_gap(self):
+        # An unavailable reply keeps the baseline, so the next tick reports the
+        # calls added since the last available one rather than nothing.
         rows = latency_rows(
             [
                 histogram_json({"get": (50, PREVIOUS_BUCKETS)}),
@@ -186,7 +186,8 @@ class TestIntervalLatency:
             ]
         )
         assert rows[1] == {}
-        assert rows[2] == {}
+        assert rows[2]["get"]["calls"] == 1000
+        assert rows[2]["get"]["p50_usec"] == EXPECTED_P50
 
     def test_command_new_since_the_previous_tick_is_reported_in_full(self):
         rows = latency_rows(

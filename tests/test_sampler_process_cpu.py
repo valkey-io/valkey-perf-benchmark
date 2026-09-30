@@ -8,7 +8,7 @@ from unittest.mock import patch
 from samplers.base import ASIO_THREAD_NAME, SamplerContext
 from samplers.process_cpu import (
     ProcessCpuSource,
-    read_process_cpu_ticks,
+    read_main_thread_cpu_ticks,
     read_system_cpu_ticks,
     read_thread_cpu_ticks,
 )
@@ -21,22 +21,27 @@ CPU_COLUMNS = (
     "cpu_user",
     "cpu_sys",
 )
+HOST_ONLY_CPU_COLUMNS = ("asio_cpu_pct", "cpu_user", "cpu_sys")
 
 
-def make_source(server_pid=None):
+def make_source(server_pid=None, main_thread_cpu_from_info=False):
     """Build a started ProcessCpuSource with warnings discarded."""
     source = ProcessCpuSource()
     source.start(
-        SamplerContext(server_pid=server_pid, warn_once=lambda key, message: None)
+        SamplerContext(
+            server_pid=server_pid,
+            main_thread_cpu_from_info=main_thread_cpu_from_info,
+            warn_once=lambda key, message: None,
+        )
     )
     return source
 
 
-def source_rows(source, count=2, intervals=None):
+def source_rows(source, count=2, times=None):
     """Sample the source `count` times, the first tick having no predecessor."""
-    if intervals is None:
-        intervals = [None] + [1.0] * (count - 1)
-    return [source.sample(interval) for interval in intervals]
+    if times is None:
+        times = [100.0 + index for index in range(count)]
+    return [source.sample(now) for now in times]
 
 
 class TestSystemCpu:
@@ -91,34 +96,39 @@ class TestProcessAndThreadCpu:
             (thread_dir / "stat").write_text(self._stat_line(comm, utime, stime))
 
     def test_parses_utime_and_stime(self, tmp_path):
-        stat_file = tmp_path / "1234"
-        stat_file.mkdir()
-        (stat_file / "stat").write_text(self._stat_line("valkey-server", 500, 250))
+        self._make_task_tree(tmp_path, [(1234, "valkey-server", 500, 250)])
         with patch("samplers.process_cpu._PROC_DIR", tmp_path):
-            assert read_process_cpu_ticks(1234) == (500, 250)
+            assert read_main_thread_cpu_ticks(1234) == (500, 250)
+
+    def test_reads_the_main_thread_not_the_whole_process(self, tmp_path):
+        # The worker thread's ticks must not reach the main thread reading.
+        self._make_task_tree(
+            tmp_path,
+            [(1234, "valkey-server", 500, 250), (1235, ASIO_THREAD_NAME, 900, 900)],
+        )
+        with patch("samplers.process_cpu._PROC_DIR", tmp_path):
+            assert read_main_thread_cpu_ticks(1234) == (500, 250)
 
     def test_comm_with_spaces_and_parens_does_not_break_parsing(self, tmp_path):
-        stat_file = tmp_path / "1234"
-        stat_file.mkdir()
-        (stat_file / "stat").write_text(self._stat_line("valkey server (x)", 700, 300))
+        self._make_task_tree(tmp_path, [(1234, "valkey server (x)", 700, 300)])
         with patch("samplers.process_cpu._PROC_DIR", tmp_path):
-            assert read_process_cpu_ticks(1234) == (700, 300)
+            assert read_main_thread_cpu_ticks(1234) == (700, 300)
 
     def test_missing_pid_returns_none(self, tmp_path):
         with patch("samplers.process_cpu._PROC_DIR", tmp_path):
-            assert read_process_cpu_ticks(9999) is None
+            assert read_main_thread_cpu_ticks(9999) is None
 
     def test_truncated_stat_line_returns_none(self, tmp_path):
-        stat_file = tmp_path / "1234"
-        stat_file.mkdir()
-        (stat_file / "stat").write_text("1234 (valkey-server) S 1 2 3")
+        thread_dir = tmp_path / "1234" / "task" / "1234"
+        thread_dir.mkdir(parents=True)
+        (thread_dir / "stat").write_text("1234 (valkey-server) S 1 2 3")
         with patch("samplers.process_cpu._PROC_DIR", tmp_path):
-            assert read_process_cpu_ticks(1234) is None
+            assert read_main_thread_cpu_ticks(1234) is None
 
-    def test_process_cpu_percent_across_two_samples(self):
+    def test_main_thread_cpu_percent_across_two_samples(self):
         with patch("samplers.process_cpu._CLK_TCK", 100):
             with patch(
-                "samplers.process_cpu.read_process_cpu_ticks",
+                "samplers.process_cpu.read_main_thread_cpu_ticks",
                 side_effect=[(100, 50), (180, 70)],
             ):
                 with patch(
@@ -129,6 +139,20 @@ class TestProcessAndThreadCpu:
         assert rows[1]["valkey_cpu_user"] == 80.0
         assert rows[1]["valkey_cpu_sys"] == 20.0
         assert rows[1]["valkey_cpu_total"] == 100.0
+
+    def test_info_sourced_main_thread_cpu_omits_the_columns(self):
+        with patch("samplers.process_cpu.read_main_thread_cpu_ticks") as main_thread:
+            with patch("samplers.process_cpu.read_thread_cpu_ticks", return_value=0):
+                rows = source_rows(
+                    make_source(server_pid=1234, main_thread_cpu_from_info=True)
+                )
+        main_thread.assert_not_called()
+        for row in rows:
+            assert "valkey_cpu_user" not in row
+            assert "valkey_cpu_sys" not in row
+            assert "valkey_cpu_total" not in row
+            for column in HOST_ONLY_CPU_COLUMNS:
+                assert column in row
 
     def test_asio_thread_ticks_summed_by_name(self, tmp_path):
         self._make_task_tree(
@@ -155,7 +179,7 @@ class TestProcessAndThreadCpu:
     def test_asio_percent_across_two_samples(self):
         with patch("samplers.process_cpu._CLK_TCK", 100):
             with patch(
-                "samplers.process_cpu.read_process_cpu_ticks", return_value=(0, 0)
+                "samplers.process_cpu.read_main_thread_cpu_ticks", return_value=(0, 0)
             ):
                 with patch(
                     "samplers.process_cpu.read_thread_cpu_ticks", side_effect=[100, 150]
@@ -164,13 +188,51 @@ class TestProcessAndThreadCpu:
         # 50 ticks in 1s at 100Hz is half a core
         assert rows[1]["asio_cpu_pct"] == 50.0
 
+    def test_failed_read_widens_the_next_interval(self):
+        # The main thread and asio reads fail at 101.0, so the ticks added
+        # between 100.0 and 102.0 are divided by the full 2s gap.
+        with patch("samplers.process_cpu._CLK_TCK", 100):
+            with patch(
+                "samplers.process_cpu.read_main_thread_cpu_ticks",
+                side_effect=[(100, 50), None, (300, 150)],
+            ):
+                with patch(
+                    "samplers.process_cpu.read_thread_cpu_ticks",
+                    side_effect=[100, None, 500],
+                ):
+                    rows = source_rows(
+                        make_source(server_pid=1234), times=[100.0, 101.0, 102.0]
+                    )
+        # 200 user ticks over 2s at 100Hz is one core, 100 sys ticks is half
+        assert rows[2]["valkey_cpu_user"] == 100.0
+        assert rows[2]["valkey_cpu_sys"] == 50.0
+        # 400 asio ticks over 2s at 100Hz is two cores
+        assert rows[2]["asio_cpu_pct"] == 200.0
+
+    def test_failed_read_does_not_reset_the_baselines(self):
+        with patch("samplers.process_cpu._CLK_TCK", 100):
+            with patch(
+                "samplers.process_cpu.read_main_thread_cpu_ticks",
+                side_effect=[(100, 50), None, (300, 150)],
+            ):
+                with patch(
+                    "samplers.process_cpu.read_thread_cpu_ticks",
+                    side_effect=[100, None, 500],
+                ):
+                    source = make_source(server_pid=1234)
+                    source_rows(source, times=[100.0, 101.0, 102.0])
+        assert source._prev_main_thread_cpu == (300, 150)
+        assert source._prev_asio_ticks == 500
+
     def test_no_pid_yields_zero_process_cpu(self):
         rows = source_rows(make_source(server_pid=None))
         assert rows[1]["valkey_cpu_total"] == 0.0
         assert rows[1]["asio_cpu_pct"] == 0.0
 
     def test_unreadable_task_dir_does_not_raise(self):
-        with patch("samplers.process_cpu.read_process_cpu_ticks", return_value=None):
+        with patch(
+            "samplers.process_cpu.read_main_thread_cpu_ticks", return_value=None
+        ):
             with patch("samplers.process_cpu.read_thread_cpu_ticks", return_value=None):
                 rows = source_rows(make_source(server_pid=1234))
         assert rows[1]["valkey_cpu_total"] == 0.0

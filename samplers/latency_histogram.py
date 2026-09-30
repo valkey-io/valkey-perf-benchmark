@@ -105,9 +105,11 @@ class LatencyHistogramSource(SampleSource):
         """Initialize the baseline, which is empty until the second tick."""
         self._previous: Dict[str, CommandHistogram] = {}
 
-    def sample(self, interval: Optional[float]) -> Dict[str, Any]:
+    def sample(self, now: float) -> Dict[str, Any]:
         """Return the per-command percentiles of this interval's calls."""
         current = parse_histogram(run_cli(self.ctx, "--json", "LATENCY", "HISTOGRAM"))
+        if not current:
+            return {"latency": {}}
         latency = self._interval_latency(current) if self._previous else {}
         self._previous = current
         return {"latency": latency}

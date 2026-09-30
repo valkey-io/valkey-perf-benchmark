@@ -125,6 +125,7 @@ class ClientRunner:
         self.current_profiling_set = {"enabled": False}
         self.current_config_set = {}
         self.config_suffix = "default"
+        self.current_run = 1
         self.client_cpu_ranges = []
         # Used only for its append-and-atomically-replace file helper, which
         # reads no per-run metadata off the instance. The processor that stamps
@@ -392,6 +393,7 @@ class ClientRunner:
                 continue
 
             for run_num in range(effective_runs):
+                self.current_run = run_num + 1
                 if effective_runs > 1:
                     logging.info(
                         f"=== Group {group_id}: {group_description or ''} "
@@ -1066,8 +1068,14 @@ class ClientRunner:
             # client count is the total across every mixed child.
             children = scenario.get("writes", []) + scenario.get("reads", [])
             clients = sum(child.get("clients", 1) for child in children)
+            # Each child carries its own inline warmup into its own argv, so
+            # measurement begins once the longest of them has elapsed.
+            start_delay = max(
+                (self._inline_warmup_seconds(child) for child in children), default=0
+            )
         else:
             clients = scenario.get("clients", 1)
+            start_delay = self._inline_warmup_seconds(scenario)
 
         context = {
             "commit": self.commit_id,
@@ -1081,6 +1089,7 @@ class ClientRunner:
             "data_size": scenario.get("data_size", 100),
             "pipeline": scenario.get("pipeline", 1),
             "clients": clients,
+            "run": self.current_run,
             # Every scenario, run and config set appends to one timeseries file,
             # so rows carry the same identity fields metric rows are stamped
             # with in _apply_row_metadata and build_base_metadata.
@@ -1100,7 +1109,22 @@ class ClientRunner:
             context=context,
             sources=options.get("sources"),
             cpu_range=options.get("cpu_range"),
+            disk_path=options.get("disk_path"),
+            ext_storage_path=self.config.get("custom-server-configs", {}).get(
+                "ext-storage-path"
+            ),
+            # The framework started the server here, so the host sources
+            # describe it whatever address the client was pointed at.
+            server_local=True if self.server_launcher is not None else None,
+            start_delay=start_delay,
         )
+
+    @staticmethod
+    def _inline_warmup_seconds(scenario: dict) -> int:
+        """Return the --warmup seconds _build_benchmark_command emits, or 0."""
+        if "test" not in scenario:
+            return 0
+        return scenario.get("warmup_inline") or 0
 
     def _per_second_sampling_options(self) -> dict:
         """Return the per_second_sampling object, empty when it is a bool."""
