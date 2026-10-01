@@ -299,6 +299,64 @@ class TestValidateCpuAllocation:
         cfg = {"server_cpu_range": "0-3"}
         validate_cpu_allocation(cfg)  # should not raise
 
+    def test_explicit_arrays_overlap_raises(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 4,
+                "cores_per_client": 4,
+                "servers": ["0-7"],
+                "clients": ["6-13"],
+            }
+        }
+        with pytest.raises(
+            ValueError, match=r"'servers' and 'clients' overlap on cores: \[6, 7\]"
+        ):
+            validate_cpu_allocation(cfg)
+
+    def test_explicit_arrays_overlap_across_ranges_raises(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 2,
+                "cores_per_client": 2,
+                "servers": ["0-1", "4-5"],
+                "clients": ["2-3", "5,9"],
+            }
+        }
+        with pytest.raises(ValueError, match=r"overlap on cores: \[5\]"):
+            validate_cpu_allocation(cfg)
+
+    def test_explicit_arrays_disjoint_passes(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 8,
+                "cores_per_client": 24,
+                "servers": ["0-7"],
+                "clients": ["8-31", "32-55"],
+            }
+        }
+        validate_cpu_allocation(cfg)  # should not raise
+
+    def test_explicit_arrays_may_exceed_system_cores(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 8,
+                "cores_per_client": 8,
+                "servers": ["0-7"],
+                "clients": ["8-8191"],
+            }
+        }
+        validate_cpu_allocation(cfg)  # should not raise
+
+    def test_clients_only_skips_overlap_check(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 4,
+                "cores_per_client": 4,
+                "clients": ["0-7"],
+            }
+        }
+        validate_cpu_allocation(cfg)  # should not raise
+
 
 # ---------------------------------------------------------------------------
 # _validate_positive_int_or_list
@@ -407,16 +465,80 @@ class TestValidateTestGroups:
                 {"id": "s1", "test": "GET", "populate_with": "GET"},
                 "not a supported write command",
             ),
-            # mixed scenarios seed through their own writes, never populate_with
+            # mixed scenarios populate through a predefined write workload
             (
                 {
                     "id": "s1",
                     "type": "mixed",
-                    "writes": [{"id": "w", "command": "SET foo bar"}],
-                    "reads": [{"id": "r", "command": "GET foo"}],
-                    "populate_with": "SET",
+                    "writes": [{"id": "w", "test": "SET"}],
+                    "reads": [{"id": "r", "test": "GET"}],
+                    "populate_with": "GET",
                 },
-                "combines 'mixed' with 'populate_with'",
+                "not a supported write command",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "test": "SET"}],
+                    "reads": [{"id": "r", "test": "GET"}],
+                    "populate_with": "SET key:__rand_int__ v",
+                },
+                "not a supported write command",
+            ),
+            # the populate tuning keys require populate_with
+            (
+                {"id": "s1", "test": "GET", "populate_clients": 50},
+                "sets 'populate_clients' with no 'populate_with'",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_benchmark_args": ["--keysize 100"],
+                },
+                "sets 'populate_benchmark_args' with no 'populate_with'",
+            ),
+            (
+                {"id": "s1", "test": "GET", "populate_retries": 3},
+                "sets 'populate_retries' with no 'populate_with'",
+            ),
+            # populate tuning key types
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_clients": 0,
+                },
+                "'test_groups\\[0\\].scenarios\\[0\\].populate_clients' must be a positive integer",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_retries": -1,
+                },
+                "'test_groups\\[0\\].scenarios\\[0\\].populate_retries' must be a non-negative integer",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_benchmark_args": "--keysize 100",
+                },
+                "'populate_benchmark_args' must be a list of strings",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_benchmark_args": ["-n 100"],
+                },
+                "'populate_benchmark_args' sets '-n', which the framework emits itself",
             ),
             # benchmark_args must be a list of strings
             (
@@ -521,6 +643,17 @@ class TestValidateTestGroups:
                 "type": "mixed",
                 "writes": [{"id": "w1", "command": "HSET k f v"}],
                 "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
+            },
+            # mixed scenario seeded by a predefined write, with its tuning keys
+            {
+                "id": "m1",
+                "type": "mixed",
+                "writes": [{"id": "w1", "test": "SET"}],
+                "reads": [{"id": "r1", "test": "GET"}],
+                "populate_with": "SET",
+                "populate_clients": 50,
+                "populate_benchmark_args": ["--keysize 100"],
+                "populate_retries": 20,
             },
             # benchmark_args as a list of strings, on a test scenario
             {
@@ -670,4 +803,82 @@ class TestCustomServerConfigFileValidation:
     def test_reject_non_string(self, minimal_valid_config, bad_value):
         minimal_valid_config["custom-server-config-file"] = bad_value
         with pytest.raises(ValueError, match="must be a string path"):
+            validate_config(minimal_valid_config)
+
+
+class TestPerSecondSamplingValidation:
+    """Tests for per_second_sampling validation in validate_config."""
+
+    @pytest.mark.parametrize("good_value", [True, False])
+    def test_accepts_bool(self, minimal_valid_config, good_value):
+        minimal_valid_config["per_second_sampling"] = good_value
+        validate_config(minimal_valid_config)  # should not raise
+
+    def test_missing_key_is_fine(self, minimal_valid_config):
+        assert "per_second_sampling" not in minimal_valid_config
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["yes", "true", 1, 0, None, []])
+    def test_reject_non_bool_non_object(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = bad_value
+        with pytest.raises(
+            ValueError, match="'per_second_sampling' must be a boolean or an object"
+        ):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize(
+        "good_value",
+        [
+            {},
+            {"sources": ["valkey_info"]},
+            {"sources": ["valkey_info", "disk"]},
+            {"cpu_range": "56-63"},
+            {"disk_path": "/mnt/data"},
+            {"sources": ["latency_histogram"], "cpu_range": "56-63,1"},
+        ],
+    )
+    def test_accepts_object_forms(self, minimal_valid_config, good_value):
+        minimal_valid_config["per_second_sampling"] = good_value
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["", "   ", 1, None, [], {}])
+    def test_reject_bad_disk_path(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"disk_path": bad_value}
+        with pytest.raises(
+            ValueError,
+            match="'per_second_sampling.disk_path' must be a non-empty string",
+        ):
+            validate_config(minimal_valid_config)
+
+    def test_reject_unsupported_key(self, minimal_valid_config):
+        minimal_valid_config["per_second_sampling"] = {"interval": 2}
+        with pytest.raises(
+            ValueError, match=r"does not support key\(s\): \['interval'\]"
+        ):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_value", [[], "valkey_info", {}, None])
+    def test_reject_non_list_or_empty_sources(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"sources": bad_value}
+        with pytest.raises(
+            ValueError, match="'per_second_sampling.sources' must be a non-empty list"
+        ):
+            validate_config(minimal_valid_config)
+
+    def test_reject_repeated_source(self, minimal_valid_config):
+        minimal_valid_config["per_second_sampling"] = {
+            "sources": ["disk", "disk"],
+        }
+        with pytest.raises(ValueError, match="must not repeat a source"):
+            validate_config(minimal_valid_config)
+
+    def test_reject_unknown_source_naming_it(self, minimal_valid_config):
+        minimal_valid_config["per_second_sampling"] = {"sources": ["network"]}
+        with pytest.raises(ValueError, match="unknown source 'network'"):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_value", [56, "56-", "not-a-range", ""])
+    def test_reject_bad_cpu_range(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"cpu_range": bad_value}
+        with pytest.raises(ValueError, match="per_second_sampling.cpu_range"):
             validate_config(minimal_valid_config)

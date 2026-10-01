@@ -548,6 +548,52 @@ class TestDiscoverConfigKeys:
             f"signature; baseline={list(baseline_groups)} new={list(new_groups)}"
         )
 
+    def test_mixed_children_pair_across_commits_in_their_own_group(self):
+        # Rows shaped like configs/tiering-zipfian-80-20.json produces: one
+        # mixed scenario whose two children differ in test_id, test_phase and
+        # clients. Each child groups with its counterpart from the other
+        # commit, so no comparison pair is split across groups.
+        def _rows(commit, write_rps, read_rps):
+            shared = {
+                "commit": commit,
+                "pipeline": 1,
+                "io_threads": 1,
+                "data_size": 512,
+                "duration": 60,
+                "group": 1,
+                "scenario": "zipf80",
+                "status": "success",
+                "benchmark_mode": "duration",
+            }
+            return [
+                {
+                    **shared,
+                    "test_id": "1_zipf80_write_set",
+                    "test_phase": "mixed_write",
+                    "command": "SET",
+                    "clients": 40,
+                    "rps": write_rps,
+                },
+                {
+                    **shared,
+                    "test_id": "1_zipf80_read_get",
+                    "test_phase": "mixed_read",
+                    "command": "GET",
+                    "clients": 160,
+                    "rps": read_rps,
+                },
+            ]
+
+        baseline_groups = group_by_static_configuration(_rows("aaa", 26256.1, 89260.6))
+        new_groups = group_by_static_configuration(_rows("bbb", 26500.0, 89900.0))
+
+        assert len(baseline_groups) == 2
+        shared = set(baseline_groups) & set(new_groups)
+        assert len(shared) == 2
+        for signature in shared:
+            commands = {item["command"] for item in baseline_groups[signature]["items"]}
+            assert len(commands) == 1
+
 
 # --- group_by_command ---
 

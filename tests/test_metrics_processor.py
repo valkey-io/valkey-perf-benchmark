@@ -301,10 +301,34 @@ class TestWriteMetrics:
         data = json.loads(metrics_file.read_text(encoding="utf-8"))
         assert data == new_metrics
 
+    def test_default_filename_is_metrics_json(self, processor, tmp_path):
+        """Callers that pass no filename still get metrics.json."""
+        processor.write_metrics(tmp_path, [{"command": "GET", "rps": 100000}])
 
-# ---------------------------------------------------------------------------
-# create_metrics — environment metadata flattening
-# ---------------------------------------------------------------------------
+        assert (tmp_path / "metrics.json").exists()
+        assert [path.name for path in sorted(tmp_path.iterdir())] == ["metrics.json"]
+
+    def test_filename_selects_another_file_in_the_same_dir(self, processor, tmp_path):
+        processor.write_metrics(tmp_path, [{"command": "GET"}])
+        processor.write_metrics(
+            tmp_path, [{"elapsed_sec": 0}], filename="timeseries.json"
+        )
+
+        assert json.loads((tmp_path / "metrics.json").read_text()) == [
+            {"command": "GET"}
+        ]
+        assert json.loads((tmp_path / "timeseries.json").read_text()) == [
+            {"elapsed_sec": 0}
+        ]
+
+    def test_named_file_appends_like_metrics_json(self, processor, tmp_path):
+        processor.write_metrics(tmp_path, [{"elapsed_sec": 0}], filename="ts.json")
+        processor.write_metrics(tmp_path, [{"elapsed_sec": 1}], filename="ts.json")
+
+        assert json.loads((tmp_path / "ts.json").read_text()) == [
+            {"elapsed_sec": 0},
+            {"elapsed_sec": 1},
+        ]
 
 
 class TestEnvironmentMetadataFlattening:
