@@ -671,3 +671,81 @@ class TestCustomServerConfigFileValidation:
         minimal_valid_config["custom-server-config-file"] = bad_value
         with pytest.raises(ValueError, match="must be a string path"):
             validate_config(minimal_valid_config)
+
+
+class TestPerSecondSamplingValidation:
+    """Tests for per_second_sampling validation in validate_config."""
+
+    @pytest.mark.parametrize("good_value", [True, False])
+    def test_accepts_bool(self, minimal_valid_config, good_value):
+        minimal_valid_config["per_second_sampling"] = good_value
+        validate_config(minimal_valid_config)  # should not raise
+
+    def test_missing_key_is_fine(self, minimal_valid_config):
+        assert "per_second_sampling" not in minimal_valid_config
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["yes", "true", 1, 0, None, []])
+    def test_reject_non_bool_non_object(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = bad_value
+        with pytest.raises(
+            ValueError, match="'per_second_sampling' must be a boolean or an object"
+        ):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize(
+        "good_value",
+        [
+            {},
+            {"sources": ["valkey_info"]},
+            {"sources": ["valkey_info", "disk"]},
+            {"cpu_range": "56-63"},
+            {"disk_path": "/mnt/data"},
+            {"sources": ["latency_histogram"], "cpu_range": "56-63,1"},
+        ],
+    )
+    def test_accepts_object_forms(self, minimal_valid_config, good_value):
+        minimal_valid_config["per_second_sampling"] = good_value
+        validate_config(minimal_valid_config)  # should not raise
+
+    @pytest.mark.parametrize("bad_value", ["", "   ", 1, None, [], {}])
+    def test_reject_bad_disk_path(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"disk_path": bad_value}
+        with pytest.raises(
+            ValueError,
+            match="'per_second_sampling.disk_path' must be a non-empty string",
+        ):
+            validate_config(minimal_valid_config)
+
+    def test_reject_unsupported_key(self, minimal_valid_config):
+        minimal_valid_config["per_second_sampling"] = {"interval": 2}
+        with pytest.raises(
+            ValueError, match=r"does not support key\(s\): \['interval'\]"
+        ):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_value", [[], "valkey_info", {}, None])
+    def test_reject_non_list_or_empty_sources(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"sources": bad_value}
+        with pytest.raises(
+            ValueError, match="'per_second_sampling.sources' must be a non-empty list"
+        ):
+            validate_config(minimal_valid_config)
+
+    def test_reject_repeated_source(self, minimal_valid_config):
+        minimal_valid_config["per_second_sampling"] = {
+            "sources": ["disk", "disk"],
+        }
+        with pytest.raises(ValueError, match="must not repeat a source"):
+            validate_config(minimal_valid_config)
+
+    def test_reject_unknown_source_naming_it(self, minimal_valid_config):
+        minimal_valid_config["per_second_sampling"] = {"sources": ["network"]}
+        with pytest.raises(ValueError, match="unknown source 'network'"):
+            validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize("bad_value", [56, "56-", "not-a-range", ""])
+    def test_reject_bad_cpu_range(self, minimal_valid_config, bad_value):
+        minimal_valid_config["per_second_sampling"] = {"cpu_range": bad_value}
+        with pytest.raises(ValueError, match="per_second_sampling.cpu_range"):
+            validate_config(minimal_valid_config)
