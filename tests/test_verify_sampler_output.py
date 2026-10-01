@@ -164,29 +164,35 @@ class TestVerifyFails:
 
     def test_nonzero_tiering_counter_fails(self, tmp_path):
         rows = _scenario_rows("a")
-        rows[3]["completion_read_ok"] = 17
+        rows[3]["ext_storage_total_num_items_fetched_from_storage"] = 17
         results_dir = _write_results(tmp_path, rows)
         config_path = _write_config(tmp_path, ["a"])
 
-        with pytest.raises(AssertionError, match="completion_read_ok is 17"):
+        with pytest.raises(
+            AssertionError,
+            match="ext_storage_total_num_items_fetched_from_storage is 17",
+        ):
             verify_sampler_output.verify(results_dir, config_path)
 
-    def test_nonzero_throttle_counter_fails(self, tmp_path):
+    def test_nonzero_enabled_flag_fails(self, tmp_path):
         rows = _scenario_rows("a")
-        rows[2]["throttle_total_throttled"] = 5
+        rows[2]["ext_storage_enabled"] = 1
         results_dir = _write_results(tmp_path, rows)
         config_path = _write_config(tmp_path, ["a"])
 
-        with pytest.raises(AssertionError, match="throttle_total_throttled is 5"):
+        with pytest.raises(AssertionError, match="ext_storage_enabled is 1"):
             verify_sampler_output.verify(results_dir, config_path)
 
-    def test_nonzero_spill_pipeline_counter_fails(self, tmp_path):
+    def test_nonzero_spilled_counter_fails(self, tmp_path):
         rows = _scenario_rows("a")
-        rows[5]["inflight_spill_ram_bytes"] = 4096
+        rows[5]["ext_storage_total_num_items_spilled_to_storage"] = 4096
         results_dir = _write_results(tmp_path, rows)
         config_path = _write_config(tmp_path, ["a"])
 
-        with pytest.raises(AssertionError, match="inflight_spill_ram_bytes is 4096"):
+        with pytest.raises(
+            AssertionError,
+            match="ext_storage_total_num_items_spilled_to_storage is 4096",
+        ):
             verify_sampler_output.verify(results_dir, config_path)
 
     def test_missing_disk_column_fails(self, tmp_path):

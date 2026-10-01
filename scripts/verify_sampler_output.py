@@ -33,24 +33,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 
 # Tiering counters must sample as 0 on a stock upstream server: the
-# External Storage INFO section is absent, so every field reads 0.
+# Ext_storage INFO section is absent, so every field reads 0.
 TIERING_COLUMNS = (
-    "total_num_items_spilled_to_ext_storage",
-    "total_num_items_fetched_from_ext_storage",
-    "num_items_spilling_to_ext_storage",
-    "kbc_fetching_block",
-    "completion_read_ok",
-    "dram_value_hits",
-    "throttle_total_throttled",
-    "throttle_queued_clients",
-    "throttle_current_rate",
-    "throttle_allowed_tps",
-    "spill_attempts",
-    "spill_submitted_count",
-    "spill_serialized_count",
-    "mean_spill_ram",
-    "inflight_spill_ram_bytes",
-    "oom_reject_write_count",
+    "ext_storage_enabled",
+    "ext_storage_capacity_bytes",
+    "ext_storage_total_num_items",
+    "ext_storage_total_num_bytes",
+    "ext_storage_total_num_items_spilled_to_storage",
+    "ext_storage_total_num_items_fetched_from_storage",
+    "ext_storage_total_num_items_deleted_from_storage",
 )
 # Disk columns are derived from the host's block device, which is busy with
 # work unrelated to the benchmark, so these are checked for presence only.

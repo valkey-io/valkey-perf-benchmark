@@ -8,7 +8,6 @@ from unittest.mock import patch
 from samplers.base import SamplerContext
 from samplers.valkey_info import (
     TIERING_INFO_FIELDS,
-    TIERING_INFO_FLOAT_FIELDS,
     ValkeyInfoSource,
     info_snapshot,
     parse_info,
@@ -30,28 +29,39 @@ instantaneous_ops_per_sec:12345
 keyspace_hits:800
 keyspace_misses:200
 
-# External Storage
-total_num_items_spilled_to_ext_storage:5000
-total_num_items_fetched_from_ext_storage:1200
-num_items_spilling_to_ext_storage:7
-kbc_fetching_block:4
-completion_read_ok:250
-oom_reject_write_count:11
-spill_attempts:6100
-spill_submitted:6000
-dram_value_hits:1000
-throttle_total_throttled:900
-throttle_queued_clients:13
-throttle_current_rate:0.8125
-throttle_allowed_tps:45000.5
-spill_submitted_count:5900
-spill_serialized_count:5850
-mean_spill_ram:2048
-inflight_spill_ram_bytes:102400
+# Ext_storage
+ext_storage_enabled:1
+ext_storage_engine:rocksdb
+ext_storage_api_version:1
+ext_storage_capacity_bytes:1099511627776
+ext_storage_total_num_items:40000
+ext_storage_total_num_bytes:81920000
+ext_storage_total_num_items_spilled_to_storage:5000
+ext_storage_total_num_items_fetched_from_storage:1200
+ext_storage_total_num_items_deleted_from_storage:300
 """
 
-# The same server with tiering disabled: genExternalStorageInfoString returns
-# early, so the whole External Storage section is absent.
+# A tiering-disabled server, which reports the enabled flag as the only line
+# of the section.
+INFO_TIERING_DISABLED = """# Memory
+used_memory:1799288
+used_memory_rss:6959104
+maxmemory:0
+mem_fragmentation_ratio:1.21
+
+# Clients
+blocked_clients:0
+
+# Stats
+total_commands_processed:1000
+keyspace_hits:800
+keyspace_misses:200
+
+# Ext_storage
+ext_storage_enabled:0
+"""
+
+# A server built without tiering, which omits the section entirely.
 INFO_WITHOUT_TIERING = """# Memory
 used_memory:1799288
 used_memory_rss:6959104
@@ -68,25 +78,17 @@ keyspace_misses:200
 """
 
 INFO_COLUMNS = (
-    (
-        "used_memory",
-        "used_memory_rss",
-        "maxmemory",
-        "mem_frag_ratio",
-        "ops_per_sec",
-        "total_commands_delta",
-        "keyspace_hits",
-        "keyspace_misses",
-        "mem_hit_pct",
-        "disk_hit_pct",
-        "mem_hit_pct_interval",
-        "disk_hit_pct_interval",
-        "blocked_clients",
-        "info",
-    )
-    + TIERING_INFO_FIELDS
-    + TIERING_INFO_FLOAT_FIELDS
-)
+    "used_memory",
+    "used_memory_rss",
+    "maxmemory",
+    "mem_frag_ratio",
+    "ops_per_sec",
+    "total_commands_delta",
+    "keyspace_hits",
+    "keyspace_misses",
+    "blocked_clients",
+    "info",
+) + TIERING_INFO_FIELDS
 
 MAIN_THREAD_CPU_COLUMNS = ("valkey_cpu_user", "valkey_cpu_sys", "valkey_cpu_total")
 
@@ -98,13 +100,6 @@ def info_with_main_thread_cpu(user_seconds, sys_seconds):
         + f"\n# CPU\nused_cpu_user_main_thread:{user_seconds}\n"
         + f"used_cpu_sys_main_thread:{sys_seconds}\n"
     )
-
-
-def info_with_counters(dram_value_hits, completion_read_ok):
-    """Return the tiering INFO snapshot with the two ratio inputs overridden."""
-    return INFO_WITH_TIERING.replace(
-        "completion_read_ok:250", f"completion_read_ok:{completion_read_ok}"
-    ).replace("dram_value_hits:1000", f"dram_value_hits:{dram_value_hits}")
 
 
 def make_source(**ctx_overrides):
@@ -132,17 +127,17 @@ class TestParseInfo:
     def test_skips_headers_and_blank_lines(self):
         fields = parse_info(INFO_WITH_TIERING)
         assert fields["used_memory"] == "1799288"
-        assert fields["num_items_spilling_to_ext_storage"] == "7"
+        assert fields["ext_storage_total_num_items"] == "40000"
         assert not any(key.startswith("#") for key in fields)
 
     def test_flattens_all_sections(self):
         fields = parse_info(INFO_WITH_TIERING)
-        # memory, clients, stats and external_storage fields coexist flat
+        # memory, clients, stats and ext_storage fields coexist flat
         assert {
             "used_memory",
             "blocked_clients",
             "keyspace_hits",
-            "dram_value_hits",
+            "ext_storage_enabled",
         } <= (set(fields))
 
     def test_keeps_values_containing_colons(self):
@@ -212,7 +207,7 @@ class TestInfoSnapshot:
     def test_emitted_on_every_row(self):
         row = source_rows([INFO_WITH_TIERING])[0]
         assert row["info"]["used_memory"] == 1799288
-        assert row["info"]["throttle_current_rate"] == 0.8125
+        assert row["info"]["ext_storage_engine"] == "rocksdb"
 
     def test_empty_when_info_is_unavailable(self):
         row = source_rows([""])[0]
@@ -232,124 +227,44 @@ class TestGaugeFields:
 
     def test_tiering_fields_use_info_field_names(self):
         row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["total_num_items_spilled_to_ext_storage"] == 5000
-        assert row["total_num_items_fetched_from_ext_storage"] == 1200
-        assert row["num_items_spilling_to_ext_storage"] == 7
+        assert row["ext_storage_enabled"] == 1
+        assert row["ext_storage_capacity_bytes"] == 1099511627776
+        assert row["ext_storage_total_num_items"] == 40000
+        assert row["ext_storage_total_num_bytes"] == 81920000
+        assert row["ext_storage_total_num_items_spilled_to_storage"] == 5000
+        assert row["ext_storage_total_num_items_fetched_from_storage"] == 1200
+        assert row["ext_storage_total_num_items_deleted_from_storage"] == 300
 
-    def test_blocked_on_fetch_field_emitted(self):
+    def test_string_and_version_fields_stay_in_the_snapshot(self):
         row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["kbc_fetching_block"] == 4
-
-    def test_throttle_counters_parsed_as_int(self):
-        row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["throttle_total_throttled"] == 900
-        assert row["throttle_queued_clients"] == 13
-
-    def test_throttle_rates_parsed_as_float(self):
-        # The engine formats current_rate %.4f and allowed_tps %.1f, so an int
-        # parse would floor both to 0 and 45000.
-        row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["throttle_current_rate"] == 0.8125
-        assert row["throttle_allowed_tps"] == 45000.5
-        assert isinstance(row["throttle_current_rate"], float)
-        assert isinstance(row["throttle_allowed_tps"], float)
-
-    def test_spill_pipeline_fields_emitted(self):
-        row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["spill_attempts"] == 6100
-        assert row["spill_serialized_count"] == 5850
-        assert row["mean_spill_ram"] == 2048
-        assert row["inflight_spill_ram_bytes"] == 102400
-        assert row["oom_reject_write_count"] == 11
-
-    def test_spill_submitted_count_not_spill_submitted(self):
-        # The engine emits both names as separate counters. The column is the
-        # atomic that pairs with spill_serialized_count, so the fixture gives
-        # the two different values and this pins which one is read.
-        row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["spill_submitted_count"] == 5900
-        assert "spill_submitted" not in row
-
-    def test_raw_ratio_inputs_emitted(self):
-        row = source_rows([INFO_WITH_TIERING])[0]
-        # Emitted alongside the ratios so a later reader can tell a real
-        # movement apart from a formula or divide-by-zero bug.
-        assert row["completion_read_ok"] == 250
-        assert row["dram_value_hits"] == 1000
-
-    def test_derived_hit_ratios(self):
-        row = source_rows([INFO_WITH_TIERING])[0]
-        # completion_read_ok 250 of dram_value_hits 1000
-        assert row["disk_hit_pct"] == 25.0
-        assert row["mem_hit_pct"] == 75.0
+        assert "ext_storage_engine" not in row
+        assert "ext_storage_api_version" not in row
+        assert row["info"]["ext_storage_engine"] == "rocksdb"
+        assert row["info"]["ext_storage_api_version"] == 1
 
     def test_every_info_column_present(self):
         row = source_rows([INFO_WITH_TIERING])[0]
         assert set(INFO_COLUMNS) <= set(row)
 
 
-class TestHitRatioForms:
-    # Both forms are emitted: the cumulative one matches the reference dashboard
-    # CSV and its published end-of-run figure, the per-interval one matches the
-    # engine formula at valkey-data-tiering src/ext_storage.c:235 and is what
-    # makes a per-second chart able to show transients.
-    #
-    # The three samples below are chosen so the two forms diverge. Cumulative
-    # totals run 250/1000, 1250/2000, 1250/3000, so the per-interval deltas run
-    # (first sample, no predecessor), 1000/1000 (every access a disk hit), then
-    # 0/1000 (every access a DRAM hit). A per-interval swing from 100% disk to
-    # 0% disk moves the cumulative figure only from 62.5 to 41.67.
-    SERIES = [
-        info_with_counters(1000, 250),
-        info_with_counters(2000, 1250),
-        info_with_counters(3000, 1250),
-    ]
+class TestTieringDisabled:
+    """The enabled flag is the only line of the section when tiering is off."""
 
-    def test_both_forms_present_on_every_row(self):
-        for row in source_rows(self.SERIES):
-            assert {
-                "disk_hit_pct",
-                "mem_hit_pct",
-                "disk_hit_pct_interval",
-                "mem_hit_pct_interval",
-            } <= set(row)
+    def test_enabled_flag_is_zero(self):
+        row = source_rows([INFO_TIERING_DISABLED])[0]
+        assert row["ext_storage_enabled"] == 0
 
-    def test_cumulative_form_matches_running_totals(self):
-        rows = source_rows(self.SERIES)
-        assert [row["disk_hit_pct"] for row in rows] == [25.0, 62.5, 41.67]
-        assert [row["mem_hit_pct"] for row in rows] == [75.0, 37.5, 58.33]
+    def test_remaining_columns_are_zero(self):
+        row = source_rows([INFO_TIERING_DISABLED])[0]
+        for column in TIERING_INFO_FIELDS:
+            if column == "ext_storage_enabled":
+                continue
+            assert row[column] == 0
 
-    def test_interval_form_matches_consecutive_deltas(self):
-        rows = source_rows(self.SERIES)
-        # First sample has no predecessor, then 1000/1000 and 0/1000
-        assert [row["disk_hit_pct_interval"] for row in rows] == [0.0, 100.0, 0.0]
-        assert [row["mem_hit_pct_interval"] for row in rows] == [0.0, 0.0, 100.0]
-
-    def test_interval_form_differs_from_cumulative_when_rate_changes(self):
-        for row in source_rows(self.SERIES)[1:]:
-            assert row["disk_hit_pct_interval"] != row["disk_hit_pct"]
-            assert row["mem_hit_pct_interval"] != row["mem_hit_pct"]
-
-    def test_interval_form_is_zero_on_first_sample(self):
-        row = source_rows([INFO_WITH_TIERING])[0]
-        assert row["disk_hit_pct_interval"] == 0.0
-        assert row["mem_hit_pct_interval"] == 0.0
-
-    def test_zero_denominator_yields_zero_for_both_forms(self):
-        # The reference CSV emits 0.0, not null, while dram_value_hits is 0.
-        rows = source_rows([info_with_counters(0, 0), info_with_counters(0, 0)])
-        for row in rows:
-            assert row["disk_hit_pct"] == 0.0
-            assert row["mem_hit_pct"] == 0.0
-            assert row["disk_hit_pct_interval"] == 0.0
-            assert row["mem_hit_pct_interval"] == 0.0
-
-    def test_flat_counters_yield_zero_interval_ratios(self):
-        # Cumulative stays put while the interval denominator is 0.
-        rows = source_rows([INFO_WITH_TIERING] * 2)
-        assert rows[1]["disk_hit_pct"] == 25.0
-        assert rows[1]["disk_hit_pct_interval"] == 0.0
-        assert rows[1]["mem_hit_pct_interval"] == 0.0
+    def test_non_tiering_fields_still_collected(self):
+        row = source_rows([INFO_TIERING_DISABLED])[0]
+        assert row["used_memory"] == 1799288
+        assert row["mem_frag_ratio"] == 1.21
 
 
 class TestCommandDeltas:
@@ -410,18 +325,6 @@ class TestMissingTieringSection:
         for column in TIERING_INFO_FIELDS:
             assert row[column] == 0
 
-    def test_tiering_float_fields_are_zero_not_missing(self):
-        row = source_rows([INFO_WITHOUT_TIERING])[0]
-        for column in TIERING_INFO_FLOAT_FIELDS:
-            assert row[column] == 0.0
-
-    def test_hit_ratios_are_zero_without_dram_value_hits(self):
-        row = source_rows([INFO_WITHOUT_TIERING])[0]
-        assert row["disk_hit_pct"] == 0.0
-        assert row["mem_hit_pct"] == 0.0
-        assert row["disk_hit_pct_interval"] == 0.0
-        assert row["mem_hit_pct_interval"] == 0.0
-
     def test_non_tiering_fields_still_collected(self):
         row = source_rows([INFO_WITHOUT_TIERING])[0]
         assert row["used_memory"] == 1799288
@@ -431,7 +334,7 @@ class TestMissingTieringSection:
         row = source_rows([""])[0]
         assert row["used_memory"] == 0
         assert row["mem_frag_ratio"] == 0.0
-        assert row["total_num_items_spilled_to_ext_storage"] == 0
+        assert row["ext_storage_total_num_items_spilled_to_storage"] == 0
 
     def test_unparsable_values_fall_back_to_zero(self):
         row = source_rows(["used_memory:not_a_number\n"])[0]

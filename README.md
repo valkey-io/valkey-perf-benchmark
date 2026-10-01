@@ -107,7 +107,7 @@ valkey-perf-benchmark/
 ├── metrics_sampler.py       # 1 Hz per-second sampler for data tiering (opt-in via per_second_sampling)
 ├── samplers/                # Pluggable sample sources the sampler selects between
 │   ├── base.py             # SamplerContext, SampleSource, shared CLI and file helpers
-│   ├── valkey_info.py      # INFO ALL columns, tiering counters, hit ratios, full snapshot
+│   ├── valkey_info.py      # INFO ALL columns, tiering counters, full snapshot
 │   ├── latency_histogram.py # Per-interval command latency percentiles
 │   ├── process_cpu.py      # Host, server process and async IO worker CPU (local only)
 │   └── disk.py             # Block device counters and derived stats (local only)
@@ -1136,7 +1136,7 @@ The sources live in `samplers/`:
 
 | Source              | Columns                                                       |
 | ------------------- | ------------------------------------------------------------- |
-| `valkey_info`       | memory, throughput, keyspace, tiering counters, hit ratios, `valkey_cpu_*`, plus `info` |
+| `valkey_info`       | memory, throughput, keyspace, tiering counters, `valkey_cpu_*`, plus `info` |
 | `latency_histogram` | per-interval command latency percentiles, under `latency`      |
 | `process_cpu`       | host and async IO worker thread CPU (local, Linux only)        |
 | `disk`              | block device IOPS, throughput, latency, utilization (local, Linux only) |
@@ -1152,6 +1152,14 @@ derived from the `used_cpu_*_main_thread` seconds INFO reports, which excludes t
 threads reported separately as `asio_cpu_pct`. A server that does not report those INFO
 fields gets them from `/proc/<pid>/task/<pid>/stat` instead, and then only when running
 locally on Linux.
+
+The tiering columns are the `# Ext_storage` INFO fields: `ext_storage_enabled`,
+`ext_storage_capacity_bytes`, `ext_storage_total_num_items`,
+`ext_storage_total_num_bytes`, `ext_storage_total_num_items_spilled_to_storage`,
+`ext_storage_total_num_items_fetched_from_storage` and
+`ext_storage_total_num_items_deleted_from_storage`. `ext_storage_engine` and
+`ext_storage_api_version` have no column of their own and are read from the `info`
+snapshot.
 
 **It is opt-in.** The root config key `per_second_sampling` takes either form:
 
