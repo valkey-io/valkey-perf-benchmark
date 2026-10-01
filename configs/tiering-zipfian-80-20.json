@@ -14,9 +14,9 @@
       "maxmemory": "1gb",
       "activedefrag": "yes",
       "ext-storage-enabled": "yes",
-      "ext-storage-backend": "flashcache",
+      "ext-storage-engine": "flashcache",
       "ext-storage-path": "/mnt/nvme/flashcache.db",
-      "ext-storage-capacity-mb": 8192
+      "ext-storage-capacity": "8gb"
     },
     "per_second_sampling": true,
     "test_groups": [

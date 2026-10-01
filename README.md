@@ -1155,7 +1155,7 @@ Requirements:
   `--valkey-benchmark-path`. `--zipfian` and `--keysize` are not upstream, so a
   stock binary rejects the client invocation.
 - An NVMe-backed filesystem holding `ext-storage-path`, with the backing file
-  preallocated to at least `ext-storage-capacity-mb`
+  preallocated to at least `ext-storage-capacity`
   (`fallocate -l 8G /mnt/nvme/flashcache.db`).
 - libaio, which the FlashCache backend links against.
 - At least 56 CPU cores, covering the `0-7` server range and the `8-31` and
