@@ -101,6 +101,13 @@ PROTECTED_BENCHMARK_ARGS = {
     "--xml-root-element",
 }
 
+# Scenario keys that tune the populate pass and are meaningless without it.
+POPULATE_OPTION_KEYS = (
+    "populate_clients",
+    "populate_benchmark_args",
+    "populate_retries",
+)
+
 
 # ---------- CLI --------------------------------------------------------------
 def _validate_repository_format(value: str) -> str:
@@ -612,21 +619,38 @@ def validate_cpu_allocation(cfg: dict) -> None:
         if cpu_alloc["cores_per_server"] <= 0 or cpu_alloc["cores_per_client"] <= 0:
             raise ValueError("cores_per_server and cores_per_client must be positive")
 
+        if "servers" in cpu_alloc and "clients" in cpu_alloc:
+            server_cores = set()
+            for range_str in cpu_alloc["servers"]:
+                server_cores.update(parse_core_range(range_str))
+            client_cores = set()
+            for range_str in cpu_alloc["clients"]:
+                client_cores.update(parse_core_range(range_str))
+
+            overlap = server_cores & client_cores
+            if overlap:
+                raise ValueError(
+                    f"cpu_allocation 'servers' and 'clients' overlap on cores: "
+                    f"{sorted(overlap)}"
+                )
+
     # Validate explicit ranges
     if has_old_fields and "server_cpu_range" in cfg and "client_cpu_range" in cfg:
         validate_explicit_cpu_ranges(cfg["server_cpu_range"], cfg["client_cpu_range"])
 
 
-def _validate_benchmark_args(scenario: dict, location: str) -> None:
-    """Validate a scenario's optional benchmark_args passthrough list."""
-    if "benchmark_args" not in scenario:
+def _validate_benchmark_args(
+    scenario: dict, location: str, key: str = "benchmark_args"
+) -> None:
+    """Validate a scenario's optional valkey-benchmark passthrough list."""
+    if key not in scenario:
         return
 
-    benchmark_args = scenario["benchmark_args"]
+    benchmark_args = scenario[key]
     if not isinstance(benchmark_args, list) or not all(
         isinstance(arg, str) for arg in benchmark_args
     ):
-        raise ValueError(f"{location} 'benchmark_args' must be a list of strings")
+        raise ValueError(f"{location} '{key}' must be a list of strings")
 
     for arg in benchmark_args:
         for token in shlex.split(arg):
@@ -635,9 +659,46 @@ def _validate_benchmark_args(scenario: dict, location: str) -> None:
             flag = token.split("=", 1)[0]
             if flag in PROTECTED_BENCHMARK_ARGS:
                 raise ValueError(
-                    f"{location} 'benchmark_args' sets {flag!r}, which the "
+                    f"{location} '{key}' sets {flag!r}, which the "
                     "framework emits itself; use the scenario field for it instead"
                 )
+
+
+def _validate_populate_options(scenario: dict, location: str) -> None:
+    """Validate the optional keys that tune a scenario's populate pass."""
+    has_populate_with = "populate_with" in scenario
+
+    for key in POPULATE_OPTION_KEYS:
+        if key in scenario and not has_populate_with:
+            raise ValueError(
+                f"{location} sets '{key}' with no 'populate_with', "
+                f"and {key} requires populate_with"
+            )
+
+    if "populate_clients" in scenario:
+        _validate_positive_int(
+            scenario["populate_clients"], f"{location}.populate_clients"
+        )
+    if "populate_retries" in scenario:
+        _validate_non_negative_int(
+            scenario["populate_retries"], f"{location}.populate_retries"
+        )
+    _validate_benchmark_args(scenario, location, key="populate_benchmark_args")
+
+
+def _validate_populate_with(populate_with, location: str, require_write: bool) -> None:
+    """Validate a scenario's populate_with write workload."""
+    if not isinstance(populate_with, str) or not populate_with:
+        raise ValueError(f"{location} 'populate_with' must be a non-empty string")
+
+    # Predefined tests require a supported write workload. Command scenarios
+    # may use arbitrary populate commands.
+    if require_write and populate_with not in WRITE_COMMANDS:
+        raise ValueError(
+            f"{location} 'populate_with' {populate_with!r} is not a supported "
+            f"write command. It runs as a predefined test so it must be one "
+            f"of {WRITE_COMMANDS}"
+        )
 
 
 def validate_test_groups(cfg: dict) -> None:
@@ -667,13 +728,13 @@ def validate_test_groups(cfg: dict) -> None:
             # Checked before the mixed early-return below, because a mixed
             # parent may carry benchmark_args for its children to inherit.
             _validate_benchmark_args(scenario, location)
+            _validate_populate_options(scenario, location)
 
             if scenario.get("type") == "mixed":
                 if "populate_with" in scenario:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] combines 'mixed' "
-                        "with 'populate_with'; mixed scenarios seed the "
-                        "keyspace through their own 'writes' sub-scenarios"
+                    # The populate pass runs as a predefined test.
+                    _validate_populate_with(
+                        scenario["populate_with"], location, require_write=True
                     )
                 for side in ("writes", "reads"):
                     for k, child in enumerate(scenario.get(side, [])):
@@ -695,20 +756,11 @@ def validate_test_groups(cfg: dict) -> None:
                 )
 
             if "populate_with" in scenario:
-                populate_with = scenario["populate_with"]
-                if not isinstance(populate_with, str) or not populate_with:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'populate_with' must "
-                        "be a non-empty string"
-                    )
-                # Predefined tests require a supported write workload; command
-                # scenarios may use arbitrary populate commands.
-                if "test" in scenario and populate_with not in WRITE_COMMANDS:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'populate_with' "
-                        f"{populate_with!r} is not a supported write command; "
-                        f"for a 'test' scenario it must be one of {WRITE_COMMANDS}"
-                    )
+                _validate_populate_with(
+                    scenario["populate_with"],
+                    location,
+                    require_write="test" in scenario,
+                )
 
 
 def run_benchmark_matrix(

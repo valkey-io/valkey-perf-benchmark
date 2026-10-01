@@ -21,8 +21,14 @@ def calculate_and_validate_cpu_ranges(
     manual_key: str,
     auto_cores_key: str,
     use_offset: bool = False,
+    units_floor: int = 0,
 ):
-    """Calculate CPU ranges with validation (DRY helper)."""
+    """Calculate CPU ranges with validation (DRY helper).
+
+    ``units_floor`` raises the number of ranges produced in automatic mode
+    above the node count, for pools that have to cover more client processes
+    than there are server nodes.
+    """
     if "cpu_allocation" not in cfg:
         return None
 
@@ -38,12 +44,30 @@ def calculate_and_validate_cpu_ranges(
         offset = 0
         if use_offset:
             offset = cluster_nodes * cpu_alloc["cores_per_server"]
-        ranges = calculate_cpu_ranges(cluster_nodes, cpu_alloc[auto_cores_key], offset)
+        units = max(cluster_nodes, units_floor)
+        ranges = calculate_cpu_ranges(units, cpu_alloc[auto_cores_key], offset)
 
     for range_str in ranges:
         parse_core_range(range_str)
 
     return ranges
+
+
+def max_mixed_processes(cfg: dict) -> int:
+    """Return the widest client-process count any mixed scenario launches.
+
+    Each mixed ``writes``/``reads`` child is its own valkey-benchmark process
+    wanting a full ``cores_per_client`` slice, so the client pool has to cover
+    the widest mixed scenario in the config. Zero when the config has none.
+    """
+    widest = 0
+    for group in cfg.get("test_groups", []):
+        for scenario in group.get("scenarios", []):
+            if scenario.get("type") != "mixed":
+                continue
+            processes = len(scenario.get("writes", [])) + len(scenario.get("reads", []))
+            widest = max(widest, processes)
+    return widest
 
 
 def calculate_server_cpu_ranges(cfg: dict):
@@ -56,7 +80,11 @@ def calculate_server_cpu_ranges(cfg: dict):
 def calculate_client_cpu_ranges(cfg: dict):
     """Calculate client CPU ranges from config."""
     return calculate_and_validate_cpu_ranges(
-        cfg, "clients", "cores_per_client", use_offset=True
+        cfg,
+        "clients",
+        "cores_per_client",
+        use_offset=True,
+        units_floor=max_mixed_processes(cfg),
     )
 
 

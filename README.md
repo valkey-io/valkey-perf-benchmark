@@ -683,7 +683,11 @@ Module tests use structured `test_groups` with `scenarios`:
 | `keyspacelen`    | Per-scenario key space size, passed as `-r N`. Falls back to the config-level `keyspacelen[0]`.                                    |
 | `warmup_inline`  | Adds `--warmup N` to the main benchmark run. Distinct from `warmup`, which performs a separate warm-up run first.                  |
 | `restart_before` | Restarts the managed server before the scenario runs (flushes the database instead when using a running server).                   |
-| `populate_with`  | Write workload that seeds the keyspace before a read test. For a `test` scenario it is a predefined write name (e.g. `SET`), run as `-t NAME`; for a `command` scenario it is an arbitrary write command string (e.g. `SET key:__rand_int__ __data__`), run after `--`. The populate pass runs sequentially and shares the main run's seed, so the read hits the seeded keys. |
+| `populate_with`  | Write workload that seeds the keyspace before the measured run. For a `test` scenario it is a predefined write name (e.g. `SET`), run as `-t NAME`. For a `command` scenario it is an arbitrary write command string (e.g. `SET key:__rand_int__ __data__`), run after `--`. On a `type: mixed` scenario it must be a predefined write name, because the populate pass runs as a `test`. The populate pass runs sequentially and shares the main run's seed, so the measured run hits the seeded keys. It produces no metrics row and no sampled rows. |
+| `populate_clients` | Client count for the populate pass only. Requires `populate_with`. Defaults to the scenario's `clients`, or 1 when the scenario has none (a mixed parent carries its client counts on its children). |
+| `populate_benchmark_args` | `benchmark_args`-shaped list applied to the populate pass only, validated identically. Requires `populate_with`. The populate pass does not inherit the scenario's `benchmark_args`, so a load-only flag such as `--keysize` belongs here and a measured-only flag such as `--zipfian` stays out of the load. |
+| `populate_retries` | Additional populate attempts when the keyspace comes up short, default 0. Requires `populate_with`. At 0 the pass runs once and its key count is never checked. Above 0 the summed `DBSIZE` across the active ports is compared against `min(requests, keyspacelen)` after every attempt, and a short count (or a nonzero exit, which valkey-benchmark returns when the server rejects writes) sleeps two seconds and runs the pass again. Exhausting the attempts raises. |
+| `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. Flags the framework emits itself (`-h -p -c -P -d -n -r -t --duration --seed --sequential --threads --warmup --cluster --tls --csv`, the TLS certificate flags and the dataset flags) are rejected at config validation; use the corresponding scenario field instead. |
 | `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. Flags the framework emits itself (`-h -p -c -P -d -n -r -t --duration --seed --sequential --threads --warmup --cluster --tls --csv`, the TLS certificate flags and the dataset flags) are rejected at config validation; use the corresponding scenario field instead. |
 
 ### Cluster Mode Support
@@ -736,6 +740,14 @@ Module tests use structured `test_groups` with `scenarios`:
      }
      ```
      Framework calculates ranges: servers [0-7, 8-15, 16-23...], clients [40-47, 48-55...]
+
+     The client pool holds one range per server node, or one range per mixed
+     client process when a `type: mixed` scenario launches more processes than
+     there are nodes. Each `writes`/`reads` child is its own process wanting a
+     full `cores_per_client` slice, so a single-node config with one write and
+     one read child gets two client ranges: `cores_per_server` 8 with
+     `cores_per_client` 24 gives servers `0-7` and clients `8-31` and `32-55`.
+     The first ranges stay the per-node ones, so cluster pinning is unchanged.
    
    - **Manual override**: Provide `servers` + `clients` arrays
      ```json
@@ -745,6 +757,8 @@ Module tests use structured `test_groups` with `scenarios`:
      }
      ```
      Explicit ranges used as-is (cores_per_* ignored if present)
+
+     A core appearing in both arrays is rejected at config validation.
 
 2. **Old**: `server_cpu_range` + `client_cpu_range` (single-node only)
 
@@ -1124,6 +1138,41 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 
 `test_id` is `{group}_{scenario}` and `test_phase` is the scenario type
 (`read`, `write`, or `mixed_read` / `mixed_write` for mixed scenarios).
+
+## Data tiering benchmarks
+
+`configs/tiering-zipfian-80-20.json` ports the Valkey data-tiering Zipfian 80/20
+scenario: 4M keys sequentially loaded under a 1gb DRAM cap with FlashCache
+tiering, then a 60 second mixed run of 40 SET clients and 160 GET clients over a
+zipfian alpha 1.0 key distribution, pinned to 8 server cores and two 24-core
+client ranges with per-second sampling on.
+
+Requirements:
+
+- A valkey-data-tiering server build. The `ext-storage-*` settings in
+  `custom-server-configs` do not exist in upstream `valkey-server`.
+- The patched `valkey-benchmark` from the same source, passed with
+  `--valkey-benchmark-path`. `--zipfian` and `--keysize` are not upstream, so a
+  stock binary rejects the client invocation.
+- An NVMe-backed filesystem holding `ext-storage-path`, with the backing file
+  preallocated to at least `ext-storage-capacity-mb`
+  (`fallocate -l 8G /mnt/nvme/flashcache.db`).
+- libaio, which the FlashCache backend links against.
+- At least 56 CPU cores, covering the `0-7` server range and the `8-31` and
+  `32-55` client ranges.
+
+```bash
+python benchmark.py \
+  --mode both \
+  --valkey-path /path/to/valkey-data-tiering \
+  --valkey-benchmark-path /path/to/valkey-data-tiering/src/valkey-benchmark \
+  --config configs/tiering-zipfian-80-20.json \
+  --commits HEAD
+```
+
+The load uses `populate_retries` because a 4M key load under a 1gb cap is
+rejected intermittently while eviction catches up, so the pass is repeated until
+`DBSIZE` reaches the keyspace size.
 
 ## Per-Second Metrics Sampler
 

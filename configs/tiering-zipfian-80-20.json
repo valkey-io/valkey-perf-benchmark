@@ -1,0 +1,60 @@
+[
+  {
+    "test_name": "tiering-zipfian-80-20",
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false,
+    "io-threads": 1,
+    "keyspacelen": [4000000],
+    "cpu_allocation": {
+      "cores_per_server": 8,
+      "cores_per_client": 24
+    },
+    "custom-server-configs": {
+      "maxmemory": "1gb",
+      "activedefrag": "yes",
+      "ext-storage-enabled": "yes",
+      "ext-storage-backend": "flashcache",
+      "ext-storage-path": "/mnt/nvme/flashcache.db",
+      "ext-storage-capacity-mb": 8192
+    },
+    "per_second_sampling": true,
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "Zipfian 80/20 mixed read/write over 4M keys under a 1gb DRAM cap with FlashCache tiering",
+        "scenarios": [
+          {
+            "id": "zipf80",
+            "type": "mixed",
+            "description": "Concurrent GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": ["--keysize 100"],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 512,
+            "keyspacelen": 4000000,
+            "benchmark_args": ["--zipfian 1.0", "--keysize 100"],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

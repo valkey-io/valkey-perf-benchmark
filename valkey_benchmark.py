@@ -31,6 +31,12 @@ DEFAULT_TIMEOUT = 30
 # Timeout for the one-shot INFO that resolves the server pid for sampling.
 SERVER_PID_INFO_TIMEOUT = 5
 
+# Timeout for the DBSIZE check that gates a retried populate pass.
+DBSIZE_TIMEOUT = 10
+
+# Pause between retried populate passes, giving eviction room to catch up.
+POPULATE_RETRY_SLEEP_SECONDS = 2
+
 # One appended file per results dir holds every per-second sample of the run.
 # Scenarios, repeated runs and config sets all append to it, exactly as they do
 # to metrics.json, and rows are told apart by the identity fields they carry.
@@ -320,8 +326,18 @@ class ClientRunner:
         pipeline: int,
         clients: int,
         seed_val: int,
+        benchmark_args: Optional[List[str]] = None,
+        retries: int = 0,
+        scenario_id: str = "unknown",
     ) -> None:
-        """Run a sequential write workload to seed the keyspace."""
+        """Run a sequential write workload to seed the keyspace.
+
+        With ``retries`` above zero the loaded key count is checked against
+        ``min(requests, keyspacelen)`` after every attempt and the pass is run
+        again until the target is reached or the attempts are exhausted. A
+        nonzero exit counts as a failed attempt in that mode, because
+        valkey-benchmark exits nonzero when the server rejects writes.
+        """
         logging.info(f"Populating keyspace using {write_workload}")
 
         populate_scenario = {
@@ -333,12 +349,71 @@ class ClientRunner:
             "clients": clients,
             "sequential": True,
         }
+        if benchmark_args:
+            populate_scenario["benchmark_args"] = benchmark_args
+
         bench_cmd = self._build_benchmark_command(
             populate_scenario, tls=self.tls_mode, seed_val=seed_val
         )
 
-        self._run(command=bench_cmd, cwd=self.valkey_path, timeout=None)
-        logging.info(f"Keyspace populated using {write_workload} with {requests} keys")
+        if retries <= 0:
+            self._run(command=bench_cmd, cwd=self.valkey_path, timeout=None)
+            logging.info(
+                f"Keyspace populated using {write_workload} with {requests} keys"
+            )
+            return
+
+        target = min(requests, keyspacelen)
+        attempts = retries + 1
+        count = 0
+        for attempt in range(1, attempts + 1):
+            try:
+                self._run(command=bench_cmd, cwd=self.valkey_path, timeout=None)
+            except RuntimeError as e:
+                logging.warning(f"Populate attempt {attempt} failed: {e}")
+
+            count = self._count_loaded_keys()
+            if count >= target:
+                logging.info(
+                    f"Keyspace populated using {write_workload}: "
+                    f"{count} keys (target {target})"
+                )
+                return
+
+            logging.info(
+                f"Populate attempt {attempt}/{attempts} loaded {count} of "
+                f"{target} keys"
+            )
+            if attempt < attempts:
+                time.sleep(POPULATE_RETRY_SLEEP_SECONDS)
+
+        raise RuntimeError(
+            f"Populate for scenario {scenario_id!r} reached {count} keys, "
+            f"short of the {target} key target after {attempts} attempts"
+        )
+
+    def _count_loaded_keys(self) -> int:
+        """Return the summed DBSIZE across every active server port."""
+        total = 0
+        for port in self._get_active_ports():
+            cmd = [
+                str(self.valkey_path / VALKEY_CLI),
+                "-h",
+                self.target_ip,
+                "-p",
+                str(port),
+                "DBSIZE",
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=DBSIZE_TIMEOUT
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"DBSIZE on port {port} exited {result.returncode}: "
+                    f"{result.stderr.strip()}"
+                )
+            total += int(result.stdout.strip())
+        return total
 
     def run_benchmark_config(self) -> None:
         """Execute the configured scenarios and persist their metrics."""
@@ -927,6 +1002,8 @@ class ClientRunner:
             if scenario.get("requests") is not None
             else keyspacelen_val
         )
+        # A mixed parent carries no 'test' or 'command' of its own, and its
+        # populate workload is a predefined write name.
         workload_key = "command" if "command" in scenario else "test"
         self._populate_keyspace(
             workload_key,
@@ -935,8 +1012,11 @@ class ClientRunner:
             keyspacelen_val,
             scenario.get("data_size", 100),
             scenario.get("pipeline", 1),
-            scenario.get("clients", 1),
+            scenario.get("populate_clients", scenario.get("clients", 1)),
             seed_val,
+            benchmark_args=scenario.get("populate_benchmark_args"),
+            retries=scenario.get("populate_retries", 0),
+            scenario_id=scenario.get("id", "unknown"),
         )
 
     def _resolve_effective_profiling(self, scenario):

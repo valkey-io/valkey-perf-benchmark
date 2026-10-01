@@ -299,6 +299,64 @@ class TestValidateCpuAllocation:
         cfg = {"server_cpu_range": "0-3"}
         validate_cpu_allocation(cfg)  # should not raise
 
+    def test_explicit_arrays_overlap_raises(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 4,
+                "cores_per_client": 4,
+                "servers": ["0-7"],
+                "clients": ["6-13"],
+            }
+        }
+        with pytest.raises(
+            ValueError, match=r"'servers' and 'clients' overlap on cores: \[6, 7\]"
+        ):
+            validate_cpu_allocation(cfg)
+
+    def test_explicit_arrays_overlap_across_ranges_raises(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 2,
+                "cores_per_client": 2,
+                "servers": ["0-1", "4-5"],
+                "clients": ["2-3", "5,9"],
+            }
+        }
+        with pytest.raises(ValueError, match=r"overlap on cores: \[5\]"):
+            validate_cpu_allocation(cfg)
+
+    def test_explicit_arrays_disjoint_passes(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 8,
+                "cores_per_client": 24,
+                "servers": ["0-7"],
+                "clients": ["8-31", "32-55"],
+            }
+        }
+        validate_cpu_allocation(cfg)  # should not raise
+
+    def test_explicit_arrays_may_exceed_system_cores(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 8,
+                "cores_per_client": 8,
+                "servers": ["0-7"],
+                "clients": ["8-8191"],
+            }
+        }
+        validate_cpu_allocation(cfg)  # should not raise
+
+    def test_clients_only_skips_overlap_check(self):
+        cfg = {
+            "cpu_allocation": {
+                "cores_per_server": 4,
+                "cores_per_client": 4,
+                "clients": ["0-7"],
+            }
+        }
+        validate_cpu_allocation(cfg)  # should not raise
+
 
 # ---------------------------------------------------------------------------
 # _validate_positive_int_or_list
@@ -407,16 +465,80 @@ class TestValidateTestGroups:
                 {"id": "s1", "test": "GET", "populate_with": "GET"},
                 "not a supported write command",
             ),
-            # mixed scenarios seed through their own writes, never populate_with
+            # mixed scenarios populate through a predefined write workload
             (
                 {
                     "id": "s1",
                     "type": "mixed",
-                    "writes": [{"id": "w", "command": "SET foo bar"}],
-                    "reads": [{"id": "r", "command": "GET foo"}],
-                    "populate_with": "SET",
+                    "writes": [{"id": "w", "test": "SET"}],
+                    "reads": [{"id": "r", "test": "GET"}],
+                    "populate_with": "GET",
                 },
-                "combines 'mixed' with 'populate_with'",
+                "not a supported write command",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "type": "mixed",
+                    "writes": [{"id": "w", "test": "SET"}],
+                    "reads": [{"id": "r", "test": "GET"}],
+                    "populate_with": "SET key:__rand_int__ v",
+                },
+                "not a supported write command",
+            ),
+            # the populate tuning keys require populate_with
+            (
+                {"id": "s1", "test": "GET", "populate_clients": 50},
+                "sets 'populate_clients' with no 'populate_with'",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_benchmark_args": ["--keysize 100"],
+                },
+                "sets 'populate_benchmark_args' with no 'populate_with'",
+            ),
+            (
+                {"id": "s1", "test": "GET", "populate_retries": 3},
+                "sets 'populate_retries' with no 'populate_with'",
+            ),
+            # populate tuning key types
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_clients": 0,
+                },
+                "'test_groups\\[0\\].scenarios\\[0\\].populate_clients' must be a positive integer",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_retries": -1,
+                },
+                "'test_groups\\[0\\].scenarios\\[0\\].populate_retries' must be a non-negative integer",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_benchmark_args": "--keysize 100",
+                },
+                "'populate_benchmark_args' must be a list of strings",
+            ),
+            (
+                {
+                    "id": "s1",
+                    "test": "GET",
+                    "populate_with": "SET",
+                    "populate_benchmark_args": ["-n 100"],
+                },
+                "'populate_benchmark_args' sets '-n', which the framework emits itself",
             ),
             # benchmark_args must be a list of strings
             (
@@ -521,6 +643,17 @@ class TestValidateTestGroups:
                 "type": "mixed",
                 "writes": [{"id": "w1", "command": "HSET k f v"}],
                 "reads": [{"id": "r1", "command": "FT.SEARCH idx q"}],
+            },
+            # mixed scenario seeded by a predefined write, with its tuning keys
+            {
+                "id": "m1",
+                "type": "mixed",
+                "writes": [{"id": "w1", "test": "SET"}],
+                "reads": [{"id": "r1", "test": "GET"}],
+                "populate_with": "SET",
+                "populate_clients": 50,
+                "populate_benchmark_args": ["--keysize 100"],
+                "populate_retries": 20,
             },
             # benchmark_args as a list of strings, on a test scenario
             {

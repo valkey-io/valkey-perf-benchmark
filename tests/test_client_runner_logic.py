@@ -1545,6 +1545,165 @@ class TestPopulateWith:
         assert "--sequential" in populate_cmd
         assert _seed_of(populate_cmd) == _seed_of(main_cmd) == "111"
 
+    def test_populate_clients_overrides_scenario_clients(self, minimal_client_runner):
+        scenario = _populate_scenario(
+            test="GET", populate_with="SET", clients=4, populate_clients=50
+        )
+        populate_cmd, main_cmd = _capture_scenario_commands(
+            minimal_client_runner, scenario
+        )
+        assert populate_cmd[populate_cmd.index("-c") + 1] == "50"
+        assert main_cmd[main_cmd.index("-c") + 1] == "4"
+
+    def test_populate_clients_defaults_to_scenario_clients(self, minimal_client_runner):
+        scenario = _populate_scenario(test="GET", populate_with="SET", clients=7)
+        populate_cmd, _ = _capture_scenario_commands(minimal_client_runner, scenario)
+        assert populate_cmd[populate_cmd.index("-c") + 1] == "7"
+
+    def test_populate_benchmark_args_only_on_the_populate_run(
+        self, minimal_client_runner
+    ):
+        scenario = _populate_scenario(
+            test="GET",
+            populate_with="SET",
+            benchmark_args=["--zipfian 1.0"],
+            populate_benchmark_args=["--keysize 100"],
+        )
+        populate_cmd, main_cmd = _capture_scenario_commands(
+            minimal_client_runner, scenario
+        )
+        assert "--keysize" in populate_cmd and "100" in populate_cmd
+        assert "--zipfian" not in populate_cmd
+        assert "--zipfian" in main_cmd and "1.0" in main_cmd
+        assert "--keysize" not in main_cmd
+
+
+def _dbsize_runner(runner, counts):
+    """Patch DBSIZE results and the retry pause, returning the captured argv."""
+    captured = []
+
+    def fake_run(command=None, *args, **kwargs):
+        captured.append(command)
+        return MagicMock()
+
+    return (
+        captured,
+        patch.object(runner, "_run", side_effect=fake_run),
+        patch.object(runner, "_count_loaded_keys", side_effect=counts),
+        patch("valkey_benchmark.time.sleep"),
+    )
+
+
+class TestPopulateRetries:
+    @staticmethod
+    def _populate(runner, **extra):
+        runner._populate_scenario_keyspace(
+            _populate_scenario(test="GET", populate_with="SET", **extra), 111
+        )
+
+    def test_zero_retries_runs_once_without_a_dbsize_check(self, minimal_client_runner):
+        with (
+            patch.object(minimal_client_runner, "_run") as run,
+            patch.object(minimal_client_runner, "_count_loaded_keys") as count,
+        ):
+            self._populate(minimal_client_runner)
+        assert run.call_count == 1
+        count.assert_not_called()
+
+    def test_retry_after_a_short_count(self, minimal_client_runner):
+        captured, p_run, p_count, p_sleep = _dbsize_runner(
+            minimal_client_runner, [40, 100]
+        )
+        with p_run, p_count, p_sleep as sleep:
+            self._populate(minimal_client_runner, populate_retries=5)
+        assert len(captured) == 2
+        sleep.assert_called_once_with(2)
+
+    def test_reaching_the_target_stops_retrying(self, minimal_client_runner):
+        captured, p_run, p_count, p_sleep = _dbsize_runner(minimal_client_runner, [100])
+        with p_run, p_count, p_sleep as sleep:
+            self._populate(minimal_client_runner, populate_retries=5)
+        assert len(captured) == 1
+        sleep.assert_not_called()
+
+    def test_target_is_the_smaller_of_requests_and_keyspacelen(
+        self, minimal_client_runner
+    ):
+        captured, p_run, p_count, p_sleep = _dbsize_runner(minimal_client_runner, [60])
+        with p_run, p_count, p_sleep:
+            self._populate(
+                minimal_client_runner, requests=1000, keyspacelen=60, populate_retries=5
+            )
+        assert len(captured) == 1
+
+    def test_exhausted_attempts_raise_with_the_counts(self, minimal_client_runner):
+        captured, p_run, p_count, p_sleep = _dbsize_runner(
+            minimal_client_runner, [10, 20, 30]
+        )
+        with p_run, p_count, p_sleep as sleep:
+            with pytest.raises(RuntimeError) as excinfo:
+                self._populate(minimal_client_runner, populate_retries=2)
+        message = str(excinfo.value)
+        assert len(captured) == 3
+        assert "'s1'" in message
+        assert "reached 30 keys" in message
+        assert "100 key target" in message
+        assert "3 attempts" in message
+        assert sleep.call_count == 2
+
+    def test_nonzero_exit_counts_as_a_failed_attempt(self, minimal_client_runner):
+        calls = []
+
+        def failing_run(command=None, *args, **kwargs):
+            calls.append(command)
+            if len(calls) == 1:
+                raise RuntimeError("Command failed: valkey-benchmark")
+            return MagicMock()
+
+        with (
+            patch.object(minimal_client_runner, "_run", side_effect=failing_run),
+            patch.object(
+                minimal_client_runner, "_count_loaded_keys", side_effect=[0, 100]
+            ),
+            patch("valkey_benchmark.time.sleep"),
+        ):
+            self._populate(minimal_client_runner, populate_retries=3)
+        assert len(calls) == 2
+
+    def test_nonzero_exit_still_raises_without_retries(self, minimal_client_runner):
+        with patch.object(
+            minimal_client_runner, "_run", side_effect=RuntimeError("Command failed")
+        ):
+            with pytest.raises(RuntimeError, match="Command failed"):
+                self._populate(minimal_client_runner)
+
+
+class TestCountLoadedKeys:
+    def test_single_port(self, minimal_client_runner):
+        result = MagicMock(returncode=0, stdout="200000\n")
+        with patch("valkey_benchmark.subprocess.run", return_value=result) as run:
+            assert minimal_client_runner._count_loaded_keys() == 200000
+        argv = run.call_args[0][0]
+        assert argv[0].endswith("src/valkey-cli")
+        assert argv[-1] == "DBSIZE"
+        assert argv[argv.index("-p") + 1] == "6379"
+        assert argv[argv.index("-h") + 1] == "127.0.0.1"
+
+    def test_cluster_ports_are_summed(self, minimal_client_runner):
+        minimal_client_runner.cluster_mode = True
+        minimal_client_runner.config["cluster_ports"] = [6379, 6380, 6381]
+        results = [MagicMock(returncode=0, stdout=f"{n}\n") for n in (10, 20, 30)]
+        with patch("valkey_benchmark.subprocess.run", side_effect=results) as run:
+            assert minimal_client_runner._count_loaded_keys() == 60
+        ports = [c[0][0][c[0][0].index("-p") + 1] for c in run.call_args_list]
+        assert ports == ["6379", "6380", "6381"]
+
+    def test_nonzero_exit_raises(self, minimal_client_runner):
+        result = MagicMock(returncode=1, stdout="", stderr="Connection refused")
+        with patch("valkey_benchmark.subprocess.run", return_value=result):
+            with pytest.raises(RuntimeError, match="DBSIZE on port 6379 exited 1"):
+                minimal_client_runner._count_loaded_keys()
+
 
 class TestPopulateWithNotInMetrics:
     def test_populate_with_absent_from_metrics(self, minimal_client_runner):
