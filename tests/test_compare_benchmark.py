@@ -1975,3 +1975,31 @@ class TestConfigSetGroupHeadingAttribution:
         headings2 = [line for line in report2.splitlines() if line.startswith("###")]
         assert "### data_size = 16" in headings2
         assert "### data_size = 64" in headings2
+
+
+def test_scenario_summary_table():
+    def runs(scale, commit):
+        return [
+            real_success_row(
+                test_id="1_a",
+                command="FT.SEARCH rd0 x",
+                rps=1000.0 * scale * jitter,
+                commit=commit,
+                group_description="P1 - Text baseline",
+                scenario_description="Single | <term>",
+            )
+            for jitter in (0.999, 1.0, 1.001)
+        ]
+
+    def report(baseline, new):
+        keys = discover_config_keys(baseline + new)
+        return _comparison(
+            average_multiple_runs(baseline, keys), average_multiple_runs(new, keys)
+        )[2]
+
+    changed = report(runs(1.0, "base"), runs(0.9, "new"))
+    row = next(line for line in changed.splitlines() if line.startswith("| P1.a"))
+    assert r"<sub>Text baseline</sub> | Single \| &lt;term&gt;" in row
+    assert "❌ -10.0±0.3%<br><sub>900 vs 1.00K rps</sub>" in row
+    unchanged = report(runs(1.0, "base"), runs(1.0, "new"))
+    assert "No statistically significant changes." in unchanged
