@@ -799,7 +799,7 @@ class ClientRunner:
                         warmup_duration,
                         group_description=group_description,
                     )
-                    return metrics_list
+                    return metrics_list if metrics_list else None
 
                 # Invocation errors reach the outer scenario error policy.
                 proc, aggregated_row = self._execute_benchmark_run(scenario, seed_val)
