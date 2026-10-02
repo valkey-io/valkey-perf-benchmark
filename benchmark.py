@@ -315,6 +315,15 @@ def _validate_positive_int_or_list(value, key_name: str) -> None:
         raise ValueError(f"'{key_name}' must be int or list")
 
 
+def _validate_string_list(value, key_name: str) -> None:
+    """Validate value is a list of non-empty strings."""
+    if not isinstance(value, list):
+        raise ValueError(f"'{key_name}' must be a list")
+    for i, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(f"'{key_name}[{i}]' must be a non-empty string")
+
+
 def _validate_cpu_range(value, key_name: str) -> None:
     """Validate CPU range string."""
     if not isinstance(value, str):
@@ -474,6 +483,9 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(cfg["custom-server-config-file"], str):
             raise ValueError("'custom-server-config-file' must be a string path")
 
+    if "post_commands" in cfg:
+        _validate_string_list(cfg["post_commands"], "post_commands")
+
     if "cluster_mode" in cfg and not isinstance(cfg["cluster_mode"], list):
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])
     if "tls_mode" in cfg:
@@ -620,6 +632,12 @@ def validate_test_groups(cfg: dict) -> None:
             # Checked before the mixed early-return below, because a mixed
             # parent may carry benchmark_args for its children to inherit.
             _validate_benchmark_args(scenario, location)
+
+            if "post_commands" in scenario:
+                _validate_string_list(
+                    scenario["post_commands"],
+                    f"test_groups[{i}].scenarios[{j}].post_commands",
+                )
 
             if scenario.get("type") == "mixed":
                 if "populate_with" in scenario:
