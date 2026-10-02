@@ -1,5 +1,6 @@
 """Unit tests for pure logic methods on ClientRunner from valkey_benchmark.py."""
 
+import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2110,3 +2111,69 @@ class TestRunPostCommands:
             runner._run_post_commands({"post_commands": []})
 
         client.execute_command.assert_not_called()
+
+    def test_dumps_results_to_post_commands_json(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+        scenario = {"post_commands": ["INFO memory", "DBSIZE"]}
+        patcher, _ = self._patch_client(runner, side_effect=[{"used_memory": 42}, 7])
+        with patcher:
+            runner._run_post_commands(scenario)
+
+        out = tmp_path / "post_commands.json"
+        assert out.exists()
+        assert json.loads(out.read_text()) == [
+            {"command": "INFO memory", "results": {"used_memory": 42}},
+            {"command": "DBSIZE", "results": 7},
+        ]
+
+    def test_json_records_failures(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+        scenario = {"post_commands": ["BOGUS", "DBSIZE"]}
+        patcher, _ = self._patch_client(runner, side_effect=[RuntimeError("boom"), 7])
+        with patcher:
+            runner._run_post_commands(scenario)
+
+        data = json.loads((tmp_path / "post_commands.json").read_text())
+        assert data == [
+            {"command": "BOGUS", "results": {"error": "boom"}},
+            {"command": "DBSIZE", "results": 7},
+        ]
+
+    def test_json_accumulates_across_scenarios(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+        patcher, _ = self._patch_client(runner, side_effect=[1, 2])
+        with patcher:
+            runner._run_post_commands({"post_commands": ["DBSIZE"]})
+            runner._run_post_commands({"post_commands": ["DBSIZE"]})
+
+        data = json.loads((tmp_path / "post_commands.json").read_text())
+        assert [e["results"] for e in data] == [1, 2]
+
+    def test_json_appends_to_existing_file_across_runs(
+        self, minimal_client_runner, tmp_path
+    ):
+        # Simulate a prior run having already written the file.
+        (tmp_path / "post_commands.json").write_text(
+            json.dumps([{"command": "PRIOR", "results": 0}])
+        )
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+        patcher, _ = self._patch_client(runner, side_effect=[9])
+        with patcher:
+            runner._run_post_commands({"post_commands": ["DBSIZE"]})
+
+        data = json.loads((tmp_path / "post_commands.json").read_text())
+        assert [e["command"] for e in data] == ["PRIOR", "DBSIZE"]
+
+    def test_no_json_file_when_no_commands(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.results_dir = tmp_path
+        runner.config.pop("post_commands", None)
+        patcher, _ = self._patch_client(runner, "ok")
+        with patcher:
+            runner._run_post_commands({"id": "s1"})
+
+        assert not (tmp_path / "post_commands.json").exists()

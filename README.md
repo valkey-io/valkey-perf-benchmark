@@ -429,6 +429,27 @@ A failing command is logged as a warning and never fails the benchmark.
 In cluster mode the commands are sent to the single port given by `port`
 rather than to every node in `cluster_ports`.
 
+Each command's output is captured to `post_commands.json` in the results
+directory. The file is a JSON array where each element records the
+command and its result:
+
+```json
+[
+  {
+    "command": "INFO memory",
+    "results": {
+      "used_memory": 1048576,
+      "used_memory_rss": 2097152,
+      "mem_fragmentation_ratio": 2.0
+    }
+  },
+  {
+    "command": "DBSIZE",
+    "results": 1000
+  }
+]
+```
+
 ## Results
 
 Benchmark results are stored in the `results/` directory, organized by commit ID:

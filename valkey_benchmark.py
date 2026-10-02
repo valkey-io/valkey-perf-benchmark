@@ -1,6 +1,7 @@
 """Client-side benchmark execution logic."""
 
 import copy
+import json
 import logging
 import random
 import shlex
@@ -116,7 +117,12 @@ class ClientRunner:
         self.config_suffix = "default"
         self.client_cpu_ranges = []
 
-    def _create_client(self, port: Optional[int] = None) -> valkey.Valkey:
+    def _create_client(
+        self,
+        port: Optional[int] = None,
+        protocol: Optional[int] = None,
+        socket_timeout: int = 10,
+    ) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
         if port is None:
             port = self.config.get("port", DEFAULT_PORT)
@@ -125,9 +131,11 @@ class ClientRunner:
             "host": self.target_ip,
             "port": port,
             "decode_responses": True,
-            "socket_timeout": 10,
+            "socket_timeout": socket_timeout,
             "socket_connect_timeout": 10,
         }
+        if protocol is not None:
+            kwargs["protocol"] = protocol
         if self.tls_mode:
             tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
             if not tls_cert_path.exists():
@@ -146,11 +154,13 @@ class ClientRunner:
         return valkey.Valkey(**kwargs)
 
     @contextmanager
-    def _client_context(self):
+    def _client_context(self, protocol: Optional[int] = None, socket_timeout: int = 10):
         """Context manager for Valkey client connections."""
         client = None
         try:
-            client = self._create_client()
+            client = self._create_client(
+                protocol=protocol, socket_timeout=socket_timeout
+            )
             yield client
         finally:
             if client:
@@ -1102,14 +1112,7 @@ class ClientRunner:
         return metrics
 
     def _run_post_commands(self, scenario: dict) -> None:
-        """Run post_commands once a scenario's benchmark run has finished.
-
-        Runs whether or not the run succeeded, so the state behind a failure is
-        still captured, and skips the whole list when the server is unreachable.
-        A scenario's own list wins, otherwise the config-level list applies, so a
-        scenario opts out with an empty list. Failures are logged and swallowed,
-        a diagnostic command will never fail the benchmark.
-        """
+        """Run post_commands once a scenario's benchmark run has finished."""
         if "post_commands" in scenario:
             post_commands = scenario["post_commands"]
         else:
@@ -1117,25 +1120,59 @@ class ClientRunner:
         if not post_commands:
             return
 
-        with self._client_context() as client:
-            client.connection_pool.connection_kwargs["socket_timeout"] = 300
+        results = []
+        with self._client_context(protocol=3, socket_timeout=300) as client:
             try:
                 client.ping()
             except Exception as e:
                 logging.warning(
-                    f"Skipping {len(post_commands)} post command(s), "
-                    f"server is not reachable: {e}"
+                    f"Skipping {len(post_commands)} post command(s), server is not reachable: {e}"
                 )
                 return
 
             for cmd_str in post_commands:
                 logging.info(f"Executing post command: {cmd_str}")
                 try:
-                    # Logged as the server returned it.
                     result = client.execute_command(*shlex.split(cmd_str))
                     logging.info(f"Post command result: {result}")
+                    results.append({"command": cmd_str, "results": result})
                 except Exception as e:
                     logging.warning(f"Failed to execute post command '{cmd_str}': {e}")
+                    results.append({"command": cmd_str, "results": {"error": str(e)}})
+
+        self._write_post_command_results(results)
+
+    def _write_post_command_results(self, new_results: List[dict]) -> None:
+        """Append post command results to ``results_dir/post_commands.json``."""
+        if not new_results:
+            return
+
+        out_path = self.results_dir / "post_commands.json"
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        if out_path.exists() and out_path.stat().st_size > 0:
+            try:
+                with out_path.open("r", encoding="utf-8") as f:
+                    results = json.load(f)
+                if not isinstance(results, list):
+                    logging.warning(
+                        f"Existing {out_path} contains non-list data, starting fresh"
+                    )
+                    results = []
+            except json.JSONDecodeError as e:
+                logging.warning(
+                    f"Could not decode JSON from {out_path}: {e}, starting fresh."
+                )
+                results = []
+
+        results.extend(new_results)
+
+        try:
+            with out_path.open("w", encoding="utf-8") as f:
+                json.dump(results, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            logging.warning(f"Failed to write post command results to {out_path}: {e}")
 
     def _execute_setup_command(self, cmd_str: str) -> None:
         """Execute a setup command via valkey client."""
