@@ -1265,6 +1265,10 @@ Each JSONL row is one line; this example is wrapped for readability:
 }
 ```
 
+`utils/push_timeseries_to_postgres.py` pushes these rows to the
+`benchmark_timeseries_tiering` table for the `valkey-tiering` dashboard, see
+`dashboards/README.md`.
+
 ## Performance Profiling
 
 The framework includes a generic profiler that works with both core and FTS tests.
