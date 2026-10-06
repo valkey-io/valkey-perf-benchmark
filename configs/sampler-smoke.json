@@ -4,12 +4,12 @@
     "test_groups": [
       {
         "group": 1,
-        "description": "Sample a live stock valkey-server through a tiny write then read workload",
+        "description": "Short SET then GET workload",
         "scenarios": [
           {
             "id": "a",
             "type": "write",
-            "description": "SET, sampled for the measured phase only",
+            "description": "SET with 64 byte values over 10k keys",
             "test": "SET",
             "duration": 15,
             "keyspacelen": 10000,
@@ -20,7 +20,7 @@
           {
             "id": "b",
             "type": "read",
-            "description": "GET over a seeded keyspace; the populate pass is not sampled",
+            "description": "GET over a 10k key keyspace seeded with SET",
             "test": "GET",
             "populate_with": "SET",
             "duration": 15,

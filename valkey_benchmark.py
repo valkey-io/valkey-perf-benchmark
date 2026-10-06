@@ -16,7 +16,8 @@ import valkey
 from process_metrics import MetricsProcessor
 from valkey_server import ServerLauncher, apply_config_to_servers
 from profiler import PerformanceProfiler
-from metrics_sampler import MetricsSampler
+from metrics_sampler import MetricsSampler, append_jsonl
+from samplers import DEFAULT_SOURCES
 from samplers.valkey_info import parse_info
 from utils.git_utils import resolve_ref, get_commit_timestamp
 from utils.cpu_utils import format_core_list, parse_core_range
@@ -31,10 +32,9 @@ DEFAULT_TIMEOUT = 30
 # Timeout for the one-shot INFO that resolves the server pid for sampling.
 SERVER_PID_INFO_TIMEOUT = 5
 
-# One appended file per results dir holds every per-second sample of the run.
-# Scenarios, repeated runs and config sets all append to it, exactly as they do
-# to metrics.json, and rows are told apart by the identity fields they carry.
-TIMESERIES_FILENAME = "timeseries.json"
+# One appended JSON Lines file per results dir holds every per-second sample of
+# the run, and rows are told apart by the identity fields they carry.
+TIMESERIES_FILENAME = "timeseries.jsonl"
 
 # Supported Valkey benchmark commands
 READ_COMMANDS = ["GET", "MGET", "LRANGE", "SISMEMBER", "ZSCORE", "ZRANGE"]
@@ -127,10 +127,6 @@ class ClientRunner:
         self.config_suffix = "default"
         self.current_run = 1
         self.client_cpu_ranges = []
-        # Used only for its append-and-atomically-replace file helper, which
-        # reads no per-run metadata off the instance. The processor that stamps
-        # metric rows is built per run in _setup_scenario_tooling.
-        self.metrics_processor = MetricsProcessor(commit_id, cluster_mode, tls_mode, "")
 
     def _create_client(self, port: Optional[int] = None) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
@@ -777,6 +773,11 @@ class ClientRunner:
         profile_id = f"group{group_id}_{scenario_type}_{scenario_id}_{config_suffix}"
 
         warmup_duration = scenario.get("warmup", 0)
+        sampling_metadata = {
+            "metrics_processor": metrics_processor,
+            "config_set": config_set,
+            "group_description": group_description,
+        }
         try:
             # Population failures follow the scenario's normal error policy.
             self._populate_scenario_keyspace(scenario, seed_val)
@@ -794,7 +795,9 @@ class ClientRunner:
                     # One sampler wraps the whole parallel client set: it watches
                     # the server, not the clients. The rows it collects after the
                     # last client exits cover in-memory aggregation only.
-                    with self._per_second_sampling(scenario, group_id):
+                    with self._per_second_sampling(
+                        scenario, group_id, **sampling_metadata
+                    ):
                         metrics_list = self._run_mixed_workload(
                             scenario,
                             group_id,
@@ -806,7 +809,7 @@ class ClientRunner:
                     return metrics_list if metrics_list else None
 
                 # Invocation errors reach the outer scenario error policy.
-                with self._per_second_sampling(scenario, group_id):
+                with self._per_second_sampling(scenario, group_id, **sampling_metadata):
                     proc, aggregated_row = self._execute_benchmark_run(
                         scenario, seed_val
                     )
@@ -1015,7 +1018,7 @@ class ClientRunner:
         Read through valkey-cli rather than plumbed across from the launcher, so
         the wiring behaves the same for a launcher-managed server and for
         ``--use-running-server``. A None pid is a supported sampler state: it
-        warns once and leaves the per-process CPU columns at 0.
+        warns once and records host CPU only.
         """
         cmd = [
             str(self.valkey_path / VALKEY_CLI),
@@ -1055,12 +1058,20 @@ class ClientRunner:
         """Return the identity a scenario's rows are keyed by."""
         return f"{group_id}_{scenario.get('id', 'unknown')}"
 
-    def _build_metrics_sampler(self, scenario: dict, group_id) -> MetricsSampler:
-        """Construct a sampler whose rows carry this scenario's run identity."""
+    def _build_metrics_sampler(
+        self,
+        scenario: dict,
+        group_id,
+        metrics_processor=None,
+        config_set: Optional[dict] = None,
+        group_description: Optional[str] = None,
+    ) -> MetricsSampler:
+        """Construct a sampler whose rows carry the metric row identity."""
         if self.tls_mode:
             logging.warning(
-                "Per-second sampling issues INFO without TLS arguments, so the "
-                "sampled columns will be 0 against a TLS-only server"
+                "Per-second sampling issues valkey-cli calls without TLS "
+                "arguments, so the valkey_info and latency_histogram keys will "
+                "be absent against a TLS-only server"
             )
 
         if scenario.get("type") == "mixed":
@@ -1077,28 +1088,44 @@ class ClientRunner:
             clients = scenario.get("clients", 1)
             start_delay = self._inline_warmup_seconds(scenario)
 
-        context = {
-            "commit": self.commit_id,
-            "scenario": scenario.get("id", "unknown"),
-            "test_id": self._scenario_test_id(scenario, group_id),
-            "command": (
-                scenario.get("command")
-                or scenario.get("test")
-                or scenario.get("type", "unknown")
+        if metrics_processor is None:
+            metrics_processor = MetricsProcessor(
+                self.commit_id,
+                self.cluster_mode,
+                self.tls_mode,
+                self.get_commit_time(self.commit_id),
+                self.io_threads,
+                self.benchmark_threads,
+                self.architecture,
+                self.repository,
+            )
+        context = metrics_processor.build_base_metadata(
+            scenario.get("command")
+            or scenario.get("test")
+            or scenario.get("type", "unknown"),
+            scenario.get("data_size", 100),
+            scenario.get("pipeline", 1),
+            clients,
+            requests=scenario.get("requests") or scenario.get("maxdocs"),
+            warmup=scenario.get("warmup_inline", scenario.get("warmup", 0)),
+            duration=scenario.get("duration"),
+        )
+        scenario_id = scenario.get("id", "unknown")
+        self._apply_row_metadata(
+            context,
+            test_id=self._scenario_test_id(scenario, group_id),
+            test_phase=scenario.get("type", "test"),
+            group_id=group_id,
+            scenario_id=scenario_id,
+            config_set=(
+                config_set if config_set is not None else self.current_config_set
             ),
-            "data_size": scenario.get("data_size", 100),
-            "pipeline": scenario.get("pipeline", 1),
-            "clients": clients,
-            "run": self.current_run,
-            # Every scenario, run and config set appends to one timeseries file,
-            # so rows carry the same identity fields metric rows are stamped
-            # with in _apply_row_metadata and build_base_metadata.
-            "config_set": self.current_config_set,
-        }
-        if self.io_threads is not None:
-            context["io_threads"] = self.io_threads
-        if self.architecture is not None:
-            context["architecture"] = self.architecture
+            group_description=group_description,
+            scenario_description=scenario.get("description"),
+            dataset=scenario.get("dataset"),
+        )
+        context["run"] = self.current_run
+        context["profiling_set"] = self._resolve_effective_profiling(scenario)
 
         options = self._per_second_sampling_options()
         return MetricsSampler(
@@ -1107,12 +1134,8 @@ class ClientRunner:
             cli_path=str(self.valkey_path / VALKEY_CLI),
             server_pid=self._resolve_server_pid(),
             context=context,
-            sources=options.get("sources"),
+            sources=self._sampling_sources(),
             cpu_range=options.get("cpu_range"),
-            disk_path=options.get("disk_path"),
-            ext_storage_path=self.config.get("custom-server-configs", {}).get(
-                "ext-storage-path"
-            ),
             # The framework started the server here, so the host sources
             # describe it whatever address the client was pointed at.
             server_local=True if self.server_launcher is not None else None,
@@ -1131,13 +1154,33 @@ class ClientRunner:
         value = self.config.get("per_second_sampling")
         return value if isinstance(value, dict) else {}
 
+    def _sampling_sources(self) -> dict:
+        """Return source name to options, with the disk path defaulted.
+
+        An unset disk ``path`` falls back to
+        ``custom-server-configs.ext-storage-path`` when that is configured.
+        """
+        configured = self._per_second_sampling_options().get("sources")
+        sources = {
+            name: dict(options)
+            for name, options in (
+                configured or {name: {} for name in DEFAULT_SOURCES}
+            ).items()
+        }
+        ext_storage_path = self.config.get("custom-server-configs", {}).get(
+            "ext-storage-path"
+        )
+        if "disk" in sources and ext_storage_path:
+            sources["disk"].setdefault("path", ext_storage_path)
+        return sources
+
     def _start_metrics_sampler(
-        self, scenario: dict, group_id
+        self, scenario: dict, group_id, **row_metadata
     ) -> Optional[MetricsSampler]:
         """Construct and start a sampler, returning None when that fails."""
         sampler = None
         try:
-            sampler = self._build_metrics_sampler(scenario, group_id)
+            sampler = self._build_metrics_sampler(scenario, group_id, **row_metadata)
             sampler.start()
             return sampler
         except Exception as e:
@@ -1157,34 +1200,28 @@ class ClientRunner:
     def _stop_metrics_sampler(
         self, sampler: MetricsSampler, scenario: dict, group_id
     ) -> None:
-        """Stop a sampler and append its rows to the shared time series file.
-
-        Rows go to one ``timeseries.json`` per results dir, appended the way
-        metrics.json already is, so repeated runs, several config sets and both
-        cluster modes accumulate instead of overwriting one another.
-        """
+        """Stop a sampler and append its rows to the shared time series file."""
         test_id = self._scenario_test_id(scenario, group_id)
         try:
             sampler.stop()
-            self.metrics_processor.write_metrics(
-                self.results_dir, sampler.rows, filename=TIMESERIES_FILENAME
-            )
+            append_jsonl(self.results_dir / TIMESERIES_FILENAME, sampler.rows)
         except Exception as e:
             logging.warning(f"Failed to finalize per-second samples for {test_id}: {e}")
 
     @contextmanager
-    def _per_second_sampling(self, scenario: dict, group_id):
+    def _per_second_sampling(self, scenario: dict, group_id, **row_metadata):
         """Sample the server for the measured phase of a scenario only.
 
         Unless the root config opts in with ``per_second_sampling``, this is a
-        no-op and the sampler class is never constructed. Every sampler failure
-        is logged and swallowed: sampling is observability and must never fail a
-        benchmark run.
+        no-op and the sampler class is never constructed. row_metadata is
+        passed to _build_metrics_sampler. Every sampler failure is logged and
+        swallowed: sampling is observability and must never fail a benchmark
+        run.
         """
         sampler = None
         value = self.config.get("per_second_sampling")
         if value is True or isinstance(value, dict):
-            sampler = self._start_metrics_sampler(scenario, group_id)
+            sampler = self._start_metrics_sampler(scenario, group_id, **row_metadata)
         try:
             yield
         finally:

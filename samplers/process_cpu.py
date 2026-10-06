@@ -1,198 +1,70 @@
-"""Host and process CPU source for the per-second metrics sampler.
+"""Host and server thread CPU source for the per-second metrics sampler.
 
 Reads /proc, so it describes the machine the sampler runs on and is collected
-only when the server runs there. CPU percentages are tick deltas over the gap
-since this source's last successful read, where 100.0 means one fully busy
-core, so a multi-threaded server can exceed 100. The async IO worker threads
-are isolated by thread name and reported separately from the main thread. The
-`valkey_cpu_*` columns are emitted only when INFO does not report the main
-thread CPU seconds.
+only when the server runs there. Records the cumulative `cpu` lines of
+/proc/stat and, for every thread of the server pid, its name and cumulative
+utime and stime, all in raw clock ticks.
 """
 
-import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-from .base import ASIO_THREAD_NAME, SampleSource, read_text
-
-# Kernel clock ticks per second, used to convert /proc CPU times to seconds.
-_CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+from .base import SampleSource
 
 _PROC_DIR = Path("/proc")
-_PROC_STAT_PATH = "/proc/stat"
 
 
-def read_system_cpu_ticks() -> Optional[Tuple[int, int, int]]:
-    """Return (user+nice, system, total) ticks from /proc/stat, or None.
-
-    total is the sum of every reported bucket, so the derived percentages
-    account for iowait, irq, softirq and steal.
-    """
-    first_line = read_text(_PROC_STAT_PATH).split("\n", 1)[0]
-    parts = first_line.split()
-    if len(parts) < 5 or parts[0] != "cpu":
-        return None
-    try:
-        values = [int(part) for part in parts[1:]]
-    except ValueError:
-        return None
-    # /proc/stat cpu buckets: user nice system idle iowait irq softirq steal ...
-    return values[0] + values[1], values[2], sum(values)
+def parse_proc_stat(text: str) -> Dict[str, List[int]]:
+    """Return the counters of every `cpu` line of /proc/stat, keyed by name."""
+    lines = (line.split() for line in text.splitlines())
+    return {
+        parts[0]: [int(value) for value in parts[1:]]
+        for parts in lines
+        if parts and parts[0].startswith("cpu")
+    }
 
 
-def _parse_proc_stat_ticks(stat_line: str) -> Optional[Tuple[int, int]]:
-    """Return (utime, stime) ticks from a stat line, split after the comm field."""
-    _, _, tail = stat_line.partition(") ")
-    parts = tail.split()
+def parse_task_stat(text: str) -> Tuple[str, int, int]:
+    """Return (comm, utime, stime) from a /proc/<pid>/task/<tid>/stat line."""
+    head, _, tail = text.rpartition(") ")
+    fields = tail.split()
     # tail starts at field 3 (state), so utime (field 14) is index 11.
-    if len(parts) < 13:
-        return None
-    try:
-        return int(parts[11]), int(parts[12])
-    except ValueError:
-        return None
+    return head.partition("(")[2], int(fields[11]), int(fields[12])
 
 
-def read_main_thread_cpu_ticks(pid: int) -> Optional[Tuple[int, int]]:
-    """Return (utime, stime) ticks of a process's main thread, or None.
-
-    The main thread's task id equals the process id, so this excludes the
-    worker threads the whole-process stat line sums in.
-    """
-    stat_line = read_text(str(_PROC_DIR / str(pid) / "task" / str(pid) / "stat"))
-    if not stat_line:
-        return None
-    return _parse_proc_stat_ticks(stat_line)
-
-
-def read_thread_cpu_ticks(pid: int, thread_name: str) -> Optional[int]:
-    """Return summed user+system ticks of threads named thread_name.
-
-    Returns 0 when the process has no such thread, and None when the task
-    directory cannot be listed.
-    """
-    try:
-        task_dirs = list((_PROC_DIR / str(pid) / "task").iterdir())
-    except OSError:
-        return None
-
-    total_ticks = 0
-    for task_dir in task_dirs:
-        if read_text(str(task_dir / "comm")).strip() != thread_name:
+def read_threads(pid: int) -> Dict[str, Dict[str, Any]]:
+    """Return {tid: {comm, utime, stime}} for every thread of pid."""
+    threads: Dict[str, Dict[str, Any]] = {}
+    for task_dir in (_PROC_DIR / str(pid) / "task").iterdir():
+        try:
+            stat = (task_dir / "stat").read_text()
+        except OSError:
             continue
-        ticks = _parse_proc_stat_ticks(read_text(str(task_dir / "stat")))
-        if ticks:
-            total_ticks += ticks[0] + ticks[1]
-    return total_ticks
-
-
-def ticks_to_percent(tick_delta: int, interval: float) -> float:
-    """Convert a CPU tick delta over interval seconds to percent of one core."""
-    if tick_delta <= 0 or interval <= 0:
-        return 0.0
-    return round(tick_delta / (interval * _CLK_TCK) * 100, 2)
+        comm, utime, stime = parse_task_stat(stat)
+        threads[task_dir.name] = {"comm": comm, "utime": utime, "stime": stime}
+    return threads
 
 
 class ProcessCpuSource(SampleSource):
-    """Host CPU, main thread CPU and async IO worker thread CPU columns."""
+    """Raw /proc/stat cpu lines and per-thread server CPU ticks."""
 
     name = "process_cpu"
     local_only = True
     linux_only = True
 
-    def __init__(self):
-        """Initialize the tick baselines, empty until the second tick."""
-        self._prev_system_cpu: Optional[Tuple[int, int, int]] = None
-        self._prev_main_thread_cpu: Optional[Tuple[int, int]] = None
-        self._prev_asio_ticks: Optional[int] = None
-        self._main_thread_time: Optional[float] = None
-        self._asio_time: Optional[float] = None
+    def start(self, ctx) -> None:
+        """Warn once when there is no server pid to read threads for."""
+        super().start(ctx)
+        if ctx.server_pid is None:
+            ctx.warn_once(
+                "no_pid", "No server pid given, process_cpu records host CPU only"
+            )
 
-    @staticmethod
-    def _interval(last_success: Optional[float], now: float) -> Optional[float]:
-        """Return seconds since a counter's last successful read."""
-        if last_success is None:
-            return None
-        elapsed = now - last_success
-        return elapsed if elapsed > 0 else None
-
-    def sample(self, now: float) -> Dict[str, Any]:
-        """Derive host, main thread and async IO thread CPU percentages."""
-        metrics: Dict[str, Any] = {
-            "asio_cpu_pct": 0.0,
-            "cpu_user": 0.0,
-            "cpu_sys": 0.0,
+    def sample(self) -> Dict[str, Any]:
+        """Return the host cpu counters and the server's per-thread ticks."""
+        reading: Dict[str, Any] = {
+            "proc_stat": parse_proc_stat((_PROC_DIR / "stat").read_text())
         }
-        emit_main_thread = not self.ctx.main_thread_cpu_from_info
-        if emit_main_thread:
-            metrics.update(
-                {
-                    "valkey_cpu_user": 0.0,
-                    "valkey_cpu_sys": 0.0,
-                    "valkey_cpu_total": 0.0,
-                }
-            )
-
-        system_cpu = read_system_cpu_ticks()
-        if system_cpu is None:
-            self.ctx.warn_once(
-                "no_proc_stat", "Cannot read /proc/stat, host CPU will be 0"
-            )
-        else:
-            if self._prev_system_cpu is not None:
-                prev_user, prev_sys, prev_total = self._prev_system_cpu
-                total_delta = system_cpu[2] - prev_total
-                if total_delta > 0:
-                    metrics["cpu_user"] = round(
-                        (system_cpu[0] - prev_user) / total_delta * 100, 2
-                    )
-                    metrics["cpu_sys"] = round(
-                        (system_cpu[1] - prev_sys) / total_delta * 100, 2
-                    )
-            self._prev_system_cpu = system_cpu
-
-        if self.ctx.server_pid is None:
-            self.ctx.warn_once(
-                "no_pid", "No server pid given, process CPU columns will be 0"
-            )
-            return metrics
-
-        if emit_main_thread:
-            main_thread_cpu = read_main_thread_cpu_ticks(self.ctx.server_pid)
-            if main_thread_cpu is None:
-                self.ctx.warn_once(
-                    "no_main_thread_stat",
-                    f"Cannot read the main thread stat of pid "
-                    f"{self.ctx.server_pid}, server CPU will be 0",
-                )
-            else:
-                interval = self._interval(self._main_thread_time, now)
-                if self._prev_main_thread_cpu is not None and interval:
-                    metrics["valkey_cpu_user"] = ticks_to_percent(
-                        main_thread_cpu[0] - self._prev_main_thread_cpu[0], interval
-                    )
-                    metrics["valkey_cpu_sys"] = ticks_to_percent(
-                        main_thread_cpu[1] - self._prev_main_thread_cpu[1], interval
-                    )
-                    metrics["valkey_cpu_total"] = round(
-                        metrics["valkey_cpu_user"] + metrics["valkey_cpu_sys"], 2
-                    )
-                self._prev_main_thread_cpu = main_thread_cpu
-                self._main_thread_time = now
-
-        asio_ticks = read_thread_cpu_ticks(self.ctx.server_pid, ASIO_THREAD_NAME)
-        if asio_ticks is None:
-            self.ctx.warn_once(
-                "no_task_dir",
-                f"Cannot list /proc/{self.ctx.server_pid}/task, asio CPU will be 0",
-            )
-        else:
-            interval = self._interval(self._asio_time, now)
-            if self._prev_asio_ticks is not None and interval:
-                metrics["asio_cpu_pct"] = ticks_to_percent(
-                    asio_ticks - self._prev_asio_ticks, interval
-                )
-            self._prev_asio_ticks = asio_ticks
-            self._asio_time = now
-
-        return metrics
+        if self.ctx.server_pid is not None:
+            reading["threads"] = read_threads(self.ctx.server_pid)
+        return reading

@@ -1,7 +1,7 @@
 """Sample sources a per-second metrics run can select between.
 
-A config names sources by the keys of `SOURCES`, and a run that names none gets
-`DEFAULT_SOURCES`.
+A config names sources by the keys of `SOURCES`, each with its own options
+object, and a run that names none gets `DEFAULT_SOURCES`.
 """
 
 from .base import SampleSource, SamplerContext

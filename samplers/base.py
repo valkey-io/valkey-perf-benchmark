@@ -1,20 +1,15 @@
 """Shared plumbing for the pluggable per-second sample sources.
 
-A source owns one group of columns and is asked for them once per tick. The
-sampler loop never inspects a source beyond its `name`, its `local_only` and
-`linux_only` flags and the dict it returns, so adding a column group means
-adding a source and naming it in `samplers.SOURCES`.
+A source reads one thing once per tick and returns what it read as a dict,
+which the sampler stores in the row under the source's `name`. Each source
+declares and validates its own options, so adding a source means adding a
+class here and naming it in `samplers.SOURCES`.
 """
 
 import logging
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
-
-# Thread name set by pthread_setname_np in the flash cache IO worker
-# (valkey-data-tiering src/storage/storage_flashcache_real.c:162).
-ASIO_THREAD_NAME = "fc_io_worker"
 
 CLI_TIMEOUT_SEC = 5
 
@@ -26,68 +21,44 @@ def log_warning(key: str, message: str) -> None:
 
 @dataclass
 class SamplerContext:
-    """Target identity and shared helpers handed to every source at start.
-
-    `main_thread_cpu_from_info` is set by the INFO source when the server
-    reports its main thread CPU seconds, so the /proc source knows to leave
-    those columns to it.
-    """
+    """Target identity and shared helpers handed to every source at start."""
 
     host: str = "127.0.0.1"
     port: int = 6379
     cli_path: str = "valkey-cli"
     server_pid: Optional[int] = None
-    block_device: Optional[str] = None
-    disk_path: Optional[str] = None
-    ext_storage_path: Optional[str] = None
-    main_thread_cpu_from_info: bool = False
     warn_once: Callable[[str, str], None] = field(default=log_warning)
 
 
 class SampleSource:
-    """One group of columns, sampled once per tick."""
+    """One raw reading, taken once per tick."""
 
     name: str = ""
     local_only: bool = False
     linux_only: bool = False
+    option_names: Tuple[str, ...] = ()
+
+    def __init__(self, options: Optional[Dict[str, Any]] = None):
+        """Store this source's options from the config."""
+        self.options = dict(options or {})
+
+    @classmethod
+    def validate_options(cls, options: Any) -> None:
+        """Raise ValueError when options is not an object of known keys."""
+        label = f"'per_second_sampling.sources.{cls.name}'"
+        if not isinstance(options, dict):
+            raise ValueError(f"{label} must be an object")
+        unknown = sorted(set(options) - set(cls.option_names))
+        if unknown:
+            raise ValueError(f"{label} does not support key(s): {unknown}")
 
     def start(self, ctx: SamplerContext) -> None:
         """Store the context. A source that resolves a target extends this."""
         self.ctx = ctx
 
-    def sample(self, now: float) -> Dict[str, Any]:
-        """Return this source's columns for one tick.
-
-        now is the tick's `time.monotonic()`. A source that derives rates keeps
-        the timestamp of its own last successful read and divides by the gap
-        since then, so a failed read widens the next interval instead of
-        inflating its rate.
-        """
+    def sample(self) -> Optional[Dict[str, Any]]:
+        """Return this tick's reading, or None when it could not be read."""
         raise NotImplementedError
-
-
-def read_text(path: str, default: str = "") -> str:
-    """Read a procfs/sysfs file, returning default if it is unreadable."""
-    try:
-        return Path(path).read_text()
-    except OSError:
-        return default
-
-
-def to_int(value: Optional[str], default: int = 0) -> int:
-    """Parse an INFO or /proc value as int, returning default on failure."""
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def to_float(value: Optional[str], default: float = 0.0) -> float:
-    """Parse an INFO or /proc value as float, returning default on failure."""
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return default
 
 
 def _command_label(args: Tuple[str, ...]) -> str:

@@ -1,26 +1,40 @@
-"""Per-second metrics sampler for Valkey data tiering benchmarks.
+"""Per-second metrics sampler for Valkey benchmarks.
 
-Emits one row per sample of a benchmark's measured phase, with `elapsed_sec` as
-the x-axis so several commits overlay on one chart. Sampling runs on a
-background daemon thread and never raises into the caller, and each source is
-guarded so one unreadable source leaves the other columns intact. Sources that
-read /proc or /sys are dropped when the server does not run on this machine,
-and on platforms without /proc and /sys.
+Records one row per tick of a benchmark's measured phase: the run identity,
+`sample_time`, `elapsed_sec` (the x-axis, so several commits overlay on one
+chart) and one key per source holding that source's raw reading. A source that
+fails a tick is absent from that row. Sampling runs on a background daemon
+thread and never raises into the caller. Sources that read /proc or /sys are
+dropped when the server does not run on this machine, and on platforms without
+/proc and /sys.
 """
 
 import ipaddress
+import json
 import logging
 import os
 import socket
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from samplers import DEFAULT_SOURCES, SOURCES, SamplerContext, SampleSource
 from utils.cpu_utils import parse_core_range
 
-_JOIN_TIMEOUT_SEC = 5
+TICK_FIELDS = ("sample_time", "elapsed_sec")
+
+
+def append_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
+    """Append rows to path as JSON Lines, one compact object per line."""
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
 def _can_bind(family: int, address: str) -> bool:
@@ -71,10 +85,7 @@ class MetricsSampler:
         server_pid: Optional[int] = None,
         interval: float = 1.0,
         context: Optional[Dict[str, Any]] = None,
-        block_device: Optional[str] = None,
-        disk_path: Optional[str] = None,
-        ext_storage_path: Optional[str] = None,
-        sources: Optional[Sequence[str]] = None,
+        sources: Optional[Dict[str, Dict[str, Any]]] = None,
         cpu_range: Optional[str] = None,
         server_local: Optional[bool] = None,
         start_delay: float = 0.0,
@@ -87,13 +98,9 @@ class MetricsSampler:
             cli_path: valkey-cli executable used to issue commands
             server_pid: valkey-server pid, for per-thread CPU
             interval: seconds between samples
-            context: run-identity fields merged into every emitted row
-            block_device: block device name to sample, resolved from a path
-                when None
-            disk_path: filesystem path whose backing block device is sampled
-            ext_storage_path: external storage path, used when disk_path is
-                unset
-            sources: source names to sample, DEFAULT_SOURCES when None
+            context: run identity fields leading every emitted row
+            sources: source name to options, every DEFAULT_SOURCES entry with
+                no options when None
             cpu_range: cores to pin the sampler thread to, unpinned when None
             server_local: whether the server runs on this machine, resolved
                 from host when None
@@ -109,10 +116,14 @@ class MetricsSampler:
         self.server_pid = server_pid
         self.interval = interval
         self.context = dict(context or {})
-        self.block_device = block_device
-        self.disk_path = disk_path
-        self.ext_storage_path = ext_storage_path
-        self.source_names = tuple(sources) if sources else DEFAULT_SOURCES
+        self.source_options = (
+            dict(sources) if sources else {name: {} for name in DEFAULT_SOURCES}
+        )
+        collisions = set(self.context) & {*TICK_FIELDS, *SOURCES}
+        if collisions:
+            raise ValueError(
+                f"Row identity field(s) {sorted(collisions)} collide with sample keys"
+            )
         self.cpu_range = cpu_range
         self.start_delay = start_delay
 
@@ -151,9 +162,7 @@ class MetricsSampler:
         """Stop sampling and join the background thread."""
         self._stop_event.set()
         if self._sampler_thread is not None:
-            self._sampler_thread.join(timeout=_JOIN_TIMEOUT_SEC)
-            if self._sampler_thread.is_alive():
-                logging.warning("Metrics sampler thread did not stop within timeout")
+            self._sampler_thread.join()
             self._sampler_thread = None
 
         logging.info(f"Stopped metrics sampler after {len(self._rows)} samples")
@@ -167,7 +176,9 @@ class MetricsSampler:
 
     def _build_sources(self) -> List[SampleSource]:
         """Instantiate and start the selected sources, dropping those that fail."""
-        selected = [SOURCES[name]() for name in self.source_names]
+        selected = [
+            SOURCES[name](options) for name, options in self.source_options.items()
+        ]
 
         if not sys.platform.startswith("linux"):
             platform_only = [source.name for source in selected if source.linux_only]
@@ -194,9 +205,6 @@ class MetricsSampler:
             port=self.port,
             cli_path=self.cli_path,
             server_pid=self.server_pid,
-            block_device=self.block_device,
-            disk_path=self.disk_path,
-            ext_storage_path=self.ext_storage_path,
             warn_once=self._warn_once,
         )
 
@@ -252,19 +260,23 @@ class MetricsSampler:
         start = self._start_monotonic if self._start_monotonic is not None else now
 
         row: Dict[str, Any] = {
-            "timestamp": int(time.time()),
+            **self.context,
+            "sample_time": datetime.now(timezone.utc).isoformat(
+                timespec="milliseconds"
+            ),
             "elapsed_sec": int(round(now - start)),
         }
         for source in self._sources:
             try:
-                row.update(source.sample(now))
+                reading = source.sample()
             except Exception as e:
+                reading = None
                 self._warn_once(
                     f"sample_failed_{source.name}",
                     f"Source {source.name} failed to sample: {e}",
                 )
-        # Context last so run identity always survives a name collision.
-        row.update(self.context)
+            if reading is not None:
+                row[source.name] = reading
 
         with self._lock:
             self._rows.append(row)

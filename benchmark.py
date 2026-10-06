@@ -295,16 +295,16 @@ def _validate_cpu_range(value, key_name: str) -> None:
 def _validate_per_second_sampling(value) -> None:
     """Validate the `per_second_sampling` config value.
 
-    A bool keeps the whole default source set, unpinned. An object selects
-    sources, pins the sampler thread, names the path whose block device is
-    sampled, and enables sampling by being present.
+    A bool keeps the whole default source set, unpinned. An object enables
+    sampling by being present, maps source names to their options under
+    `sources`, and pins the sampler thread with `cpu_range`.
     """
     if isinstance(value, bool):
         return
     if not isinstance(value, dict):
         raise ValueError("'per_second_sampling' must be a boolean or an object")
 
-    unsupported = sorted(set(value) - {"sources", "cpu_range", "disk_path"})
+    unsupported = sorted(set(value) - {"sources", "cpu_range"})
     if unsupported:
         raise ValueError(
             f"'per_second_sampling' does not support key(s): {unsupported}"
@@ -312,28 +312,21 @@ def _validate_per_second_sampling(value) -> None:
 
     if "sources" in value:
         sources = value["sources"]
-        if not isinstance(sources, list) or not sources:
+        if not isinstance(sources, dict) or not sources:
             raise ValueError(
-                "'per_second_sampling.sources' must be a non-empty list of source names"
+                "'per_second_sampling.sources' must be a non-empty object "
+                "mapping source names to options"
             )
-        if len(set(sources)) != len(sources):
-            raise ValueError("'per_second_sampling.sources' must not repeat a source")
-        for source in sources:
-            if source not in SOURCES:
+        for name, options in sources.items():
+            if name not in SOURCES:
                 raise ValueError(
                     f"'per_second_sampling.sources' has unknown source "
-                    f"'{source}', expected one of {sorted(SOURCES)}"
+                    f"'{name}', expected one of {sorted(SOURCES)}"
                 )
+            SOURCES[name].validate_options(options)
 
     if "cpu_range" in value:
         _validate_cpu_range(value["cpu_range"], "per_second_sampling.cpu_range")
-
-    if "disk_path" in value:
-        disk_path = value["disk_path"]
-        if not isinstance(disk_path, str) or not disk_path.strip():
-            raise ValueError(
-                "'per_second_sampling.disk_path' must be a non-empty string"
-            )
 
 
 # ---------- Helpers ----------------------------------------------------------

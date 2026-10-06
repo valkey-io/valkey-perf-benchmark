@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from valkey_benchmark import ClientRunner, ORIGIN_FIELD, ORIGIN_SIMPLE
+from samplers import DEFAULT_SOURCES
 from process_metrics import MetricsProcessor
 
 
@@ -2034,451 +2035,215 @@ def _mixed_sampling_scenario():
         "id": "m1",
         "type": "mixed",
         "warmup": 0,
-        "writes": [{"id": "w", "command": "SET key:__rand_int__ v", "clients": 3}],
-        "reads": [{"id": "r", "command": "GET key:__rand_int__", "clients": 5}],
+        "writes": [{"id": "w", "test": "SET", "clients": 3, "warmup_inline": 5}],
+        "reads": [{"id": "r", "test": "GET", "clients": 5, "warmup_inline": 12}],
     }
+
+
+def _processor():
+    return MetricsProcessor(
+        "abc123", False, False, "2026-01-01T00:00:00+00:00", repository="valkey"
+    )
 
 
 class TestPerSecondSamplingWiring:
     """Tests for the per_second_sampling opt-in in _run_single_scenario."""
 
     @pytest.fixture(autouse=True)
-    def write_metrics(self, minimal_client_runner):
-        """Keep these tests off the real writer; rows are mock objects here."""
-        with patch.object(
-            minimal_client_runner.metrics_processor, "write_metrics"
-        ) as mock_write:
-            yield mock_write
-
-    @staticmethod
-    def _invoke(runner, scenario, metrics_processor=None):
-        return _invoke_scenario(runner, scenario, metrics_processor=metrics_processor)
+    def no_pid_lookup(self, minimal_client_runner):
+        with patch.object(minimal_client_runner, "_resolve_server_pid", return_value=7):
+            yield
 
     @pytest.mark.parametrize("flag", [None, False])
     def test_flag_absent_or_false_never_constructs_sampler(
         self, minimal_client_runner, flag
     ):
         runner = minimal_client_runner
-        if flag is None:
-            assert "per_second_sampling" not in runner.config
-        else:
+        if flag is not None:
             runner.config["per_second_sampling"] = flag
 
         with (
             patch("valkey_benchmark.MetricsSampler") as sampler_cls,
             patch.object(runner, "_run", return_value=MagicMock()),
         ):
-            self._invoke(runner, _sampling_scenario())
+            _invoke_scenario(runner, _sampling_scenario(), metrics_processor=None)
 
         sampler_cls.assert_not_called()
 
     @pytest.mark.parametrize(
-        "value", [True, {}, {"sources": ["valkey_info"]}, {"cpu_range": "0-1"}]
+        "value, ext_path, expected",
+        [
+            (True, None, {name: {} for name in DEFAULT_SOURCES}),
+            (
+                True,
+                "/mnt/ext",
+                {
+                    "valkey_info": {},
+                    "latency_histogram": {},
+                    "process_cpu": {},
+                    "disk": {"path": "/mnt/ext"},
+                },
+            ),
+            (
+                {"sources": {"disk": {"path": "/mnt/nvme"}}},
+                "/mnt/ext",
+                {"disk": {"path": "/mnt/nvme"}},
+            ),
+            ({"sources": {"valkey_info": {}}}, "/mnt/ext", {"valkey_info": {}}),
+        ],
     )
-    def test_true_or_object_constructs_sampler(self, minimal_client_runner, value):
+    def test_sources_and_disk_path_default(
+        self, minimal_client_runner, value, ext_path, expected
+    ):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = value
+        if ext_path:
+            runner.config["custom-server-configs"] = {"ext-storage-path": ext_path}
 
-        with (
-            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
-            patch.object(runner, "_run", return_value=MagicMock()),
-        ):
-            self._invoke(runner, _sampling_scenario())
+        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
+            runner._build_metrics_sampler(_sampling_scenario(), 1, _processor())
 
-        sampler_cls.assert_called_once()
+        assert sampler_cls.call_args.kwargs["sources"] == expected
 
-    def test_bool_form_passes_no_sources_or_cpu_range(self, minimal_client_runner):
+    def test_wraps_only_the_measured_phase(self, minimal_client_runner):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
-
-        with (
-            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
-            patch.object(runner, "_run", return_value=MagicMock()),
-        ):
-            self._invoke(runner, _sampling_scenario())
-
-        kwargs = sampler_cls.call_args.kwargs
-        assert kwargs["sources"] is None
-        assert kwargs["cpu_range"] is None
-
-    def test_object_form_passes_sources_and_cpu_range(self, minimal_client_runner):
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = {
-            "sources": ["valkey_info", "disk"],
-            "cpu_range": "56-63",
-        }
-
-        with (
-            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
-            patch.object(runner, "_run", return_value=MagicMock()),
-        ):
-            self._invoke(runner, _sampling_scenario())
-
-        kwargs = sampler_cls.call_args.kwargs
-        assert kwargs["sources"] == ["valkey_info", "disk"]
-        assert kwargs["cpu_range"] == "56-63"
-
-    def test_wraps_only_the_measured_phase(self, minimal_client_runner, write_metrics):
-        """start() lands after populate and warmup; stop()+write after the run."""
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-        scenario = _sampling_scenario(populate_with="SET key:__rand_int__ v", warmup=5)
-
         calls = []
-        sampler = MagicMock()
-        sampler.rows = [{"elapsed_sec": 0}]
+        sampler = MagicMock(rows=[{"elapsed_sec": 0}])
         sampler.start.side_effect = lambda: calls.append("start")
         sampler.stop.side_effect = lambda: calls.append("stop")
-        write_metrics.side_effect = lambda *a, **k: calls.append("write")
 
-        def fake_run(*args, **kwargs):
-            calls.append("benchmark")
-            return MagicMock()
+        def record(name):
+            return lambda *a, **k: calls.append(name) or MagicMock()
 
         with (
             patch("valkey_benchmark.MetricsSampler", return_value=sampler),
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch("valkey_benchmark.append_jsonl", side_effect=record("append")) as ap,
             patch.object(
-                runner,
-                "_populate_scenario_keyspace",
-                side_effect=lambda *a, **k: calls.append("populate"),
+                runner, "_populate_scenario_keyspace", side_effect=record("populate")
             ),
-            patch.object(
-                runner,
-                "_run_scenario_warmup",
-                side_effect=lambda *a, **k: calls.append("warmup"),
-            ),
-            patch.object(runner, "_run", side_effect=fake_run),
+            patch.object(runner, "_run_scenario_warmup", side_effect=record("warmup")),
+            patch.object(runner, "_run", side_effect=record("benchmark")),
+            patch.object(runner, "_build_scenario_metrics"),
         ):
-            self._invoke(runner, scenario)
+            _invoke_scenario(
+                runner, _sampling_scenario(), metrics_processor=_processor()
+            )
 
-        assert calls == ["populate", "warmup", "start", "benchmark", "stop", "write"]
-        # One appended file per results dir, never a per-test_id file.
-        write_metrics.assert_called_once_with(
-            runner.results_dir, sampler.rows, filename="timeseries.json"
+        assert calls == ["populate", "warmup", "start", "benchmark", "stop", "append"]
+        ap.assert_called_once_with(
+            runner.results_dir / "timeseries.jsonl", sampler.rows
         )
-        sampler.write.assert_not_called()
 
-    def test_context_carries_run_identity(self, minimal_client_runner):
+    def test_rows_carry_metric_row_identity(self, minimal_client_runner):
         runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-        runner.architecture = "aarch64"
-        runner.current_config_set = {"maxmemory": "1gb"}
+        runner.config_name = "smoke"
+        runner.module_commit = "def456"
+        runner.current_run = 2
+        runner.current_profiling_set = {"enabled": True, "mode": "cpu"}
+        scenario = _sampling_scenario(description="SET load")
 
-        with (
-            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
-            patch.object(runner, "_run", return_value=MagicMock()),
-        ):
-            self._invoke(runner, _sampling_scenario())
+        sampler = runner._build_metrics_sampler(
+            scenario, 1, _processor(), {"maxmemory": "1gb"}, "Group one"
+        )
 
-        kwargs = sampler_cls.call_args.kwargs
-        assert kwargs["server_pid"] == 4242
-        assert kwargs["context"] == {
+        assert sampler.context == {
+            **sampler.context,
+            "timestamp": "2026-01-01T00:00:00+00:00",
             "commit": "abc123",
-            "scenario": "s1",
-            "test_id": "1_s1",
+            "repository": "valkey",
             "command": "SET key:__rand_int__ v",
-            "data_size": 64,
-            "pipeline": 1,
-            "clients": 1,
-            "run": 1,
+            "cluster_mode": False,
+            "tls": False,
+            "test_id": "1_s1",
+            "test_phase": "write",
+            "group": 1,
+            "scenario": "s1",
             "config_set": {"maxmemory": "1gb"},
-            "architecture": "aarch64",
+            "group_description": "Group one",
+            "scenario_description": "SET load",
+            "config_name": "smoke",
+            "module_commit": "def456",
+            "run": 2,
+            "profiling_set": {"enabled": True, "mode": "cpu"},
         }
 
-    def test_run_number_lands_on_the_context(self, minimal_client_runner):
+    def test_profiled_run_builds_its_own_metadata(self, minimal_client_runner):
         runner = minimal_client_runner
-        runner.current_run = 3
-        sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
-        assert sampler.context["run"] == 3
+        with patch.object(runner, "get_commit_time", return_value="T") as commit_time:
+            sampler = runner._build_metrics_sampler(_sampling_scenario(), 1, None)
 
-    def test_two_runs_produce_contexts_numbered_one_and_two(
-        self, minimal_client_runner
+        commit_time.assert_called_once_with("abc123")
+        assert sampler.context["timestamp"] == "T"
+        assert sampler.context["test_id"] == "1_s1"
+
+    @pytest.mark.parametrize(
+        "scenario, delay, clients",
+        [
+            ({"id": "s", "type": "write", "test": "SET", "warmup_inline": 20}, 20, 1),
+            (_sampling_scenario(warmup_inline=20), 0, 1),
+            (_mixed_sampling_scenario(), 12, 8),
+        ],
+    )
+    def test_start_delay_and_clients(
+        self, minimal_client_runner, scenario, delay, clients
     ):
-        runner = minimal_client_runner
-        runner.runs = 2
-        runner.config["test_groups"] = [
-            {"group": 1, "scenarios": [_sampling_scenario()]}
-        ]
-
-        runs = []
-        for _ in runner._iterate_test_groups_scenarios():
-            sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
-            runs.append(sampler.context["run"])
-
-        assert runs == [1, 2]
-
-    def test_server_launcher_marks_the_server_local(self, minimal_client_runner):
-        runner = minimal_client_runner
-        runner.server_launcher = MagicMock()
-        sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
-        assert sampler.server_local is True
-
-    def test_no_server_launcher_leaves_locality_to_the_host(
-        self, minimal_client_runner
-    ):
-        runner = minimal_client_runner
-        runner.server_launcher = None
         with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(_sampling_scenario(), 1)
-        assert sampler_cls.call_args.kwargs["server_local"] is None
+            minimal_client_runner._build_metrics_sampler(scenario, 1, _processor())
 
-    def test_disk_path_and_ext_storage_path_are_passed(self, minimal_client_runner):
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = {"disk_path": "/mnt/data"}
-        runner.config["custom-server-configs"] = {"ext-storage-path": "/mnt/ext"}
-        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(_sampling_scenario(), 1)
         kwargs = sampler_cls.call_args.kwargs
-        assert kwargs["disk_path"] == "/mnt/data"
-        assert kwargs["ext_storage_path"] == "/mnt/ext"
-
-    def test_inline_warmup_delays_the_first_sample(self, minimal_client_runner):
-        runner = minimal_client_runner
-        scenario = {"id": "s1", "type": "write", "test": "SET", "warmup_inline": 20}
-        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(scenario, 1)
-        assert sampler_cls.call_args.kwargs["start_delay"] == 20
-
-    def test_command_scenario_warmup_inline_does_not_delay(self, minimal_client_runner):
-        """A command scenario's argv carries no --warmup, so nothing to skip."""
-        runner = minimal_client_runner
-        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(_sampling_scenario(warmup_inline=20), 1)
-        assert sampler_cls.call_args.kwargs["start_delay"] == 0
-
-    def test_no_inline_warmup_samples_immediately(self, minimal_client_runner):
-        runner = minimal_client_runner
-        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(_sampling_scenario(), 1)
-        assert sampler_cls.call_args.kwargs["start_delay"] == 0
-
-    def test_mixed_scenario_delays_by_the_longest_child_warmup(
-        self, minimal_client_runner
-    ):
-        runner = minimal_client_runner
-        scenario = _mixed_sampling_scenario()
-        scenario["writes"][0] = {"id": "w", "test": "SET", "warmup_inline": 5}
-        scenario["reads"][0] = {"id": "r", "test": "GET", "warmup_inline": 12}
-        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(scenario, 1)
-        assert sampler_cls.call_args.kwargs["start_delay"] == 12
-
-    def test_mixed_scenario_without_child_warmups_samples_immediately(
-        self, minimal_client_runner
-    ):
-        runner = minimal_client_runner
-        with patch("valkey_benchmark.MetricsSampler") as sampler_cls:
-            runner._build_metrics_sampler(_mixed_sampling_scenario(), 1)
-        assert sampler_cls.call_args.kwargs["start_delay"] == 0
-
-    def test_config_set_lands_on_every_sampled_row(self, minimal_client_runner):
-        """The context is merged into each row, so identity survives appending."""
-        runner = minimal_client_runner
-        runner.current_config_set = {"maxmemory": "1gb"}
-
-        sampler = runner._build_metrics_sampler(_sampling_scenario(), 1)
-        sampler._sample_once()
-        sampler._sample_once()
-
-        rows = sampler.rows
-        assert len(rows) == 2
-        assert all(row["config_set"] == {"maxmemory": "1gb"} for row in rows)
-        assert all(row["scenario"] == "s1" for row in rows)
-
-    def test_context_carries_io_threads_when_set(self, minimal_client_runner):
-        """io_threads is stamped on sampled rows exactly as on metric rows."""
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-
-        with (
-            patch("valkey_benchmark.MetricsSampler") as sampler_cls,
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
-            patch.object(runner, "_run", return_value=MagicMock()),
-        ):
-            self._invoke(runner, _sampling_scenario())
-            assert "io_threads" not in sampler_cls.call_args.kwargs["context"]
-
-            runner.io_threads = 4
-            self._invoke(runner, _sampling_scenario())
-
-        assert sampler_cls.call_args.kwargs["context"]["io_threads"] == 4
+        assert kwargs["start_delay"] == delay
+        assert kwargs["context"]["clients"] == clients
 
     def test_mixed_scenario_uses_exactly_one_sampler(self, minimal_client_runner):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
-        sampler = MagicMock()
+        sampler = MagicMock(rows=[])
 
         with (
-            patch(
-                "valkey_benchmark.MetricsSampler", return_value=sampler
-            ) as sampler_cls,
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
+            patch("valkey_benchmark.MetricsSampler", return_value=sampler) as cls,
             patch.object(runner, "_run_mixed_workload", return_value=[{"rps": 1.0}]),
         ):
-            result = self._invoke(
-                runner, _mixed_sampling_scenario(), metrics_processor=MagicMock()
+            result = _invoke_scenario(
+                runner, _mixed_sampling_scenario(), metrics_processor=_processor()
             )
 
         assert result == [{"rps": 1.0}]
-        assert sampler_cls.call_count == 1
-        assert sampler.start.call_count == 1
+        assert cls.call_count == sampler.start.call_count == 1
         assert sampler.stop.call_count == 1
-        # One sampler covers every mixed child, so clients is the total.
-        assert sampler_cls.call_args.kwargs["context"]["clients"] == 8
 
-    def test_start_failure_does_not_fail_run(
-        self, minimal_client_runner, write_metrics
+    @pytest.mark.parametrize("failing", ["start", "stop"])
+    def test_sampler_failure_does_not_fail_run(
+        self, minimal_client_runner, caplog, failing
     ):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
-        sampler = MagicMock()
-        sampler.start.side_effect = RuntimeError("sampler boom")
+        sampler = MagicMock(rows=[])
+        getattr(sampler, failing).side_effect = RuntimeError("sampler boom")
 
         with (
             patch("valkey_benchmark.MetricsSampler", return_value=sampler),
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
             patch.object(runner, "_run", return_value=MagicMock()),
             patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
+            caplog.at_level(logging.WARNING),
         ):
-            result = self._invoke(runner, _sampling_scenario())
-
-        assert result == {"rps": 1.0}
-        write_metrics.assert_not_called()
-
-    def test_construction_failure_does_not_fail_run(self, minimal_client_runner):
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-
-        with (
-            patch(
-                "valkey_benchmark.MetricsSampler",
-                side_effect=RuntimeError("construction boom"),
-            ),
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
-            patch.object(runner, "_run", return_value=MagicMock()),
-            patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
-        ):
-            result = self._invoke(runner, _sampling_scenario())
-
-        assert result == {"rps": 1.0}
-
-    def test_stop_failure_does_not_fail_run(self, minimal_client_runner):
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-        sampler = MagicMock()
-        sampler.stop.side_effect = RuntimeError("stop boom")
-
-        with (
-            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
-            patch.object(runner, "_run", return_value=MagicMock()),
-            patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
-        ):
-            result = self._invoke(runner, _sampling_scenario())
-
-        assert result == {"rps": 1.0}
-
-    def test_benchmark_failure_still_stops_sampler(
-        self, minimal_client_runner, write_metrics
-    ):
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-        sampler = MagicMock()
-
-        with (
-            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
-            patch.object(runner, "_resolve_server_pid", return_value=4242),
-            patch.object(runner, "_run", side_effect=RuntimeError("invocation boom")),
-        ):
-            result = self._invoke(
-                runner,
-                _sampling_scenario(),
-                MetricsProcessor("abc123", False, False, "<TS>"),
+            result = _invoke_scenario(
+                runner, _sampling_scenario(), metrics_processor=_processor()
             )
 
-        assert result["status"] == "failed"
-        assert sampler.stop.call_count == 1
-        assert write_metrics.call_count == 1
+        assert result == {"rps": 1.0}
+        assert getattr(sampler, failing).called
+        assert "sampler boom" in caplog.text
 
-
-class TestTimeseriesAppend:
-    """Tests that per-second rows accumulate in one appended timeseries.json."""
-
-    @staticmethod
-    def _stop(runner, scenario_id, rows, group_id=1):
-        """Drive the finalize path with a sampler that already holds rows."""
-        sampler = MagicMock()
-        sampler.rows = rows
-        runner._stop_metrics_sampler(sampler, {"id": scenario_id}, group_id)
-
-    @staticmethod
-    def _written(runner):
-        return json.loads((runner.results_dir / "timeseries.json").read_text())
-
-    def test_two_scenarios_share_one_file(self, minimal_client_runner, tmp_path):
+    def test_two_scenarios_append_to_one_jsonl(self, minimal_client_runner, tmp_path):
         runner = minimal_client_runner
         runner.results_dir = tmp_path
+        for scenario_id in ("a", "b"):
+            sampler = MagicMock(rows=[{"scenario": scenario_id}])
+            runner._stop_metrics_sampler(sampler, {"id": scenario_id}, 1)
 
-        self._stop(runner, "a", [{"scenario": "a", "elapsed_sec": 0}])
-        self._stop(runner, "b", [{"scenario": "b", "elapsed_sec": 0}])
-
-        assert [row["scenario"] for row in self._written(runner)] == ["a", "b"]
-        # No per-test_id files, so nothing to reconcile at push time.
-        assert [path.name for path in sorted(tmp_path.iterdir())] == ["timeseries.json"]
-
-    def test_repeated_run_of_one_scenario_keeps_both_row_sets(
-        self, minimal_client_runner, tmp_path
-    ):
-        """--runs 2 over one scenario appends rather than clobbering."""
-        runner = minimal_client_runner
-        runner.results_dir = tmp_path
-
-        first = [
-            {"scenario": "a", "elapsed_sec": 0, "timestamp": 100},
-            {"scenario": "a", "elapsed_sec": 1, "timestamp": 101},
-        ]
-        second = [
-            {"scenario": "a", "elapsed_sec": 0, "timestamp": 200},
-            {"scenario": "a", "elapsed_sec": 1, "timestamp": 201},
-        ]
-        self._stop(runner, "a", first)
-        self._stop(runner, "a", second)
-
-        rows = self._written(runner)
-        assert rows == first + second
-        # Repeated runs share (scenario, elapsed_sec) and part on timestamp.
-        assert [row["timestamp"] for row in rows] == [100, 101, 200, 201]
-
-    def test_config_set_survives_the_append(self, minimal_client_runner, tmp_path):
-        runner = minimal_client_runner
-        runner.results_dir = tmp_path
-
-        self._stop(runner, "a", [{"scenario": "a", "config_set": {"io_threads": 1}}])
-        self._stop(runner, "a", [{"scenario": "a", "config_set": {"io_threads": 8}}])
-
-        assert [row["config_set"] for row in self._written(runner)] == [
-            {"io_threads": 1},
-            {"io_threads": 8},
-        ]
-
-    def test_write_failure_is_logged_not_raised(self, minimal_client_runner, tmp_path):
-        """Sampling is observability and must never fail a benchmark run."""
-        blocker = tmp_path / "blocker"
-        blocker.write_text("not a directory")
-        runner = minimal_client_runner
-        runner.results_dir = blocker / "results"
-
-        self._stop(runner, "a", [{"scenario": "a", "elapsed_sec": 0}])
-
-    def test_no_rows_writes_no_file(self, minimal_client_runner, tmp_path):
-        runner = minimal_client_runner
-        runner.results_dir = tmp_path / "results"
-
-        self._stop(runner, "a", [])
-
-        assert not (runner.results_dir / "timeseries.json").exists()
+        lines = (tmp_path / "timeseries.jsonl").read_text().splitlines()
+        assert [json.loads(line)["scenario"] for line in lines] == ["a", "b"]
 
 
 class TestResolveServerPid:
@@ -2518,17 +2283,14 @@ class TestResolveServerPid:
             assert minimal_client_runner._resolve_server_pid() is None
 
     def test_sampler_gets_none_pid_when_resolution_fails(self, minimal_client_runner):
-        """A None pid is a supported sampler state, not a reason to skip sampling."""
-        runner = minimal_client_runner
-        runner.config["per_second_sampling"] = True
-
         with (
             patch("valkey_benchmark.MetricsSampler") as sampler_cls,
             patch(
                 "valkey_benchmark.subprocess.run", side_effect=OSError("no valkey-cli")
             ),
-            patch.object(runner, "_run", return_value=MagicMock()),
         ):
-            _invoke_scenario(runner, _sampling_scenario(), metrics_processor=None)
+            minimal_client_runner._build_metrics_sampler(
+                _sampling_scenario(), 1, _processor()
+            )
 
         assert sampler_cls.call_args.kwargs["server_pid"] is None
