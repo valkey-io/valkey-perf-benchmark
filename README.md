@@ -104,6 +104,13 @@ valkey-perf-benchmark/
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # CPU monitoring during tests
 ├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
+├── metrics_sampler.py       # 1 Hz per-second sampler (opt-in via per_second_sampling)
+├── samplers/                # Pluggable sample sources the sampler selects between
+│   ├── base.py             # SamplerContext, SampleSource, shared CLI helper
+│   ├── valkey_info.py      # Raw INFO ALL fields
+│   ├── latency_histogram.py # Raw LATENCY HISTOGRAM reply
+│   ├── process_cpu.py      # Raw /proc/stat and per-thread server CPU ticks (local only)
+│   └── disk.py             # Raw block device stat counters (local only)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
@@ -1117,6 +1124,75 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 
 `test_id` is `{group}_{scenario}` and `test_phase` is the scenario type
 (`read`, `write`, or `mixed_read` / `mixed_write` for mixed scenarios).
+
+## Per-Second Metrics Sampler
+
+`metrics_sampler.py` reads the server and the host once per second during a scenario's
+measured benchmark process and records what each source read, unprocessed. Deriving rates,
+percentiles and typed values is left to ingest. Sampling starts after any inline
+`warmup_inline`, so `elapsed_sec` 0 is the first measured second. Tick `k` is taken at
+`k` intervals after the first, and a tick that overruns skips the slots it missed.
+
+| Source              | Records                                                                 |
+| ------------------- | ----------------------------------------------------------------------- |
+| `valkey_info`       | every `INFO ALL` field as a string                                      |
+| `latency_histogram` | the cumulative `LATENCY HISTOGRAM` reply: per command `calls` and `histogram_usec`, server-side execution time in power-of-two microsecond buckets |
+| `process_cpu`       | the `cpu` lines of `/proc/stat` as `proc_stat`, and per server thread its `comm`, `utime` and `stime` in clock ticks as `threads`, keyed by tid |
+| `disk`              | the backing block `device` and its raw `/sys/block/<dev>/stat` counters as `stat` |
+
+`process_cpu` and `disk` read `/proc` and `/sys`, so they are collected only on Linux and
+only when the server runs on the sampling machine. `disk` samples the whole disk backing its
+`path` option, else `custom-server-configs.ext-storage-path`, else the server's
+`CONFIG GET dir`.
+
+**It is opt-in.** The root config key `per_second_sampling` takes either form:
+
+```json
+"per_second_sampling": true
+```
+
+```json
+"per_second_sampling": {
+  "sources": {
+    "valkey_info": {},
+    "disk": {"path": "/mnt/nvme"}
+  },
+  "cpu_range": "0-1"
+}
+```
+
+`true` samples every source with default options, unpinned. `sources` maps each selected
+source to its options object, and `cpu_range` pins the sampler thread.
+
+The sampler reads the server through one persistent client per scenario, with the same TLS
+settings as the benchmark when `tls_mode` is on. Each read times out after 2 seconds.
+
+Rows from every scenario, run and config set are appended to
+`results/<commit>/timeseries.jsonl`, one JSON object per line. Each row holds the same
+identity fields as a `metrics.json` row (`commit`, `repository`, `cluster_mode`, `tls`,
+`test_id`, `group`, `scenario`, `config_set`, `config_name`, `module_commit` and so on),
+plus `run`, `profiling_set`, `sample_time` (ISO 8601 UTC), `elapsed_sec`, and one key per
+source holding its reading. As in `metrics.json`, `timestamp` is the commit time. A source
+that fails a tick is absent from that row.
+
+Each JSONL row is one line; this example is wrapped for readability:
+
+```json
+{
+  "commit": "HEAD",
+  "repository": "valkey",
+  "test_id": "1_b",
+  "scenario": "b",
+  "config_set": {},
+  "run": 1,
+  "sample_time": "2026-10-06T01:26:13.915+00:00",
+  "elapsed_sec": 1,
+  "valkey_info": {"used_memory": "1950880"},
+  "latency_histogram": {"get": {"calls": 90887, "histogram_usec": {"1": 90873}}},
+  "process_cpu": {"proc_stat": {"cpu": [1768215, 220728, 1396351]}, "threads": {"22858": {"comm": "valkey-server", "utime": 121, "stime": 379}}},
+  "disk": {"device": "nvme0n1", "stat": [5664582, 1117339, 86138375]}
+}
+```
 
 ## Performance Profiling
 

@@ -27,6 +27,7 @@ from valkey_benchmark import (
     WRITE_COMMANDS,
 )
 from benchmark_build import BenchmarkBuilder
+from samplers import SOURCES
 from utils.cpu_utils import (
     parse_core_range,
     calculate_server_cpu_ranges,
@@ -325,6 +326,43 @@ def _validate_cpu_range(value, key_name: str) -> None:
         raise ValueError(f"Invalid {key_name}: {e}")
 
 
+def _validate_per_second_sampling(value) -> None:
+    """Validate the `per_second_sampling` config value.
+
+    A bool keeps the whole default source set, unpinned. An object enables
+    sampling by being present, maps source names to their options under
+    `sources`, and pins the sampler thread with `cpu_range`.
+    """
+    if isinstance(value, bool):
+        return
+    if not isinstance(value, dict):
+        raise ValueError("'per_second_sampling' must be a boolean or an object")
+
+    unsupported = sorted(set(value) - {"sources", "cpu_range"})
+    if unsupported:
+        raise ValueError(
+            f"'per_second_sampling' does not support key(s): {unsupported}"
+        )
+
+    if "sources" in value:
+        sources = value["sources"]
+        if not isinstance(sources, dict) or not sources:
+            raise ValueError(
+                "'per_second_sampling.sources' must be a non-empty object "
+                "mapping source names to options"
+            )
+        for name, options in sources.items():
+            if name not in SOURCES:
+                raise ValueError(
+                    f"'per_second_sampling.sources' has unknown source "
+                    f"'{name}', expected one of {sorted(SOURCES)}"
+                )
+            SOURCES[name].validate_options(options)
+
+    if "cpu_range" in value:
+        _validate_cpu_range(value["cpu_range"], "per_second_sampling.cpu_range")
+
+
 # ---------- Helpers ----------------------------------------------------------
 
 
@@ -473,6 +511,8 @@ def validate_config(cfg: dict) -> None:
     if "custom-server-config-file" in cfg:
         if not isinstance(cfg["custom-server-config-file"], str):
             raise ValueError("'custom-server-config-file' must be a string path")
+    if "per_second_sampling" in cfg:
+        _validate_per_second_sampling(cfg["per_second_sampling"])
 
     if "cluster_mode" in cfg and not isinstance(cfg["cluster_mode"], list):
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])

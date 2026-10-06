@@ -671,3 +671,46 @@ class TestCustomServerConfigFileValidation:
         minimal_valid_config["custom-server-config-file"] = bad_value
         with pytest.raises(ValueError, match="must be a string path"):
             validate_config(minimal_valid_config)
+
+
+class TestPerSecondSamplingValidation:
+    """Tests for per_second_sampling validation in validate_config."""
+
+    @pytest.mark.parametrize(
+        "good_value",
+        [
+            True,
+            False,
+            {},
+            {"cpu_range": "56-63"},
+            {"sources": {"valkey_info": {}}},
+            {"sources": {"valkey_info": {}, "disk": {"path": "/mnt/nvme"}}},
+            {"sources": {"latency_histogram": {}}, "cpu_range": "56-63,1"},
+        ],
+    )
+    def test_accepts(self, minimal_valid_config, good_value):
+        minimal_valid_config["per_second_sampling"] = good_value
+        validate_config(minimal_valid_config)
+
+    @pytest.mark.parametrize(
+        "bad_value, match",
+        [
+            ("yes", "must be a boolean or an object"),
+            (None, "must be a boolean or an object"),
+            ({"disk_path": "/mnt"}, r"does not support key\(s\): \['disk_path'\]"),
+            ({"sources": ["valkey_info"]}, "must be a non-empty object"),
+            ({"sources": {}}, "must be a non-empty object"),
+            ({"sources": {"network": {}}}, "unknown source 'network'"),
+            ({"sources": {"valkey_info": True}}, "valkey_info' must be an object"),
+            (
+                {"sources": {"valkey_info": {"path": "/mnt"}}},
+                r"valkey_info' does not support key\(s\): \['path'\]",
+            ),
+            ({"sources": {"disk": {"path": ""}}}, "disk.path' must be a non-empty"),
+            ({"cpu_range": "56-"}, "per_second_sampling.cpu_range"),
+        ],
+    )
+    def test_rejects(self, minimal_valid_config, bad_value, match):
+        minimal_valid_config["per_second_sampling"] = bad_value
+        with pytest.raises(ValueError, match=match):
+            validate_config(minimal_valid_config)
