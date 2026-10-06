@@ -1,0 +1,355 @@
+[
+  {
+    "test_name": "tiering",
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false,
+    "build_args": [
+      "BUILD_EXT_STORAGE=yes"
+    ],
+    "io-threads": 1,
+    "keyspacelen": [
+      4000000
+    ],
+    "cpu_allocation": {
+      "cores_per_server": 8,
+      "cores_per_client": 24
+    },
+    "custom-server-configs": {
+      "maxmemory": "1gb",
+      "activedefrag": "yes",
+      "ext-storage-enabled": "yes",
+      "ext-storage-engine": "flashcache",
+      "ext-storage-path": "/mnt/nvme/flashcache.db",
+      "ext-storage-capacity": "8gb"
+    },
+    "per_second_sampling": true,
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "Zipfian 80/20 mixed read/write over 4M keys under a 1gb DRAM cap with FlashCache tiering",
+        "scenarios": [
+          {
+            "id": "zipf80",
+            "type": "mixed",
+            "description": "Concurrent GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 512,
+            "keyspacelen": 4000000,
+            "benchmark_args": [
+              "--zipfian 1.0",
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "group": 2,
+        "description": "Uniform 80/20 mixed read/write over 4M keys under a 1gb DRAM cap with FlashCache tiering",
+        "scenarios": [
+          {
+            "id": "unif80",
+            "type": "mixed",
+            "description": "Concurrent GET (160 clients) and SET (40 clients), every key equally likely",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 512,
+            "keyspacelen": 4000000,
+            "benchmark_args": [
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "group": 3,
+        "description": "Zipfian 50/50 mixed read/write over 4M keys under a 1gb DRAM cap with FlashCache tiering",
+        "scenarios": [
+          {
+            "id": "bal50",
+            "type": "mixed",
+            "description": "Concurrent GET (100 clients) and SET (100 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 512,
+            "keyspacelen": 4000000,
+            "benchmark_args": [
+              "--zipfian 1.0",
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 100
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 100
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "group": 4,
+        "description": "Zipfian 80/20 over 4M keys that expire 120 seconds after each write, under a 1gb DRAM cap with FlashCache tiering",
+        "scenarios": [
+          {
+            "id": "zipfttl",
+            "type": "mixed",
+            "description": "Concurrent GET (160 clients) and SET with EX 120 (40 clients), zipfian alpha 1.0, 180 seconds so keys expire during the run",
+            "restart_before": true,
+            "populate_with": "SET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__rand_int__ __data__ EX 120",
+            "populate_clients": 50,
+            "populate_retries": 20,
+            "duration": 180,
+            "pipeline": 1,
+            "data_size": 512,
+            "keyspacelen": 4000000,
+            "benchmark_args": [
+              "--zipfian 1.0"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "command": "SET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__rand_int__ __data__ EX 120",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "command": "GET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__rand_int__",
+                "clients": 160
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "test_name": "tiering",
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false,
+    "build_args": [
+      "BUILD_EXT_STORAGE=yes"
+    ],
+    "io-threads": 1,
+    "keyspacelen": [
+      2410744
+    ],
+    "cpu_allocation": {
+      "cores_per_server": 8,
+      "cores_per_client": 24
+    },
+    "custom-server-configs": {
+      "maxmemory": "512mb",
+      "activedefrag": "yes",
+      "ext-storage-enabled": "yes",
+      "ext-storage-engine": "flashcache",
+      "ext-storage-path": "/mnt/nvme/flashcache.db",
+      "ext-storage-capacity": "10gb"
+    },
+    "per_second_sampling": true,
+    "test_groups": [
+      {
+        "group": 5,
+        "description": "Zipfian 80/20 with one value size per scenario under a 512mb DRAM cap, keyspace sized so 10% of the values fit in memory",
+        "scenarios": [
+          {
+            "id": "v500",
+            "type": "mixed",
+            "description": "500 B values over 2410744 keys, GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 500,
+            "keyspacelen": 2410744,
+            "benchmark_args": [
+              "--zipfian 1.0",
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          },
+          {
+            "id": "v5k",
+            "type": "mixed",
+            "description": "5 KB values over 776956 keys, GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 5000,
+            "keyspacelen": 776956,
+            "benchmark_args": [
+              "--zipfian 1.0",
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          },
+          {
+            "id": "v500k",
+            "type": "mixed",
+            "description": "500 KB values over 10284 keys, GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 500000,
+            "keyspacelen": 10284,
+            "benchmark_args": [
+              "--zipfian 1.0",
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          },
+          {
+            "id": "v5m",
+            "type": "mixed",
+            "description": "5 MB values over 1031 keys, GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
+            "restart_before": true,
+            "populate_with": "SET",
+            "populate_clients": 50,
+            "populate_benchmark_args": [
+              "--keysize 100"
+            ],
+            "populate_retries": 20,
+            "duration": 60,
+            "pipeline": 1,
+            "data_size": 5000000,
+            "keyspacelen": 1031,
+            "benchmark_args": [
+              "--zipfian 1.0",
+              "--keysize 100"
+            ],
+            "writes": [
+              {
+                "id": "set",
+                "test": "SET",
+                "clients": 40
+              }
+            ],
+            "reads": [
+              {
+                "id": "get",
+                "test": "GET",
+                "clients": 160
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,6 +1,8 @@
 """Launch local Valkey servers for benchmark runs."""
 
 import logging
+import os
+import re
 import subprocess
 import time
 from contextlib import contextmanager
@@ -78,6 +80,41 @@ def apply_config_to_servers(
                 logging.info(f"Set {k} = {v} on port {port}")
         finally:
             client.close()
+
+
+# Valkey's memory units, as accepted by size configs such as ext-storage-capacity.
+_SIZE_UNITS = {
+    "": 1,
+    "b": 1,
+    "k": 1000,
+    "kb": 1024,
+    "m": 1000**2,
+    "mb": 1024**2,
+    "g": 1000**3,
+    "gb": 1024**3,
+}
+_DEFAULT_EXT_STORAGE_CAPACITY = 1024**3
+
+
+def parse_valkey_size(value) -> int:
+    """Return the bytes of a Valkey size such as 8gb, 512mb or 1048576."""
+    match = re.fullmatch(r"\s*(\d+)\s*([a-z]*)\s*", str(value).lower())
+    if not match or match.group(2) not in _SIZE_UNITS:
+        raise ValueError(f"invalid size {value!r}")
+    return int(match.group(1)) * _SIZE_UNITS[match.group(2)]
+
+
+def ext_storage_capacity_bytes(custom_configs: dict) -> int:
+    """Return the tiering file size the server expects.
+
+    Reads ext-storage-capacity, or ext-storage-capacity-mb as used by the
+    data tiering prototype, and falls back to the server default of 1gb.
+    """
+    if "ext-storage-capacity" in custom_configs:
+        return parse_valkey_size(custom_configs["ext-storage-capacity"])
+    if "ext-storage-capacity-mb" in custom_configs:
+        return parse_valkey_size(custom_configs["ext-storage-capacity-mb"]) * 1024**2
+    return _DEFAULT_EXT_STORAGE_CAPACITY
 
 
 class ServerLauncher:
@@ -535,6 +572,39 @@ class ServerLauncher:
             logging.error(f"Cluster creation failed: {e}")
             raise
 
+    def _reset_ext_storage_file(self) -> None:
+        """Recreate the tiering storage file empty and at its full capacity.
+
+        FlashCache refuses to start unless the file exists and is at least
+        ext-storage-capacity bytes, so the file is allocated rather than only
+        removed. A relative path is resolved the way valkey-server sees it:
+        against its working directory, which is valkey_path, or the 'dir'
+        config when set.
+        """
+        custom_configs = (self.config or {}).get("custom-server-configs") or {}
+        if str(custom_configs.get("ext-storage-enabled", "")).lower() != "yes":
+            return
+        storage_path = str(custom_configs.get("ext-storage-path", ""))
+        if not storage_path:
+            return
+
+        path = (
+            Path(self.valkey_path) / str(custom_configs.get("dir", "")) / storage_path
+        )
+        if path.exists() and not path.is_file():
+            raise RuntimeError(
+                f"ext-storage-path {path} exists but is not a regular file, "
+                "refusing to replace it"
+            )
+        size = ext_storage_capacity_bytes(custom_configs)
+        path.unlink(missing_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        try:
+            os.posix_fallocate(fd, 0, size)
+        finally:
+            os.close(fd)
+        logging.info(f"Recreated tiering storage file {path} at {size} bytes")
+
     def launch(
         self,
         cluster_mode: bool,
@@ -559,6 +629,8 @@ class ServerLauncher:
             self.modules = config["modules"]
         else:
             self.modules = []
+
+        self._reset_ext_storage_file()
 
         try:
             if cluster_mode and config and "cluster_nodes" in config:

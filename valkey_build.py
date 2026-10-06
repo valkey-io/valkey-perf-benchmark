@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, List, Optional
 
 from utils.git_utils import resolve_ref
 
@@ -13,9 +13,16 @@ from utils.git_utils import resolve_ref
 class ServerBuilder:
     """Compile Valkey for a specific commit."""
 
-    def __init__(self, commit_id: str, tls_mode: bool, valkey_path: str) -> None:
+    def __init__(
+        self,
+        commit_id: str,
+        tls_mode: bool,
+        valkey_path: str,
+        build_args: Optional[List[str]] = None,
+    ) -> None:
         self.commit_id = commit_id
         self.tls_mode = tls_mode
+        self.build_args = list(build_args or [])
         self.repo_url = "https://github.com/valkey-io/valkey.git"
         self.valkey_dir = Path(valkey_path)
 
@@ -58,10 +65,12 @@ class ServerBuilder:
         logging.info(f"Building with TLS {'enabled' if self.tls_mode else 'disabled'}")
         self._run(["make", "distclean"], cwd=self.valkey_dir)
         if self.tls_mode:
-            self._run(["make", "BUILD_TLS=yes", "-j"], cwd=self.valkey_dir)
+            self._run(
+                ["make", "BUILD_TLS=yes", *self.build_args, "-j"], cwd=self.valkey_dir
+            )
             self._run(["./utils/gen-test-certs.sh"], cwd=self.valkey_dir)
         else:
-            self._run(["make", "-j"], cwd=self.valkey_dir)
+            self._run(["make", *self.build_args, "-j"], cwd=self.valkey_dir)
 
     def terminate_valkey(self) -> None:
         """Terminate all valkey processes."""
