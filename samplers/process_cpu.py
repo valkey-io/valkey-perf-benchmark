@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .base import SampleSource
+from .valkey_info import parse_info
 
 _PROC_DIR = Path("/proc")
 
@@ -53,11 +54,19 @@ class ProcessCpuSource(SampleSource):
     linux_only = True
 
     def start(self, ctx) -> None:
-        """Warn once when there is no server pid to read threads for."""
+        """Resolve the server pid while keeping host CPU sampling available."""
         super().start(ctx)
-        if ctx.server_pid is None:
+        self.server_pid = None
+        try:
+            fields = parse_info(ctx.client.execute_command("INFO", "SERVER"))
+            server_pid = int(fields["process_id"])
+            if server_pid <= 0:
+                raise ValueError(f"invalid process_id {server_pid}")
+            self.server_pid = server_pid
+        except Exception as e:
             ctx.warn_once(
-                "no_pid", "No server pid given, process_cpu records host CPU only"
+                "no_pid",
+                f"Could not resolve server pid, process_cpu records host CPU only: {e}",
             )
 
     def sample(self) -> Dict[str, Any]:
@@ -65,6 +74,6 @@ class ProcessCpuSource(SampleSource):
         reading: Dict[str, Any] = {
             "proc_stat": parse_proc_stat((_PROC_DIR / "stat").read_text())
         }
-        if self.ctx.server_pid is not None:
-            reading["threads"] = read_threads(self.ctx.server_pid)
+        if self.server_pid is not None:
+            reading["threads"] = read_threads(self.server_pid)
         return reading

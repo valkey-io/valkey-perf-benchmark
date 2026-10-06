@@ -102,7 +102,6 @@ class MetricsSampler:
         host: str = "127.0.0.1",
         port: int = 6379,
         tls_kwargs: Optional[Dict[str, Any]] = None,
-        server_pid: Optional[int] = None,
         interval: float = 1.0,
         context: Optional[Dict[str, Any]] = None,
         sources: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -116,7 +115,6 @@ class MetricsSampler:
             host: Valkey host to sample
             port: Valkey port to sample
             tls_kwargs: valkey-py TLS arguments for the sampler's client
-            server_pid: valkey-server pid, for per-thread CPU
             interval: seconds between samples
             context: run identity fields leading every emitted row
             sources: source name to options, every DEFAULT_SOURCES entry with
@@ -133,7 +131,6 @@ class MetricsSampler:
         )
         self.port = port
         self.tls_kwargs = dict(tls_kwargs or {})
-        self.server_pid = server_pid
         self.interval = interval
         self.context = dict(context or {})
         self.source_options = (
@@ -171,7 +168,6 @@ class MetricsSampler:
         logging.info(
             f"Started metrics sampler ({self.interval}s interval, "
             f"start delay {self.start_delay}s, "
-            f"pid={self.server_pid}, "
             f"sources={[source.name for source in self._sources]})"
         )
 
@@ -221,10 +217,7 @@ class MetricsSampler:
             selected = [source for source in selected if not source.local_only]
 
         ctx = SamplerContext(
-            host=self.host,
-            port=self.port,
             client=self._client,
-            server_pid=self.server_pid,
             warn_once=self._warn_once,
         )
 

@@ -1172,31 +1172,22 @@ plus `run`, `profiling_set`, `sample_time` (ISO 8601 UTC), `elapsed_sec`, and on
 source holding its reading. As in `metrics.json`, `timestamp` is the commit time. A source
 that fails a tick is absent from that row.
 
-Rows are written one per line, shown here formatted and truncated:
+Each JSONL row is one line; this example is wrapped for readability:
 
 ```json
 {
-  "timestamp": "2026-09-11T17:30:07-04:00",
   "commit": "HEAD",
-  "command": "GET",
-  "cluster_mode": false,
-  "tls": false,
+  "repository": "valkey",
   "test_id": "1_b",
   "scenario": "b",
   "config_set": {},
   "run": 1,
-  "profiling_set": {"enabled": false},
   "sample_time": "2026-10-06T01:26:13.915+00:00",
   "elapsed_sec": 1,
-  "valkey_info": {"valkey_version": "255.255.255", "used_memory": "1950880"},
-  "latency_histogram": {
-    "get": {"calls": 90887, "histogram_usec": {"1": 90873, "2": 90874, "16": 90887}}
-  },
-  "process_cpu": {
-    "proc_stat": {"cpu": [1768215, 220728, 1396351, 914430684, 219363, 0, 3261, 24744, 0, 0]},
-    "threads": {"22858": {"comm": "valkey-server", "utime": 121, "stime": 379}}
-  },
-  "disk": {"device": "nvme0n1", "stat": [5664582, 1117339, 86138375, 5868355, 4349131]}
+  "valkey_info": {"used_memory": "1950880"},
+  "latency_histogram": {"get": {"calls": 90887, "histogram_usec": {"1": 90873}}},
+  "process_cpu": {"proc_stat": {"cpu": [1768215, 220728, 1396351]}, "threads": {"22858": {"comm": "valkey-server", "utime": 121, "stime": 379}}},
+  "disk": {"device": "nvme0n1", "stat": [5664582, 1117339, 86138375]}
 }
 ```
 

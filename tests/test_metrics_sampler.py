@@ -113,7 +113,10 @@ class TestSourceSelection:
             sources={"valkey_info": {}, "disk": {"path": "/mnt/nvme"}},
             server_local=True,
         )
-        with patch("samplers.disk.resolve_block_device", return_value="nvme0n1"):
+        with (
+            patch("metrics_sampler.sys.platform", "linux"),
+            patch("samplers.disk.resolve_block_device", return_value="nvme0n1"),
+        ):
             sources = sampler._build_sources()
 
         assert [source.name for source in sources] == ["valkey_info", "disk"]
@@ -125,7 +128,10 @@ class TestSourceSelection:
             sources={"valkey_info": {}, "disk": {"path": "/mnt/nvme"}},
             server_local=True,
         )
-        with patch("samplers.disk.resolve_block_device", return_value=None):
+        with (
+            patch("metrics_sampler.sys.platform", "linux"),
+            patch("samplers.disk.resolve_block_device", return_value=None),
+        ):
             assert [s.name for s in sampler._build_sources()] == ["valkey_info"]
 
     @pytest.mark.parametrize(

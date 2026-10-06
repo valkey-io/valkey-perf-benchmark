@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import valkey
 
 from valkey_benchmark import ClientRunner, ORIGIN_FIELD, ORIGIN_SIMPLE
 from samplers import DEFAULT_SOURCES
@@ -2050,11 +2049,6 @@ def _processor():
 class TestPerSecondSamplingWiring:
     """Tests for the per_second_sampling opt-in in _run_single_scenario."""
 
-    @pytest.fixture(autouse=True)
-    def no_pid_lookup(self, minimal_client_runner):
-        with patch.object(minimal_client_runner, "_resolve_server_pid", return_value=7):
-            yield
-
     @pytest.mark.parametrize("flag", [None, False])
     def test_flag_absent_or_false_never_constructs_sampler(
         self, minimal_client_runner, flag
@@ -2278,57 +2272,13 @@ class TestTlsKwargs:
             "ssl_ca_certs": str(certs / "ca.crt"),
         }
 
-
-class TestResolveServerPid:
-    """Tests for ClientRunner._resolve_server_pid."""
-
-    def test_reads_process_id_through_a_client(self, minimal_client_runner):
-        client = MagicMock()
-        client.info.return_value = {"process_id": 4242}
-        with patch.object(
-            minimal_client_runner, "_create_client", return_value=client
-        ) as create:
-            assert minimal_client_runner._resolve_server_pid() == 4242
-
-        create.assert_called_once_with(6379)
-        client.info.assert_called_once_with("server")
-        client.close.assert_called_once()
-
-    @pytest.mark.parametrize(
-        "info, side_effect",
-        [
-            (None, valkey.ConnectionError("connection refused")),
-            ({"run_id": "abc"}, None),
-        ],
-    )
-    def test_unresolvable_pid_returns_none(
-        self, minimal_client_runner, caplog, info, side_effect
-    ):
-        client = MagicMock()
-        client.info.return_value = info
-        client.info.side_effect = side_effect
-        with (
-            patch.object(minimal_client_runner, "_create_client", return_value=client),
-            caplog.at_level(logging.WARNING),
-        ):
-            assert minimal_client_runner._resolve_server_pid() is None
-
-        client.info.assert_called_once_with("server")
-        assert "Could not resolve server pid" in caplog.text
-
-    def test_sampler_gets_none_pid_and_tls_kwargs(self, minimal_client_runner):
+    def test_sampler_receives_tls_kwargs(self, minimal_client_runner):
         runner = minimal_client_runner
-        runner.tls_mode = True
         tls = {"ssl": True}
         with (
             patch("valkey_benchmark.MetricsSampler") as sampler_cls,
             patch.object(runner, "_tls_kwargs", return_value=tls),
-            patch.object(
-                runner, "_create_client", side_effect=valkey.ConnectionError("down")
-            ),
         ):
             runner._build_metrics_sampler(_sampling_scenario(), 1, _processor())
 
-        kwargs = sampler_cls.call_args.kwargs
-        assert kwargs["server_pid"] is None
-        assert kwargs["tls_kwargs"] == tls
+        assert sampler_cls.call_args.kwargs["tls_kwargs"] == tls

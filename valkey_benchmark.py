@@ -1006,33 +1006,6 @@ class ClientRunner:
         if profiler and scenario_profiling_enabled:
             profiler.stop_profiling(profile_id)
 
-    def _resolve_server_pid(self) -> Optional[int]:
-        """Return the server pid from ``INFO server``, or None if unresolvable.
-
-        Read from the server rather than plumbed across from the launcher, so
-        the wiring behaves the same for a launcher-managed server and for
-        ``--use-running-server``. A None pid is a supported sampler state: it
-        warns once and records host CPU only.
-        """
-        client = None
-        try:
-            client = self._create_client(self._get_active_ports()[0])
-            process_id = client.info("server").get("process_id")
-        except Exception as e:
-            logging.warning(f"Could not resolve server pid, INFO server failed: {e}")
-            return None
-        finally:
-            if client is not None:
-                client.close()
-
-        if not isinstance(process_id, int):
-            logging.warning(
-                f"Could not resolve server pid, INFO server reported "
-                f"process_id={process_id!r}"
-            )
-            return None
-        return process_id
-
     def _scenario_test_id(self, scenario: dict, group_id) -> str:
         """Return the identity a scenario's rows are keyed by."""
         return f"{group_id}_{scenario.get('id', 'unknown')}"
@@ -1104,7 +1077,6 @@ class ClientRunner:
             host=self.target_ip,
             port=self._get_active_ports()[0],
             tls_kwargs=self._tls_kwargs(),
-            server_pid=self._resolve_server_pid(),
             context=context,
             sources=self._sampling_sources(),
             cpu_range=options.get("cpu_range"),

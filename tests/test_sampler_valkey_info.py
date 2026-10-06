@@ -2,11 +2,9 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from metrics_sampler import create_client
 from samplers import SamplerContext
-from samplers.valkey_info import ValkeyInfoSource, parse_info
+from samplers.valkey_info import ValkeyInfoSource
 
 INFO = """# Server
 valkey_version:9.1.0
@@ -39,24 +37,15 @@ def sample_through_client(reply):
     return reading
 
 
-@pytest.mark.parametrize(
-    "field, value",
-    [
-        ("valkey_git_sha1", "00000000"),
-        ("process_id", "4242"),
-        ("used_memory", "1048576"),
-        ("mem_fragmentation_ratio", "1.20"),
-        ("db0", "keys=10000,expires=0,avg_ttl=0"),
-        ("valkey_version", "9.1.0"),
-    ],
-)
-def test_values_are_raw_strings_through_the_client(field, value):
-    assert sample_through_client(INFO)[field] == value
-
-
 def test_every_field_is_recorded():
-    assert sample_through_client(INFO) == parse_info(INFO)
-    assert len(parse_info(INFO)) == 6
+    assert sample_through_client(INFO) == {
+        "valkey_version": "9.1.0",
+        "valkey_git_sha1": "00000000",
+        "process_id": "4242",
+        "used_memory": "1048576",
+        "mem_fragmentation_ratio": "1.20",
+        "db0": "keys=10000,expires=0,avg_ttl=0",
+    }
 
 
 def test_empty_reply_reads_as_none():

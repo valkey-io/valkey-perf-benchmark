@@ -1,6 +1,7 @@
 """Unit tests for the block device sample source, against a stubbed /sys."""
 
 import os
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,15 +37,21 @@ def sys_tree(tmp_path):
 REAL_STAT = os.stat
 
 
+@contextmanager
 def fake_stat(path, minor):
     """Patch os.stat so path reports device 259:minor."""
 
     def stat(target, *args, **kwargs):
         if str(target) == path:
-            return os.stat_result((0, 0, os.makedev(259, minor), 0, 0, 0, 0, 0, 0, 0))
+            return os.stat_result((0, 0, 1, 0, 0, 0, 0, 0, 0, 0))
         return REAL_STAT(target, *args, **kwargs)
 
-    return patch("samplers.disk.os.stat", side_effect=stat)
+    with (
+        patch("samplers.disk.os.stat", side_effect=stat),
+        patch("samplers.disk.os.major", return_value=259),
+        patch("samplers.disk.os.minor", return_value=minor),
+    ):
+        yield
 
 
 @pytest.mark.parametrize("minor, expected", [(0, "nvme0n1"), (1, "nvme0n1"), (9, None)])

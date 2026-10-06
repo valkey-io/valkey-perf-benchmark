@@ -20,12 +20,9 @@ def log_warning(key: str, message: str) -> None:
 
 @dataclass
 class SamplerContext:
-    """Target identity and shared helpers handed to every source at start."""
+    """Shared helpers handed to every source at start."""
 
-    host: str = "127.0.0.1"
-    port: int = 6379
     client: Optional[valkey.Valkey] = None
-    server_pid: Optional[int] = None
     warn_once: Callable[[str, str], None] = field(default=log_warning)
 
 
