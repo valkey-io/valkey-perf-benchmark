@@ -13,6 +13,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import h5py
 import numpy as np
 
 
@@ -486,6 +487,76 @@ def generate_structured_npy(output_dir: Path, filename: str, config: dict) -> Pa
     return output
 
 
+def _write_hdf5_array(
+    path: Path,
+    field: str,
+    source: h5py.Dataset,
+    value_dtype: str,
+    chunk_size: int,
+) -> None:
+    """Write an HDF5 array as a structured NPY without loading it all."""
+    fields = [(field, value_dtype, source.shape[1:])]
+
+    output_dtype = np.dtype(fields)
+    output = np.lib.format.open_memmap(
+        path,
+        mode="w+",
+        dtype=output_dtype,
+        shape=(len(source),),
+    )
+    for start in range(0, len(source), chunk_size):
+        end = min(start + chunk_size, len(source))
+        output[field][start:end] = source[start:end]
+    output.flush()
+
+
+def generate_hdf5_dataset(
+    output_dir: Path,
+    config: dict,
+    filename: str,
+) -> Path:
+    """Convert one local HDF5 dataset into a structured NPY."""
+    source = output_dir / config["source"]
+    output = output_dir / filename
+    chunk_size = config.get("chunk_size", 10_000)
+    if (
+        isinstance(chunk_size, bool)
+        or not isinstance(chunk_size, int)
+        or chunk_size <= 0
+    ):
+        raise ValueError("'chunk_size' must be a positive integer")
+    if output.suffix.lower() != ".npy":
+        raise ValueError("HDF5 dataset output must use the .npy extension")
+    if output.exists():
+        logging.info(f"Exists: {filename}")
+        return output
+
+    if not source.exists():
+        raise FileNotFoundError(f"HDF5 source file not found: {source}")
+
+    source_dataset = config["hdf5_dataset"]
+    field = config["field"]
+    logging.info(f"Generating {filename} from {source.name}:{source_dataset}")
+    with h5py.File(source, "r") as dataset:
+        if source_dataset not in dataset:
+            raise ValueError(f"HDF5 dataset not found: {source_dataset}")
+        source_array = dataset[source_dataset]
+        if source_array.ndim != 2 or len(source_array) == 0:
+            raise ValueError("HDF5 source dataset must be a non-empty 2D array")
+
+        value_dtype = config.get("dtype", source_array.dtype.str)
+        _write_hdf5_array(
+            output,
+            field,
+            source_array,
+            value_dtype,
+            chunk_size,
+        )
+
+    logging.info(f"Complete: {filename}")
+    return output
+
+
 def generate_csv_dataset(
     output_dir: Path, config: dict, filename: str, wiki_file: Path = None
 ) -> Path:
@@ -849,6 +920,16 @@ def main():
                 config_key = csv_key
 
         if config_key in dataset_configs:
+            dataset_config = dataset_configs[config_key]
+            source_suffix = Path(dataset_config.get("source", "")).suffix.lower()
+            if source_suffix in (".h5", ".hdf5"):
+                generate_hdf5_dataset(
+                    args.output_dir,
+                    dataset_config,
+                    config_key,
+                )
+                continue
+
             if config_key.endswith(".csv"):
                 # CSV format - pass wiki_file if needed. Auto-routes to
                 # structured NPY internally when any field is a vector.

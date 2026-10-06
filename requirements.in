@@ -15,6 +15,7 @@
 valkey
 matplotlib
 numpy
+h5py
 scipy
 uncertainties
 psycopg2-binary>=2.9.0
