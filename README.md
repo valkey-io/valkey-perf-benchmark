@@ -1127,7 +1127,8 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 `metrics_sampler.py` reads the server and the host once per second during a scenario's
 measured benchmark process and records what each source read, unprocessed. Deriving rates,
 percentiles and typed values is left to ingest. Sampling starts after any inline
-`warmup_inline`, so `elapsed_sec` 0 is the first measured second.
+`warmup_inline`, so `elapsed_sec` 0 is the first measured second. Tick `k` is taken at
+`k` intervals after the first, and a tick that overruns skips the slots it missed.
 
 | Source              | Records                                                                 |
 | ------------------- | ----------------------------------------------------------------------- |
@@ -1158,8 +1159,10 @@ only when the server runs on the sampling machine. `disk` samples the whole disk
 ```
 
 `true` samples every source with default options, unpinned. `sources` maps each selected
-source to its options object, and `cpu_range` pins the sampler thread and the `valkey-cli`
-calls it makes.
+source to its options object, and `cpu_range` pins the sampler thread.
+
+The sampler reads the server through one persistent client per scenario, with the same TLS
+settings as the benchmark when `tls_mode` is on. Each read times out after 2 seconds.
 
 Rows from every scenario, run and config set are appended to
 `results/<commit>/timeseries.jsonl`, one JSON object per line. Each row holds the same

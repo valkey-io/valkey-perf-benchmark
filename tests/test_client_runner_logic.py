@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import valkey
 
 from valkey_benchmark import ClientRunner, ORIGIN_FIELD, ORIGIN_SIMPLE
 from samplers import DEFAULT_SOURCES
@@ -2212,17 +2213,26 @@ class TestPerSecondSamplingWiring:
         assert cls.call_count == sampler.start.call_count == 1
         assert sampler.stop.call_count == 1
 
-    @pytest.mark.parametrize("failing", ["start", "stop"])
+    @pytest.mark.parametrize("failing", ["construct", "start", "stop", "append"])
     def test_sampler_failure_does_not_fail_run(
         self, minimal_client_runner, caplog, failing
     ):
         runner = minimal_client_runner
         runner.config["per_second_sampling"] = True
-        sampler = MagicMock(rows=[])
-        getattr(sampler, failing).side_effect = RuntimeError("sampler boom")
+        sampler = MagicMock(rows=[{"elapsed_sec": 0}])
+        sampler_cls = MagicMock(return_value=sampler)
+        append = MagicMock()
+        failing_call = {
+            "construct": sampler_cls,
+            "start": sampler.start,
+            "stop": sampler.stop,
+            "append": append,
+        }[failing]
+        failing_call.side_effect = RuntimeError("sampler boom")
 
         with (
-            patch("valkey_benchmark.MetricsSampler", return_value=sampler),
+            patch("valkey_benchmark.MetricsSampler", sampler_cls),
+            patch("valkey_benchmark.append_jsonl", append),
             patch.object(runner, "_run", return_value=MagicMock()),
             patch.object(runner, "_build_scenario_metrics", return_value={"rps": 1.0}),
             caplog.at_level(logging.WARNING),
@@ -2232,7 +2242,7 @@ class TestPerSecondSamplingWiring:
             )
 
         assert result == {"rps": 1.0}
-        assert getattr(sampler, failing).called
+        failing_call.assert_called_once()
         assert "sampler boom" in caplog.text
 
     def test_two_scenarios_append_to_one_jsonl(self, minimal_client_runner, tmp_path):
@@ -2246,51 +2256,79 @@ class TestPerSecondSamplingWiring:
         assert [json.loads(line)["scenario"] for line in lines] == ["a", "b"]
 
 
+class TestTlsKwargs:
+    """Tests for ClientRunner._tls_kwargs, shared by every client it creates."""
+
+    def test_plain_mode_has_no_tls_kwargs(self, minimal_client_runner):
+        assert minimal_client_runner._tls_kwargs() == {}
+
+    def test_tls_mode_points_at_the_test_certs(self, minimal_client_runner, tmp_path):
+        runner = minimal_client_runner
+        runner.tls_mode = True
+        runner.valkey_path = tmp_path
+        with pytest.raises(FileNotFoundError, match="TLS certificates not found"):
+            runner._tls_kwargs()
+
+        certs = tmp_path / "tests" / "tls"
+        certs.mkdir(parents=True)
+        assert runner._tls_kwargs() == {
+            "ssl": True,
+            "ssl_certfile": str(certs / "valkey.crt"),
+            "ssl_keyfile": str(certs / "valkey.key"),
+            "ssl_ca_certs": str(certs / "ca.crt"),
+        }
+
+
 class TestResolveServerPid:
     """Tests for ClientRunner._resolve_server_pid."""
 
-    def test_parses_process_id_from_info(self, minimal_client_runner):
-        completed = MagicMock(
-            returncode=0, stdout="# Server\nprocess_id:4242\n", stderr=""
-        )
-        with patch("valkey_benchmark.subprocess.run", return_value=completed) as run:
+    def test_reads_process_id_through_a_client(self, minimal_client_runner):
+        client = MagicMock()
+        client.info.return_value = {"process_id": 4242}
+        with patch.object(
+            minimal_client_runner, "_create_client", return_value=client
+        ) as create:
             assert minimal_client_runner._resolve_server_pid() == 4242
 
-        command = run.call_args.args[0]
-        assert command[0].endswith("src/valkey-cli")
-        assert command[-2:] == ["INFO", "server"]
+        create.assert_called_once_with(6379)
+        client.info.assert_called_once_with("server")
+        client.close.assert_called_once()
 
     @pytest.mark.parametrize(
-        "completed, side_effect",
+        "info, side_effect",
         [
-            (MagicMock(returncode=1, stdout="", stderr="connection refused"), None),
-            (MagicMock(returncode=0, stdout="# Server\nrun_id:abc\n", stderr=""), None),
-            (
-                MagicMock(returncode=0, stdout="process_id:not-a-pid\n", stderr=""),
-                None,
-            ),
-            (None, OSError("valkey-cli missing")),
+            (None, valkey.ConnectionError("connection refused")),
+            ({"run_id": "abc"}, None),
         ],
     )
     def test_unresolvable_pid_returns_none(
-        self, minimal_client_runner, completed, side_effect
+        self, minimal_client_runner, caplog, info, side_effect
     ):
-        with patch(
-            "valkey_benchmark.subprocess.run",
-            return_value=completed,
-            side_effect=side_effect,
+        client = MagicMock()
+        client.info.return_value = info
+        client.info.side_effect = side_effect
+        with (
+            patch.object(minimal_client_runner, "_create_client", return_value=client),
+            caplog.at_level(logging.WARNING),
         ):
             assert minimal_client_runner._resolve_server_pid() is None
 
-    def test_sampler_gets_none_pid_when_resolution_fails(self, minimal_client_runner):
+        client.info.assert_called_once_with("server")
+        assert "Could not resolve server pid" in caplog.text
+
+    def test_sampler_gets_none_pid_and_tls_kwargs(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner.tls_mode = True
+        tls = {"ssl": True}
         with (
             patch("valkey_benchmark.MetricsSampler") as sampler_cls,
-            patch(
-                "valkey_benchmark.subprocess.run", side_effect=OSError("no valkey-cli")
+            patch.object(runner, "_tls_kwargs", return_value=tls),
+            patch.object(
+                runner, "_create_client", side_effect=valkey.ConnectionError("down")
             ),
         ):
-            minimal_client_runner._build_metrics_sampler(
-                _sampling_scenario(), 1, _processor()
-            )
+            runner._build_metrics_sampler(_sampling_scenario(), 1, _processor())
 
-        assert sampler_cls.call_args.kwargs["server_pid"] is None
+        kwargs = sampler_cls.call_args.kwargs
+        assert kwargs["server_pid"] is None
+        assert kwargs["tls_kwargs"] == tls

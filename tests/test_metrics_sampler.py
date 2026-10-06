@@ -7,7 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
-from metrics_sampler import MetricsSampler, append_jsonl, is_local_address
+from metrics_sampler import (
+    SOCKET_TIMEOUT_SEC,
+    MetricsSampler,
+    append_jsonl,
+    is_local_address,
+)
 from samplers import SampleSource
 
 
@@ -30,13 +35,11 @@ class FakeSource(SampleSource):
 def sampler_with(*sources, context=None, **kwargs):
     sampler = MetricsSampler(context=context or {}, server_local=True, **kwargs)
     sampler._sources = list(sources)
-    sampler._start_monotonic = 100.0
     return sampler
 
 
-def one_row(sampler, monotonic=100.0):
-    with patch("metrics_sampler.time.monotonic", return_value=monotonic):
-        sampler._sample_once()
+def one_row(sampler, elapsed_sec=0):
+    sampler._sample_once(elapsed_sec)
     return sampler.rows[-1]
 
 
@@ -49,7 +52,7 @@ class TestRow:
             context=context,
         )
 
-        row = one_row(sampler, 102.4)
+        row = one_row(sampler, 2)
 
         assert list(row) == [
             "commit",
@@ -163,6 +166,88 @@ class TestThreadPinning:
             "metrics_sampler.os.sched_setaffinity", side_effect=OSError, create=True
         ):
             sampler._pin_thread()
+
+
+class FakeStopEvent:
+    """A stop event on a fake clock that sets itself after a number of ticks."""
+
+    def __init__(self, clock, ticks, limit):
+        self.clock = clock
+        self.ticks = ticks
+        self.limit = limit
+
+    def is_set(self):
+        return len(self.ticks) >= self.limit
+
+    def wait(self, seconds):
+        self.clock[0] += seconds
+        return False
+
+
+class TestSchedule:
+    def run_loop(self, durations, interval=1.0):
+        """Return (elapsed_sec, clock) per tick, tick k taking durations[k]."""
+        clock = [100.0]
+        ticks = []
+
+        def sample_once(elapsed_sec):
+            ticks.append((elapsed_sec, clock[0]))
+            clock[0] += durations[len(ticks) - 1]
+
+        sampler = MetricsSampler(interval=interval, server_local=True)
+        sampler._stop_event = FakeStopEvent(clock, ticks, len(durations))
+        with (
+            patch("metrics_sampler.time.monotonic", side_effect=lambda: clock[0]),
+            patch.object(sampler, "_sample_once", side_effect=sample_once),
+        ):
+            sampler._sample_loop()
+        return ticks
+
+    def test_ticks_land_on_multiples_of_the_interval(self):
+        ticks = self.run_loop([0.0001] * 9000)
+        assert [elapsed for elapsed, _ in ticks] == list(range(9000))
+        assert ticks[-1][1] == pytest.approx(100.0 + 8999)
+
+    @pytest.mark.parametrize(
+        "durations, expected",
+        [
+            ([0.1, 1.5, 0.1, 0.1], [0, 1, 3, 4]),
+            ([0.1, 2.5, 0.1], [0, 1, 4]),
+            ([1.0, 0.1], [0, 2]),
+        ],
+    )
+    def test_overrun_skips_to_the_next_future_slot(self, durations, expected):
+        ticks = self.run_loop(durations)
+        assert [elapsed for elapsed, _ in ticks] == expected
+        assert [clock for _, clock in ticks] == pytest.approx(
+            [100.0 + elapsed for elapsed in expected]
+        )
+
+
+class TestClient:
+    def test_start_creates_a_bounded_client_with_tls(self):
+        tls = {"ssl": True, "ssl_ca_certs": "ca.crt"}
+        sampler = MetricsSampler(host="10.0.0.5", port=6380, tls_kwargs=tls)
+        with (
+            patch("metrics_sampler.valkey.Valkey") as client_cls,
+            patch.object(sampler, "_build_sources", return_value=[]),
+        ):
+            sampler.start()
+            sampler.stop()
+
+        client_cls.assert_called_once_with(
+            host="10.0.0.5",
+            port=6380,
+            decode_responses=True,
+            socket_timeout=SOCKET_TIMEOUT_SEC,
+            socket_connect_timeout=SOCKET_TIMEOUT_SEC,
+            **tls,
+        )
+        client = client_cls.return_value
+        client.set_response_callback.assert_called_once()
+        assert client.set_response_callback.call_args.args[0] == "INFO"
+        client.close.assert_called_once()
+        assert sampler._client is None
 
 
 class TestBackgroundThread:

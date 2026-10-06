@@ -18,19 +18,14 @@ from valkey_server import ServerLauncher, apply_config_to_servers
 from profiler import PerformanceProfiler
 from metrics_sampler import MetricsSampler, append_jsonl
 from samplers import DEFAULT_SOURCES
-from samplers.valkey_info import parse_info
 from utils.git_utils import resolve_ref, get_commit_timestamp
 from utils.cpu_utils import format_core_list, parse_core_range
 from environment_metadata import collect_environment_metadata
 
 # Constants
 VALKEY_BENCHMARK = "src/valkey-benchmark"
-VALKEY_CLI = "src/valkey-cli"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
-
-# Timeout for the one-shot INFO that resolves the server pid for sampling.
-SERVER_PID_INFO_TIMEOUT = 5
 
 # One appended JSON Lines file per results dir holds every per-second sample of
 # the run, and rows are told apart by the identity fields they carry.
@@ -128,34 +123,33 @@ class ClientRunner:
         self.current_run = 1
         self.client_cpu_ranges = []
 
+    def _tls_kwargs(self) -> dict:
+        """Return the valkey-py TLS arguments, empty when TLS is off."""
+        if not self.tls_mode:
+            return {}
+        tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
+        if not tls_cert_path.exists():
+            raise FileNotFoundError(f"TLS certificates not found at {tls_cert_path}")
+        return {
+            "ssl": True,
+            "ssl_certfile": str(tls_cert_path / "valkey.crt"),
+            "ssl_keyfile": str(tls_cert_path / "valkey.key"),
+            "ssl_ca_certs": str(tls_cert_path / "ca.crt"),
+        }
+
     def _create_client(self, port: Optional[int] = None) -> valkey.Valkey:
         """Return a Valkey client configured for TLS or plain mode."""
         if port is None:
             port = self.config.get("port", DEFAULT_PORT)
         logging.info(f"Connecting to {self.target_ip}:{port}")
-        kwargs = {
-            "host": self.target_ip,
-            "port": port,
-            "decode_responses": True,
-            "socket_timeout": 10,
-            "socket_connect_timeout": 10,
-        }
-        if self.tls_mode:
-            tls_cert_path = Path(self.valkey_path) / "tests" / "tls"
-            if not tls_cert_path.exists():
-                raise FileNotFoundError(
-                    f"TLS certificates not found at {tls_cert_path}"
-                )
-
-            kwargs.update(
-                {
-                    "ssl": True,
-                    "ssl_certfile": str(tls_cert_path / "valkey.crt"),
-                    "ssl_keyfile": str(tls_cert_path / "valkey.key"),
-                    "ssl_ca_certs": str(tls_cert_path / "ca.crt"),
-                }
-            )
-        return valkey.Valkey(**kwargs)
+        return valkey.Valkey(
+            host=self.target_ip,
+            port=port,
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=10,
+            **self._tls_kwargs(),
+        )
 
     @contextmanager
     def _client_context(self):
@@ -1015,44 +1009,29 @@ class ClientRunner:
     def _resolve_server_pid(self) -> Optional[int]:
         """Return the server pid from ``INFO server``, or None if unresolvable.
 
-        Read through valkey-cli rather than plumbed across from the launcher, so
+        Read from the server rather than plumbed across from the launcher, so
         the wiring behaves the same for a launcher-managed server and for
         ``--use-running-server``. A None pid is a supported sampler state: it
         warns once and records host CPU only.
         """
-        cmd = [
-            str(self.valkey_path / VALKEY_CLI),
-            "-h",
-            self.target_ip,
-            "-p",
-            str(self._get_active_ports()[0]),
-            "INFO",
-            "server",
-        ]
+        client = None
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=SERVER_PID_INFO_TIMEOUT
-            )
-        except (OSError, subprocess.SubprocessError) as e:
+            client = self._create_client(self._get_active_ports()[0])
+            process_id = client.info("server").get("process_id")
+        except Exception as e:
             logging.warning(f"Could not resolve server pid, INFO server failed: {e}")
             return None
+        finally:
+            if client is not None:
+                client.close()
 
-        if result.returncode != 0:
-            logging.warning(
-                f"Could not resolve server pid, INFO server exited "
-                f"{result.returncode}: {result.stderr.strip()}"
-            )
-            return None
-
-        process_id = parse_info(result.stdout).get("process_id")
-        try:
-            return int(process_id)
-        except (TypeError, ValueError):
+        if not isinstance(process_id, int):
             logging.warning(
                 f"Could not resolve server pid, INFO server reported "
                 f"process_id={process_id!r}"
             )
             return None
+        return process_id
 
     def _scenario_test_id(self, scenario: dict, group_id) -> str:
         """Return the identity a scenario's rows are keyed by."""
@@ -1067,13 +1046,6 @@ class ClientRunner:
         group_description: Optional[str] = None,
     ) -> MetricsSampler:
         """Construct a sampler whose rows carry the metric row identity."""
-        if self.tls_mode:
-            logging.warning(
-                "Per-second sampling issues valkey-cli calls without TLS "
-                "arguments, so the valkey_info and latency_histogram keys will "
-                "be absent against a TLS-only server"
-            )
-
         if scenario.get("type") == "mixed":
             # One sampler covers the whole parallel client set, so the row's
             # client count is the total across every mixed child.
@@ -1131,7 +1103,7 @@ class ClientRunner:
         return MetricsSampler(
             host=self.target_ip,
             port=self._get_active_ports()[0],
-            cli_path=str(self.valkey_path / VALKEY_CLI),
+            tls_kwargs=self._tls_kwargs(),
             server_pid=self._resolve_server_pid(),
             context=context,
             sources=self._sampling_sources(),
@@ -1178,7 +1150,6 @@ class ClientRunner:
         self, scenario: dict, group_id, **row_metadata
     ) -> Optional[MetricsSampler]:
         """Construct and start a sampler, returning None when that fails."""
-        sampler = None
         try:
             sampler = self._build_metrics_sampler(scenario, group_id, **row_metadata)
             sampler.start()
@@ -1188,13 +1159,6 @@ class ClientRunner:
                 f"Per-second sampling disabled for scenario "
                 f"{self._scenario_test_id(scenario, group_id)}: {e}"
             )
-            if sampler is not None:
-                try:
-                    sampler.stop()
-                except Exception as stop_error:
-                    logging.warning(
-                        f"Failed to stop a sampler that did not start: {stop_error}"
-                    )
             return None
 
     def _stop_metrics_sampler(

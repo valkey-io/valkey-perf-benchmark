@@ -12,6 +12,7 @@ dropped when the server does not run on this machine, and on platforms without
 import ipaddress
 import json
 import logging
+import math
 import os
 import socket
 import sys
@@ -21,10 +22,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import valkey
+
 from samplers import DEFAULT_SOURCES, SOURCES, SamplerContext, SampleSource
 from utils.cpu_utils import parse_core_range
 
 TICK_FIELDS = ("sample_time", "elapsed_sec")
+
+# Bounds every server read, so a tick can never hang and stop() can join.
+SOCKET_TIMEOUT_SEC = 2
+
+
+def create_client(host: str, port: int, tls_kwargs: Dict[str, Any]) -> valkey.Valkey:
+    """Return a client whose INFO replies are the raw text the server sent."""
+    client = valkey.Valkey(
+        host=host,
+        port=port,
+        decode_responses=True,
+        socket_timeout=SOCKET_TIMEOUT_SEC,
+        socket_connect_timeout=SOCKET_TIMEOUT_SEC,
+        **tls_kwargs,
+    )
+    client.set_response_callback("INFO", lambda response, **options: response)
+    return client
 
 
 def append_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
@@ -81,7 +101,7 @@ class MetricsSampler:
         self,
         host: str = "127.0.0.1",
         port: int = 6379,
-        cli_path: str = "valkey-cli",
+        tls_kwargs: Optional[Dict[str, Any]] = None,
         server_pid: Optional[int] = None,
         interval: float = 1.0,
         context: Optional[Dict[str, Any]] = None,
@@ -95,7 +115,7 @@ class MetricsSampler:
         Args:
             host: Valkey host to sample
             port: Valkey port to sample
-            cli_path: valkey-cli executable used to issue commands
+            tls_kwargs: valkey-py TLS arguments for the sampler's client
             server_pid: valkey-server pid, for per-thread CPU
             interval: seconds between samples
             context: run identity fields leading every emitted row
@@ -112,7 +132,7 @@ class MetricsSampler:
             server_local if server_local is not None else is_local_address(host)
         )
         self.port = port
-        self.cli_path = cli_path
+        self.tls_kwargs = dict(tls_kwargs or {})
         self.server_pid = server_pid
         self.interval = interval
         self.context = dict(context or {})
@@ -127,12 +147,12 @@ class MetricsSampler:
         self.cpu_range = cpu_range
         self.start_delay = start_delay
 
+        self._client: Optional[valkey.Valkey] = None
         self._sources: List[SampleSource] = []
         self._rows: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._sampler_thread: Optional[threading.Thread] = None
-        self._start_monotonic: Optional[float] = None
         self._warned: set = set()
 
     @property
@@ -143,10 +163,7 @@ class MetricsSampler:
 
     def start(self) -> None:
         """Start sampling on a background thread."""
-        if self._sampler_thread is not None:
-            logging.warning("Metrics sampler already started, ignoring start()")
-            return
-
+        self._client = create_client(self.host, self.port, self.tls_kwargs)
         self._sources = self._build_sources()
         self._stop_event.clear()
         self._sampler_thread = threading.Thread(target=self._sample_loop, daemon=True)
@@ -159,11 +176,14 @@ class MetricsSampler:
         )
 
     def stop(self) -> None:
-        """Stop sampling and join the background thread."""
+        """Stop sampling, join the background thread and close the client."""
         self._stop_event.set()
         if self._sampler_thread is not None:
             self._sampler_thread.join()
             self._sampler_thread = None
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
         logging.info(f"Stopped metrics sampler after {len(self._rows)} samples")
 
@@ -203,7 +223,7 @@ class MetricsSampler:
         ctx = SamplerContext(
             host=self.host,
             port=self.port,
-            cli_path=self.cli_path,
+            client=self._client,
             server_pid=self.server_pid,
             warn_once=self._warn_once,
         )
@@ -221,7 +241,7 @@ class MetricsSampler:
         return started
 
     def _pin_thread(self) -> None:
-        """Pin the sampler thread and the valkey-cli children it spawns to cores."""
+        """Pin the sampler thread to cores."""
         if self.cpu_range is None:
             return
         if not hasattr(os, "sched_setaffinity"):
@@ -240,31 +260,33 @@ class MetricsSampler:
             )
 
     def _sample_loop(self) -> None:
-        """Sample until stopped, holding the configured interval between ticks."""
+        """Sample until stopped, one tick at each multiple of the interval.
+
+        Tick k is due at the first tick's time plus k intervals. A tick that
+        overruns skips the slots it missed, so ticks are never back to back.
+        """
         self._pin_thread()
         if self._stop_event.wait(self.start_delay):
             return
-        self._start_monotonic = time.monotonic()
+        start = time.monotonic()
+        tick = 0
         while not self._stop_event.is_set():
-            tick_started = time.monotonic()
             try:
-                self._sample_once()
+                self._sample_once(int(round(tick * self.interval)))
             except Exception as e:
                 self._warn_once("sample_failed", f"Metrics sample failed: {e}")
-            remaining = self.interval - (time.monotonic() - tick_started)
-            self._stop_event.wait(max(0.0, remaining))
+            now = time.monotonic()
+            tick = max(tick + 1, math.floor((now - start) / self.interval) + 1)
+            self._stop_event.wait(max(0.0, start + tick * self.interval - now))
 
-    def _sample_once(self) -> None:
+    def _sample_once(self, elapsed_sec: int) -> None:
         """Collect one row and append it to the series."""
-        now = time.monotonic()
-        start = self._start_monotonic if self._start_monotonic is not None else now
-
         row: Dict[str, Any] = {
             **self.context,
             "sample_time": datetime.now(timezone.utc).isoformat(
                 timespec="milliseconds"
             ),
-            "elapsed_sec": int(round(now - start)),
+            "elapsed_sec": elapsed_sec,
         }
         for source in self._sources:
             try:

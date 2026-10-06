@@ -1,7 +1,7 @@
 """Unit tests for the block device sample source, against a stubbed /sys."""
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -63,26 +63,24 @@ def test_records_device_and_raw_counters(sys_tree):
     }
 
 
+def config_client(directory):
+    client = MagicMock()
+    client.config_get.return_value = {"dir": directory}
+    return client
+
+
 def test_path_falls_back_to_config_get_dir(sys_tree):
     source = DiskSource()
-    with (
-        patch("samplers.disk.run_cli", return_value="dir\n/var/lib/valkey\n"),
-        fake_stat("/var/lib/valkey", 0),
-    ):
-        source.start(SamplerContext())
+    client = config_client("/var/lib/valkey")
+    with fake_stat("/var/lib/valkey", 0):
+        source.start(SamplerContext(client=client))
+    client.config_get.assert_called_once_with("dir")
     assert source.device == "nvme0n1"
 
 
-@pytest.mark.parametrize(
-    "cli_output, match",
-    [(None, "CONFIG GET dir failed"), ("dir\n/no/such/dir\n", "No block device backs")],
-)
-def test_start_raises_without_a_device(sys_tree, cli_output, match):
-    with (
-        patch("samplers.disk.run_cli", return_value=cli_output),
-        pytest.raises(RuntimeError, match=match),
-    ):
-        DiskSource().start(SamplerContext())
+def test_start_raises_without_a_device(sys_tree):
+    with pytest.raises(RuntimeError, match="No block device backs"):
+        DiskSource().start(SamplerContext(client=config_client("/no/such/dir")))
 
 
 @pytest.mark.parametrize(

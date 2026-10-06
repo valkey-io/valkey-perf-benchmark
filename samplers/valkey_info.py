@@ -6,7 +6,7 @@ reported, so typing is left to ingest.
 
 from typing import Dict, Optional
 
-from .base import SampleSource, run_cli
+from .base import SampleSource
 
 
 def parse_info(text: str) -> Dict[str, str]:
@@ -30,8 +30,5 @@ class ValkeyInfoSource(SampleSource):
     name = "valkey_info"
 
     def sample(self) -> Optional[Dict[str, str]]:
-        """Return the parsed INFO ALL fields, or None when INFO failed."""
-        output = run_cli(self.ctx, "INFO", "ALL")
-        if output is None:
-            return None
-        return parse_info(output) or None
+        """Return the parsed INFO ALL fields, or None when the reply is empty."""
+        return parse_info(self.ctx.client.execute_command("INFO", "ALL")) or None

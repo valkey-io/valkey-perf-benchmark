@@ -7,11 +7,10 @@ class here and naming it in `samplers.SOURCES`.
 """
 
 import logging
-import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
-CLI_TIMEOUT_SEC = 5
+import valkey
 
 
 def log_warning(key: str, message: str) -> None:
@@ -25,7 +24,7 @@ class SamplerContext:
 
     host: str = "127.0.0.1"
     port: int = 6379
-    cli_path: str = "valkey-cli"
+    client: Optional[valkey.Valkey] = None
     server_pid: Optional[int] = None
     warn_once: Callable[[str, str], None] = field(default=log_warning)
 
@@ -57,35 +56,5 @@ class SampleSource:
         self.ctx = ctx
 
     def sample(self) -> Optional[Dict[str, Any]]:
-        """Return this tick's reading, or None when it could not be read."""
+        """Return this tick's reading. Raising or returning None omits it."""
         raise NotImplementedError
-
-
-def _command_label(args: Tuple[str, ...]) -> str:
-    """Return the first non-option argument, used as the warn-once key stem."""
-    for arg in args:
-        if not arg.startswith("-"):
-            return arg.lower()
-    return "cli"
-
-
-def run_cli(ctx: SamplerContext, *args: str) -> Optional[str]:
-    """Return valkey-cli stdout for args, or None when the call fails."""
-    label = _command_label(args)
-    cmd = [ctx.cli_path, "-h", ctx.host, "-p", str(ctx.port), *args]
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=CLI_TIMEOUT_SEC
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        ctx.warn_once(f"{label}_failed", f"{label.upper()} command failed: {e}")
-        return None
-
-    if result.returncode != 0:
-        ctx.warn_once(
-            f"{label}_rc",
-            f"{label.upper()} command exited {result.returncode}: "
-            f"{result.stderr.strip()}",
-        )
-        return None
-    return result.stdout

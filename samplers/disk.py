@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .base import SampleSource, run_cli
+from .base import SampleSource
 
 _SYS_BLOCK_DIR = Path("/sys/block")
 _SYS_DEV_BLOCK_DIR = Path("/sys/dev/block")
@@ -60,22 +60,11 @@ class DiskSource(SampleSource):
     def start(self, ctx) -> None:
         """Resolve the block device, raising when none can be found."""
         super().start(ctx)
-        path = self.options.get("path") or self._server_data_dir(ctx)
-        if path is None:
-            raise RuntimeError("CONFIG GET dir failed, no path to resolve a disk from")
+        path = self.options.get("path") or ctx.client.config_get("dir")["dir"]
         self.device = resolve_block_device(path)
         if self.device is None:
             raise RuntimeError(f"No block device backs {path!r}")
         logging.info(f"Sampling block device {self.device}, resolved from {path!r}")
-
-    @staticmethod
-    def _server_data_dir(ctx) -> Optional[str]:
-        """Return the server's data directory from CONFIG GET dir, or None."""
-        output = run_cli(ctx, "CONFIG", "GET", "dir")
-        if output is None:
-            return None
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
-        return lines[1] if len(lines) > 1 else None
 
     def sample(self) -> Dict[str, Any]:
         """Return the device name and its raw stat counters."""
