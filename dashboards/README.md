@@ -49,6 +49,7 @@ Two databases on a single RDS instance:
 2. **`postgres`** - Benchmark metrics data
    - `benchmark_metrics` table - Performance data
    - `benchmark_commits` table - Commit tracking (used by `postgres_track_commits.py`)
+   - `benchmark_timeseries_tiering` table - Per-second sampler rows (filled by `push_to_postgres.py --table tiering`)
 
 Two IAM-enabled users:
 
@@ -64,11 +65,101 @@ Dashboard definitions live in `grafana/` and are provisioned into Grafana:
 | `valkey-throughput-comparison.json` | Throughput (RPS) comparison across commits |
 | `valkey-performance-per-command.json` | Per-command latency/throughput breakdown |
 | `valkey-module-perf.json` | Module (e.g. valkey-search) performance metrics |
+| `valkey-tiering.json` | Data tiering per-second deep dive |
 | `grafana-values.yaml` | Helm values for the Grafana deployment |
 
 Changes to `grafana/*.json` on `main` are automatically synced to the running
 Grafana instance by the `sync-dashboards.yml` workflow (also manually
 dispatchable).
+
+### Per-Second Tiering Timeseries
+
+The per-second sampler appends one JSON object per second of each scenario's
+measured phase to `results/<commit>/timeseries.jsonl`. `push_to_postgres.py`
+pushes those rows to a per-second table whose name follows `--table`, the same
+way the summary table does. `--table X` writes `metrics.json` to
+`benchmark_metrics_X` and `timeseries.jsonl` to `benchmark_timeseries_X`
+(`core` uses `benchmark_timeseries`, `tag` uses `benchmark_tags_timeseries`).
+The tiering workflow passes `--table tiering`, so its rows go to
+`benchmark_timeseries_tiering`, which is the table `schema.sql` creates and the
+dashboard reads. Being separate from the `benchmark_metrics_*` tables keeps it
+out of the module dashboard's module list.
+
+The table stores each row as recorded: typed identity columns (commit, test,
+run, `sample_time`, `elapsed_sec` and so on) and one JSONB column per sampler
+source holding its raw cumulative reading (`valkey_info`, `latency_histogram`,
+`process_cpu`, `disk`). Every derived number is computed in the database by the
+`benchmark_timeseries_tiering_rates` view, which compares each row with the
+previous row of its run, so changing a dashboard metric means editing the view,
+never re-collecting or re-pushing data.
+
+Create the table, view and helper functions from the schema. It is safe to
+re-run after editing the view:
+
+```bash
+psql -h "$DB_HOST" -U postgres -d postgres -f schema.sql
+```
+
+Push the rows after a benchmark run. The same command pushes `metrics.json`:
+
+```bash
+python utils/push_to_postgres.py \
+  --results-dir results \
+  --table tiering \
+  --test-type tiering \
+  --host "$DB_HOST" \
+  --database postgres \
+  --username github_actions \
+  --password "$DB_PASSWORD"
+```
+
+`--test-type` is stored as `test_type` on summary rows and as `config_name` on
+every per-second row. The dashboard's Config variable matches both. The script
+does not create the per-second table. It stops with an error when results have
+`timeseries.jsonl` but the table or its columns are missing. Pushing the same
+per-second rows twice inserts nothing, so a retried workflow is safe. Add
+`--dry-run` to see the run groups and row counts without connecting.
+
+The `valkey-tiering.json` dashboard reads the view, and the raw `valkey_info`
+column for its Any INFO field panel. Pick a config, a test and one or more
+commits and runs. The per-second panels plot seconds since the run started, so
+several commits line up from second 0. The Runs option picks how the selected
+runs are drawn. Separate (the default) gives each run its own line. Average
+gives one line per commit, the mean of the selected runs at each second. The
+trend row reads the summary table `benchmark_metrics_tiering` instead and shows
+the latest 60 commits whose `test_type` matches the selected config.
+
+### Per-Commit Tiering Workflow
+
+`.github/workflows/tiering_benchmark.yml` benchmarks the commits of
+`dubey02/valkey-data-tiering` branch `data-tiering-unstable` that are not on
+upstream `valkey-io/valkey` `unstable`. It runs `configs/tiering.json` daily at
+06:00 UTC and on manual dispatch, on the self-hosted runner labeled
+`data-tiering-benchmark-arm`. The server address comes from the
+`EC2_TIERING_IP` secret.
+
+Manual dispatch inputs:
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `max_commits` | 1 | Commits to benchmark when `commits` is empty |
+| `commits` | empty | Space-separated SHAs to benchmark instead |
+| `num_runs` | 3 | Runs per scenario |
+| `groups` | empty | Test groups, e.g. `1,2`. Empty runs all groups |
+| `engine` | `mock` | `mock` or `flashcache` |
+| `timeout_minutes` | 720 | Job timeout |
+
+The `mock` engine runs every config with `ext-storage-engine mock` and
+`maxmemory-policy allkeys-lru` and without a storage file. Its rows are pushed
+with config name `tiering-mock`. The `flashcache` engine runs the config as is
+and pushes with config name `tiering`. The workflow passes the config name as
+`--test-type`. Pick the config name in the dashboard's
+Config variable, so mock results never mix with FlashCache results.
+
+Commit tracking uses the `benchmark_commits_tiering` table. One
+`push_to_postgres.py --table tiering` step sends summary metrics to
+`benchmark_metrics_tiering` and per-second rows to
+`benchmark_timeseries_tiering`.
 
 ## Prerequisites
 

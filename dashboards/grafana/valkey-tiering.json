@@ -1,0 +1,1834 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Per-second data tiering panels plot seconds since the run started on the x axis, so several commits line up from second 0.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "panels": [],
+      "title": "Trend across commits",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -30,
+        "showValue": "never",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent AS (SELECT commit, MAX(timestamp) AS ts FROM benchmark_metrics_tiering WHERE test_type = '$config_name' AND (test_id = '$test_id' OR test_id LIKE '$test_id\\_%') GROUP BY commit ORDER BY ts DESC LIMIT 60) SELECT to_char(r.ts, 'YYYY-MM-DD') || ' ' || LEFT(r.commit, 8) AS label, m.command, AVG(m.rps) AS value FROM benchmark_metrics_tiering m JOIN recent r ON r.commit = m.commit WHERE m.test_type = '$config_name' AND (m.test_id = '$test_id' OR m.test_id LIKE '$test_id\\_%') GROUP BY r.ts, r.commit, m.command ORDER BY r.ts, m.command",
+          "refId": "A"
+        }
+      ],
+      "title": "Requests per second per command",
+      "type": "barchart",
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "command",
+            "rowField": "label",
+            "valueField": "value"
+          }
+        }
+      ],
+      "description": "One bar group per commit, for the most recent commits. Not affected by the dashboard time range."
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": -30,
+        "showValue": "never",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent AS (SELECT commit, MAX(timestamp) AS ts FROM benchmark_metrics_tiering WHERE test_type = '$config_name' AND (test_id = '$test_id' OR test_id LIKE '$test_id\\_%') GROUP BY commit ORDER BY ts DESC LIMIT 60) SELECT to_char(r.ts, 'YYYY-MM-DD') || ' ' || LEFT(r.commit, 8) AS label, m.command, AVG(m.p99_latency_ms) AS value FROM benchmark_metrics_tiering m JOIN recent r ON r.commit = m.commit WHERE m.test_type = '$config_name' AND (m.test_id = '$test_id' OR m.test_id LIKE '$test_id\\_%') GROUP BY r.ts, r.commit, m.command ORDER BY r.ts, m.command",
+          "refId": "A"
+        }
+      ],
+      "title": "p99 latency per command",
+      "type": "barchart",
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "command",
+            "rowField": "label",
+            "valueField": "value"
+          }
+        }
+      ],
+      "description": "One bar group per commit, for the most recent commits. Not affected by the dashboard time range."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Throughput",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "ops/s",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.ops_per_sec) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Operations per second",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 6,
+      "panels": [],
+      "title": "Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "bytes",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' used_memory' AS metric, AVG(v.used_memory) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' maxmemory' AS metric, AVG(v.maxmemory) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "B"
+        }
+      ],
+      "title": "Used memory and maxmemory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "ratio",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.mem_fragmentation_ratio) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Memory fragmentation ratio",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 9,
+      "panels": [],
+      "title": "Tiering",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "items",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.ext_storage_total_num_items) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Items on disk",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "bytes",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.ext_storage_total_num_bytes) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Bytes on disk",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "items/s",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' spilled' AS metric, AVG(v.ext_storage_spilled_per_sec) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Items moved to disk per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "items/s",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' fetched' AS metric, AVG(v.ext_storage_fetched_per_sec) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Items read back per second",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "items/s",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' deleted' AS metric, AVG(v.ext_storage_deleted_per_sec) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Items deleted per second",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "id": 15,
+      "panels": [],
+      "title": "CPU",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "percent",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 50
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.main_thread_cpu_pct) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Server main thread CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "percent",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 50
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.worker_threads_cpu_pct) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Server non-main thread CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "percent",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 50
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' user' AS metric, AVG(v.host_cpu_user_pct) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' sys' AS metric, AVG(v.host_cpu_sys_pct) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "B"
+        }
+      ],
+      "title": "Host CPU user and sys",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 59
+      },
+      "id": 19,
+      "panels": [],
+      "title": "Disk",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "IOPS",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "iops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' read' AS metric, AVG(v.disk_read_iops) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' write' AS metric, AVG(v.disk_write_iops) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "B"
+        }
+      ],
+      "title": "Read and write IOPS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "MB/s",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "MBs"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' read' AS metric, AVG(v.disk_read_mb_per_sec) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' write' AS metric, AVG(v.disk_write_mb_per_sec) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "B"
+        }
+      ],
+      "title": "Read and write throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "ms",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 69
+      },
+      "id": 22,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' read await' AS metric, AVG(v.disk_r_await_ms) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' write await' AS metric, AVG(v.disk_w_await_ms) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "B"
+        }
+      ],
+      "title": "Read and write await",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "requests",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 69
+      },
+      "id": 23,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' aqu-sz' AS metric, AVG(v.disk_aqu_sz) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END || ' in flight' AS metric, AVG(v.disk_in_flight) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "B"
+        }
+      ],
+      "title": "Queue depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "percent",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 69
+      },
+      "id": 24,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.disk_util_pct) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Disk utilization",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 78
+      },
+      "id": 25,
+      "panels": [],
+      "title": "Clients",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "clients",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "id": 26,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.blocked_clients) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocked clients",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 88
+      },
+      "id": 27,
+      "panels": [],
+      "title": "Any INFO field",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "PDA4518EDFA6642B8"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "value",
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "hue",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 89
+      },
+      "id": 28,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "PDA4518EDFA6642B8"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + t.elapsed_sec * INTERVAL '1 second' AS time, LEFT(t.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || t.run END || ' ' || f.key AS metric, AVG(tiering_num(t.valkey_info ->> f.key)) AS value FROM benchmark_timeseries_tiering t JOIN runs r ON r.commit = t.commit AND r.run = t.run AND r.run_started_at = t.run_started_at CROSS JOIN (SELECT unnest(ARRAY[$info_field]) AS key) f WHERE t.config_name = '$config_name' AND t.test_id = '$test_id' AND tiering_num(t.valkey_info ->> f.key) IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2",
+          "refId": "A"
+        }
+      ],
+      "title": "Selected INFO fields",
+      "type": "timeseries"
+    }
+  ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "tags": [
+    "valkey",
+    "benchmark",
+    "tiering"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "PDA4518EDFA6642B8"
+        },
+        "definition": "SELECT DISTINCT config_name FROM benchmark_timeseries_tiering ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Config",
+        "multi": false,
+        "name": "config_name",
+        "options": [],
+        "query": "SELECT DISTINCT config_name FROM benchmark_timeseries_tiering ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "PDA4518EDFA6642B8"
+        },
+        "definition": "SELECT DISTINCT test_id FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Test",
+        "multi": false,
+        "name": "test_id",
+        "options": [],
+        "query": "SELECT DISTINCT test_id FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "PDA4518EDFA6642B8"
+        },
+        "definition": "SELECT LEFT(commit, 8) || ' (' || to_char(MAX(run_started_at), 'YYYY-MM-DD') || ')' AS __text, commit AS __value FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' GROUP BY commit ORDER BY MAX(run_started_at) DESC",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Commit",
+        "multi": true,
+        "name": "commit",
+        "options": [],
+        "query": "SELECT LEFT(commit, 8) || ' (' || to_char(MAX(run_started_at), 'YYYY-MM-DD') || ')' AS __text, commit AS __value FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' GROUP BY commit ORDER BY MAX(run_started_at) DESC",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": [
+            "1"
+          ],
+          "value": [
+            "1"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "PDA4518EDFA6642B8"
+        },
+        "definition": "SELECT DISTINCT run::text FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Run",
+        "multi": true,
+        "name": "run",
+        "options": [],
+        "query": "SELECT DISTINCT run::text FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "Separate",
+          "value": "separate"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Runs",
+        "multi": false,
+        "name": "runs_view",
+        "options": [
+          {
+            "selected": true,
+            "text": "Separate",
+            "value": "separate"
+          },
+          {
+            "selected": false,
+            "text": "Average",
+            "value": "average"
+          }
+        ],
+        "query": "Separate : separate, Average : average",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "PDA4518EDFA6642B8"
+        },
+        "definition": "SELECT DISTINCT f.key FROM benchmark_timeseries_tiering t, jsonb_each_text(t.valkey_info) f WHERE t.config_name = '$config_name' AND t.test_id = '$test_id' AND tiering_num(f.value) IS NOT NULL ORDER BY 1",
+        "hide": 0,
+        "includeAll": false,
+        "label": "INFO field",
+        "multi": true,
+        "name": "info_field",
+        "options": [],
+        "query": "SELECT DISTINCT f.key FROM benchmark_timeseries_tiering t, jsonb_each_text(t.valkey_info) f WHERE t.config_name = '$config_name' AND t.test_id = '$test_id' AND tiering_num(f.value) IS NOT NULL ORDER BY 1",
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "1970-01-01T00:00:00.000Z",
+    "to": "1970-01-01T00:02:00.000Z"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Valkey Performance - Data Tiering",
+  "uid": "valkey-tiering",
+  "version": 1
+}

@@ -4,8 +4,12 @@
 This script accepts database credentials including password.
 For AWS IAM authentication, generate the token externally and pass it as the password.
 
-This version supports dynamic schema evolution - new metrics in JSON files
-will automatically create new database columns.
+metrics.json rows support dynamic schema evolution: new metrics in JSON files
+automatically create new database columns.
+
+timeseries.jsonl rows from the per-second sampler go to a separate table that
+must already exist. Create it from dashboards/schema.sql, which also defines
+the view that derives per-second numbers from the raw readings.
 """
 
 import argparse
@@ -22,6 +26,51 @@ from psycopg2.extras import execute_values, Json
 
 DESCRIPTION_MAX_LENGTH = 500
 CONFIG_NAME_MAX_LENGTH = 50
+
+METRICS_FILENAME = "metrics.json"
+TIMESERIES_FILENAME = "timeseries.jsonl"
+TIMESERIES_IDENTITY_COLUMNS = (
+    "commit",
+    "timestamp",
+    "repository",
+    "module_commit",
+    "test_id",
+    "scenario",
+    "command",
+    "data_size",
+    "pipeline",
+    "clients",
+    "io_threads",
+    "architecture",
+    "cluster_mode",
+    "tls",
+    "run",
+    "sample_time",
+    "elapsed_sec",
+)
+TIMESERIES_JSON_COLUMNS = (
+    "config_set",
+    "profiling_set",
+    "valkey_info",
+    "latency_histogram",
+    "process_cpu",
+    "disk",
+)
+TIMESERIES_COLUMNS = (
+    ("config_name", "run_started_at")
+    + TIMESERIES_IDENTITY_COLUMNS
+    + TIMESERIES_JSON_COLUMNS
+)
+TIMESERIES_BATCH_SIZE = 500
+
+TABLE_MISSING_MESSAGE = (
+    "Table '{table}' does not exist. Create it from dashboards/schema.sql "
+    "before pushing timeseries rows."
+)
+COLUMNS_MISSING_MESSAGE = (
+    "Table '{table}' has no column(s) {columns}. Recreate it from "
+    "dashboards/schema.sql."
+)
 
 
 def detect_field_type(value: Any) -> str:
@@ -415,8 +464,170 @@ def process_commit_metrics(
     return count, False
 
 
+def group_key(row: Dict[str, Any]) -> Tuple[str, str, Any, str, Any]:
+    """Return the run group key of a sampler row."""
+    return (
+        row.get("commit"),
+        row.get("test_id"),
+        row.get("run"),
+        json.dumps(row.get("config_set"), sort_keys=True),
+        row.get("io_threads"),
+    )
+
+
+def group_runs(
+    rows: List[Dict[str, Any]],
+) -> Dict[Tuple[Any, ...], List[Dict[str, Any]]]:
+    """Group sampler rows by run."""
+    groups: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(group_key(row), []).append(row)
+    return groups
+
+
+def run_started_at(group_rows: List[Dict[str, Any]]) -> Optional[datetime]:
+    """Return the earliest sample_time of a run group."""
+    stamps = [
+        datetime.fromisoformat(row["sample_time"])
+        for row in group_rows
+        if row.get("sample_time")
+    ]
+    return min(stamps) if stamps else None
+
+
+def build_timeseries_row(
+    row: Dict[str, Any], config_name: str, started_at: Optional[datetime]
+) -> Tuple[Any, ...]:
+    """Convert one sampler row into a tuple in TIMESERIES_COLUMNS order."""
+    values: List[Any] = [config_name, started_at]
+    values.extend(row.get(column) for column in TIMESERIES_IDENTITY_COLUMNS)
+    for column in TIMESERIES_JSON_COLUMNS:
+        value = row.get(column)
+        values.append(Json(value) if value is not None else None)
+    return tuple(values)
+
+
+def collect_timeseries_rows(
+    rows: List[Dict[str, Any]], config_name: str
+) -> List[Tuple[Any, ...]]:
+    """Build insert tuples for every row, stamping each with its run start."""
+    built: List[Tuple[Any, ...]] = []
+    for group_rows in group_runs(rows).values():
+        started_at = run_started_at(group_rows)
+        built.extend(
+            build_timeseries_row(row, config_name, started_at) for row in group_rows
+        )
+    return built
+
+
+def insert_timeseries_rows(
+    conn: psycopg2.extensions.connection,
+    table_name: str,
+    rows: List[Tuple[Any, ...]],
+) -> int:
+    """Insert rows in batches, ignoring conflicts, and return the inserted count."""
+    insert_sql = sql.SQL("INSERT INTO {} ({}) VALUES %s ON CONFLICT DO NOTHING").format(
+        sql.Identifier(table_name),
+        sql.SQL(", ").join(sql.Identifier(col) for col in TIMESERIES_COLUMNS),
+    )
+    inserted = 0
+    with conn.cursor() as cur:
+        for start in range(0, len(rows), TIMESERIES_BATCH_SIZE):
+            batch = rows[start : start + TIMESERIES_BATCH_SIZE]
+            execute_values(cur, insert_sql, batch, page_size=TIMESERIES_BATCH_SIZE)
+            inserted += cur.rowcount
+    conn.commit()
+    return inserted
+
+
+def load_timeseries(path: Path) -> List[Dict[str, Any]]:
+    """Read a timeseries.jsonl file, one JSON object per non-blank line."""
+    rows: List[Dict[str, Any]] = []
+    with open(path) as handle:
+        for number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"{path} line {number} is not valid JSON: {e.msg}")
+            if not isinstance(row, dict):
+                raise ValueError(f"{path} line {number} is not a JSON object")
+            rows.append(row)
+    return rows
+
+
+def process_commit_timeseries(
+    commit_dir: Path,
+    conn: Optional[psycopg2.extensions.connection],
+    table_name: str,
+    config_name: str,
+    dry_run: bool = False,
+) -> Tuple[int, int]:
+    """Push the timeseries.jsonl of a commit directory.
+
+    Returns:
+        Tuple of (rows inserted, rows skipped as already present).
+    """
+    path = commit_dir / TIMESERIES_FILENAME
+    rows = load_timeseries(path)
+    if not rows:
+        print(f"  No rows in {path}")
+        return 0, 0
+
+    groups = group_runs(rows)
+    built = collect_timeseries_rows(rows, config_name)
+    print(f"  {len(rows)} timeseries rows in {len(groups)} run groups")
+
+    if dry_run:
+        for key, group_rows in sorted(groups.items(), key=lambda item: str(item[0])):
+            commit, test_id, run, config_set, io_threads = key
+            print(
+                f"  [dry-run] commit={commit} test_id={test_id} run={run} "
+                f"config_set={config_set} io_threads={io_threads} "
+                f"rows={len(group_rows)} run_started_at={run_started_at(group_rows)}"
+            )
+        print(f"  [dry-run] would insert {len(built)} rows into {table_name}")
+        return 0, 0
+
+    if conn is None:
+        raise ValueError("Database connection is required for inserting data")
+    inserted = insert_timeseries_rows(conn, table_name, built)
+    skipped = len(built) - inserted
+    print(
+        f"  Inserted {inserted} rows into {table_name}, skipped {skipped} existing rows"
+    )
+    return inserted, skipped
+
+
+def timeseries_table_error(
+    conn: psycopg2.extensions.connection, table_name: str
+) -> Optional[str]:
+    """Return why the timeseries table cannot take rows, or None when it can."""
+    table_columns = get_existing_columns(conn, table_name)
+    if not table_columns:
+        return TABLE_MISSING_MESSAGE.format(table=table_name)
+    missing = sorted(set(TIMESERIES_COLUMNS) - table_columns)
+    if missing:
+        return COLUMNS_MISSING_MESSAGE.format(table=table_name, columns=missing)
+    return None
+
+
 CORE_METRICS_TABLE = "benchmark_metrics"
 TAGS_METRICS_TABLE = "benchmark_tags_metrics"
+CORE_TIMESERIES_TABLE = "benchmark_timeseries"
+TAGS_TIMESERIES_TABLE = "benchmark_tags_timeseries"
+
+
+def _resolve_table(table_id: str, core_table: str, tags_table: str) -> str:
+    """Map a table identifier onto a table family."""
+    if table_id == "core":
+        return core_table
+    if table_id == "tag":
+        return tags_table
+    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", table_id):
+        raise ValueError(f"Invalid table identifier: '{table_id}'")
+    return f"{core_table}_{table_id}"
 
 
 def resolve_table_name(table_id: str) -> str:
@@ -433,16 +644,25 @@ def resolve_table_name(table_id: str) -> str:
     Raises:
         ValueError: If table_id is invalid.
     """
-    if table_id == "core":
-        return CORE_METRICS_TABLE
-    if table_id == "tag":
-        return TAGS_METRICS_TABLE
-    if not re.match(r"^[a-z][a-z0-9_]{0,30}$", table_id):
-        raise ValueError(f"Invalid table identifier: '{table_id}'")
-    return f"{CORE_METRICS_TABLE}_{table_id}"
+    return _resolve_table(table_id, CORE_METRICS_TABLE, TAGS_METRICS_TABLE)
 
 
-def main() -> None:
+def resolve_timeseries_table_name(table_id: str) -> str:
+    """Resolve per-second timeseries table name from table identifier.
+
+    Returns:
+        'benchmark_timeseries' for 'core',
+        'benchmark_tags_timeseries' for 'tag',
+        or 'benchmark_timeseries_{table_id}' otherwise.
+
+    Raises:
+        ValueError: If table_id is invalid.
+    """
+    return _resolve_table(table_id, CORE_TIMESERIES_TABLE, TAGS_TIMESERIES_TABLE)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the command line parser."""
     parser = argparse.ArgumentParser(description="Push benchmark metrics to PostgreSQL")
     parser.add_argument(
         "--results-dir", required=True, help="Path to results directory"
@@ -457,24 +677,35 @@ def main() -> None:
         "--password", help="Database password (not required for dry-run)"
     )
     parser.add_argument(
+        "--sslmode", default="require", help="PostgreSQL sslmode. Defaults to require"
+    )
+    parser.add_argument(
         "--table",
         default="core",
         help="Table identifier (e.g., 'core', 'search', 'tag'). Defaults to 'core' "
         "which uses 'benchmark_metrics'. 'tag' uses 'benchmark_tags_metrics'. "
-        "Other values use 'benchmark_metrics_{table}'.",
+        "Other values use 'benchmark_metrics_{table}'. timeseries.jsonl rows go to "
+        "'benchmark_timeseries', 'benchmark_tags_timeseries' or "
+        "'benchmark_timeseries_{table}' in the same way.",
     )
     parser.add_argument(
         "--test-type",
         default="core",
-        help="Test type identifier (e.g., 'core', 'fts') for filtering in dashboards",
+        help="Test type identifier (e.g., 'core', 'fts') for filtering in dashboards. "
+        "Also stored as config_name on timeseries rows.",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be inserted"
     )
+    return parser
 
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     args.table_name = resolve_table_name(args.table)
+    args.timeseries_table_name = resolve_timeseries_table_name(args.table)
 
     if not args.dry_run:
         if not all([args.host, args.database, args.username]):
@@ -506,7 +737,7 @@ def main() -> None:
                 user=args.username,
                 password=password,
                 connect_timeout=30,
-                sslmode="require",
+                sslmode=args.sslmode,
             )
             print(f"Connected to PostgreSQL at {args.host}:{args.port}")
         except psycopg2.OperationalError as e:
@@ -520,40 +751,68 @@ def main() -> None:
             sys.exit(1)
 
     try:
-        # Process all commit directories (main's approach)
-        # Note: Table creation/updates happen dynamically during processing
+        # Table creation/updates for metrics happen dynamically during processing
         print(f"Scanning {results_dir} for commit directories...")
         commit_dirs = [
             d
             for d in results_dir.iterdir()
-            if d.is_dir() and (d / "metrics.json").exists()
+            if d.is_dir()
+            and ((d / METRICS_FILENAME).exists() or (d / TIMESERIES_FILENAME).exists())
         ]
         commit_dirs.sort()
 
         print(f"Found {len(commit_dirs)} commit directories to process")
 
+        timeseries_dirs = [d for d in commit_dirs if (d / TIMESERIES_FILENAME).exists()]
+        if timeseries_dirs and conn is not None:
+            error = timeseries_table_error(conn, args.timeseries_table_name)
+            if error:
+                print(error, file=sys.stderr)
+                sys.exit(1)
+
         total_processed = 0
+        total_inserted = 0
+        total_skipped = 0
 
         for i, commit_dir in enumerate(commit_dirs, 1):
             print(f"\n[{i}/{len(commit_dirs)}] Processing {commit_dir.name}...")
             try:
-                count, was_skipped = process_commit_metrics(
-                    commit_dir,
-                    conn,
-                    args.table_name,
-                    args.dry_run,
-                    test_type=args.test_type,
-                )
-                total_processed += count
-                if was_skipped:
-                    print(f"Warning: Skipped {commit_dir.name} (no valid metrics)")
-                print(f"Completed {commit_dir.name} ({count} metrics)")
+                if (commit_dir / METRICS_FILENAME).exists():
+                    count, was_skipped = process_commit_metrics(
+                        commit_dir,
+                        conn,
+                        args.table_name,
+                        args.dry_run,
+                        test_type=args.test_type,
+                    )
+                    total_processed += count
+                    if was_skipped:
+                        print(f"Warning: Skipped {commit_dir.name} (no valid metrics)")
+                    print(f"Completed {commit_dir.name} ({count} metrics)")
+                if commit_dir in timeseries_dirs:
+                    inserted, skipped = process_commit_timeseries(
+                        commit_dir,
+                        conn,
+                        args.timeseries_table_name,
+                        args.test_type,
+                        args.dry_run,
+                    )
+                    total_inserted += inserted
+                    total_skipped += skipped
             except Exception as e:
                 print(f"Error processing {commit_dir.name}: {e}", file=sys.stderr)
                 sys.exit(1)
 
         status = "[DRY RUN] Would process" if args.dry_run else "Successfully processed"
         print(f"\n{status} {total_processed} total metrics")
+        if timeseries_dirs:
+            if args.dry_run:
+                print(f"[DRY RUN] Read {len(timeseries_dirs)} timeseries files")
+            else:
+                print(
+                    f"Inserted {total_inserted} timeseries rows, "
+                    f"skipped {total_skipped} existing rows"
+                )
 
     finally:
         if conn:

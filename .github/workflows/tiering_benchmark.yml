@@ -1,0 +1,404 @@
+name: Valkey Data Tiering Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_commits:
+        description: "Max commits to benchmark (default 1)"
+        required: false
+        default: "1"
+        type: string
+      commits:
+        description: "Manual commit SHAs (space-separated, skips determine)"
+        required: false
+        default: ""
+        type: string
+      num_runs:
+        description: "Number of runs per scenario (default 3)"
+        required: false
+        default: "3"
+        type: string
+      groups:
+        description: "Test groups to run, e.g. 1,2 (empty = all groups in configs/tiering.json)"
+        required: false
+        default: ""
+        type: string
+      engine:
+        description: "ext-storage-engine to benchmark"
+        required: false
+        default: "mock"
+        type: choice
+        options:
+          - "mock"
+          - "flashcache"
+      timeout_minutes:
+        description: "Job timeout in minutes (default 720)"
+        required: false
+        default: "720"
+        type: string
+  schedule:
+    - cron: "0 6 * * *"
+
+concurrency:
+  group: data-tiering-benchmark-arm
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  tiering_benchmark:
+    env:
+      TRACKING_TABLE: "tiering"
+      VALKEY_GITHUB_REPO: "dubey02/valkey-data-tiering"
+      VALKEY_BRANCH: "data-tiering-unstable"
+      UPSTREAM_REPO_URL: "https://github.com/valkey-io/valkey.git"
+      VALKEY_DIR: "valkey"
+      VALKEY_PATH: "${{ github.workspace }}/valkey"
+      BENCHMARK_TOOL_DIR: "valkey_benchmark_tool"
+      PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
+      PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
+      ENGINE: ${{ inputs.engine || 'mock' }}
+      CONFIG_NAME: ${{ (inputs.engine || 'mock') == 'flashcache' && 'tiering' || 'tiering-mock' }}
+      MAX_COMMITS: ${{ inputs.max_commits || '1' }}
+      NUM_RUNS: ${{ inputs.num_runs || '3' }}
+      COMMITS_INPUT: ${{ inputs.commits || '' }}
+      GROUPS_INPUT: ${{ inputs.groups || '' }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      PG_HOST: ${{ secrets.POSTGRESQL_ENDPOINT }}
+      PG_DATABASE: ${{ secrets.RDS_DATABASE }}
+      PG_USERNAME: ${{ secrets.RDS_USERNAME }}
+    runs-on: [self-hosted, data-tiering-benchmark-arm]
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '720') }}
+    steps:
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Checkout valkey-data-tiering
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.VALKEY_GITHUB_REPO }}
+          ref: ${{ env.VALKEY_BRANCH }}
+          path: ${{ env.VALKEY_DIR }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Commit selection uses upstream/unstable..data-tiering-unstable so only
+      # this branch's own commits are benchmarked.
+      - name: Fetch upstream valkey unstable
+        working-directory: ${{ env.VALKEY_DIR }}
+        run: git fetch "$UPSTREAM_REPO_URL" unstable:refs/remotes/upstream/unstable
+
+      - name: Checkout valkey-data-tiering for valkey-benchmark
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.VALKEY_GITHUB_REPO }}
+          ref: ${{ env.VALKEY_BRANCH }}
+          path: ${{ env.BENCHMARK_TOOL_DIR }}
+          persist-credentials: false
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: ${{ env.PERF_BENCHMARK_DIR }}
+
+      - name: Install benchmark Python dependencies
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: pip install --require-hashes -r requirements.txt
+
+      - name: Build valkey-benchmark
+        working-directory: ${{ env.BENCHMARK_TOOL_DIR }}
+        run: |
+          make -j"$(nproc)" valkey-benchmark
+          if ! ./src/valkey-benchmark --help 2>&1 | grep -q -- "--keysize"; then
+            echo "::error::valkey-benchmark from $VALKEY_BRANCH does not support --keysize"
+            exit 1
+          fi
+          echo "VALKEY_BENCHMARK_PATH=$(pwd)/src/valkey-benchmark" >> "$GITHUB_ENV"
+
+      # mock has no storage file, so it drops the path and capacity settings.
+      - name: Write engine config
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          if [[ -n "$GROUPS_INPUT" ]]; then
+            RUN_CONFIG="$RUNNER_TEMP/tiering-groups-${GROUPS_INPUT//[^0-9]/_}.json"
+          else
+            RUN_CONFIG="$RUNNER_TEMP/tiering.json"
+          fi
+          python - configs/tiering.json "$RUN_CONFIG" "$ENGINE" <<'EOF'
+          import json
+          import sys
+
+          source, target, engine = sys.argv[1:]
+          with open(source) as f:
+              configs = json.load(f)
+          if engine == "mock":
+              for cfg in configs:
+                  server = cfg["custom-server-configs"]
+                  server["ext-storage-engine"] = "mock"
+                  server.pop("ext-storage-path", None)
+                  server.pop("ext-storage-capacity", None)
+                  server["maxmemory-policy"] = "allkeys-lru"
+          with open(target, "w") as f:
+              json.dump(configs, f, indent=2)
+          EOF
+          cat "$RUN_CONFIG"
+          echo "RUN_CONFIG=$RUN_CONFIG" >> "$GITHUB_ENV"
+
+      - name: Pre-flight host checks
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          if ! mountpoint -q /mnt/nvme; then
+            echo "::error::/mnt/nvme is not a mountpoint"
+            exit 1
+          fi
+          lscpu -p=CPU,NODE > "$RUNNER_TEMP/cpu_nodes.csv"
+          python - "$RUN_CONFIG" "$RUNNER_TEMP/cpu_nodes.csv" <<'EOF'
+          import json
+          import sys
+
+          from utils.cpu_utils import (
+              calculate_client_cpu_ranges,
+              calculate_server_cpu_ranges,
+              parse_core_range,
+          )
+
+          config_path, nodes_path = sys.argv[1:]
+          with open(config_path) as f:
+              configs = json.load(f)
+          node_of = {}
+          with open(nodes_path) as f:
+              for line in f:
+                  if line.startswith("#"):
+                      continue
+                  cpu, node = line.strip().split(",")
+                  node_of[int(cpu)] = int(node) if node else None
+
+          cores = set()
+          for cfg in configs:
+              ranges = (calculate_server_cpu_ranges(cfg) or []) + (
+                  calculate_client_cpu_ranges(cfg) or []
+              )
+              for cpu_range in ranges:
+                  cores.update(parse_core_range(cpu_range))
+          bad = sorted(c for c in cores if node_of.get(c) != 0)
+          if bad:
+              print(f"::error::cores {bad} used by the config are not on NUMA node 0")
+              sys.exit(1)
+          print(f"All {len(cores)} configured cores are on NUMA node 0")
+          EOF
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Cleanup stale rows from previous runs
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname "$PG_HOST" \
+            --port 5432 \
+            --region "$AWS_REGION" \
+            --username "$PG_USERNAME")
+          python utils/postgres_track_commits.py cleanup \
+            --table "$TRACKING_TABLE" \
+            --config-file "$RUN_CONFIG" \
+            --host "$PG_HOST" \
+            --port 5432 \
+            --database "$PG_DATABASE" \
+            --username "$PG_USERNAME" \
+            --password "$PGPASSWORD"
+
+      - name: Determine commits to benchmark
+        id: determine_commits
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          if [[ -n "$COMMITS_INPUT" ]]; then
+            COMMITS=""
+            for c in $COMMITS_INPUT; do
+              COMMITS+="$(git -C "$VALKEY_PATH" rev-parse --verify "$c^{commit}") "
+            done
+            COMMITS="${COMMITS% }"
+            echo "Using manual commits: $COMMITS"
+          else
+            PGPASSWORD=$(aws rds generate-db-auth-token \
+              --hostname "$PG_HOST" \
+              --port 5432 \
+              --region "$AWS_REGION" \
+              --username "$PG_USERNAME")
+            COMMITS=$(python utils/postgres_track_commits.py determine \
+              --table "$TRACKING_TABLE" \
+              --repo "$VALKEY_PATH" \
+              --branch "upstream/unstable..$VALKEY_BRANCH" \
+              --config-file "$RUN_CONFIG" \
+              --max-commits "$MAX_COMMITS" \
+              --host "$PG_HOST" \
+              --port 5432 \
+              --database "$PG_DATABASE" \
+              --username "$PG_USERNAME" \
+              --password "$PGPASSWORD")
+          fi
+
+          echo "commits=$COMMITS" >> "$GITHUB_OUTPUT"
+          if [[ -z "$COMMITS" ]]; then
+            echo "No pending commits to benchmark."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mark commits as in progress
+        if: steps.determine_commits.outputs.skip == 'false'
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        env:
+          COMMITS: ${{ steps.determine_commits.outputs.commits }}
+        run: |
+          read -ra SHAS <<< "$COMMITS"
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname "$PG_HOST" \
+            --port 5432 \
+            --region "$AWS_REGION" \
+            --username "$PG_USERNAME")
+          python utils/postgres_track_commits.py mark \
+            --table "$TRACKING_TABLE" \
+            --repo "$VALKEY_PATH" \
+            --config-file "$RUN_CONFIG" \
+            --status in_progress \
+            --host "$PG_HOST" \
+            --port 5432 \
+            --database "$PG_DATABASE" \
+            --username "$PG_USERNAME" \
+            --password "$PGPASSWORD" \
+            "${SHAS[@]}"
+
+      - name: Benchmark commits
+        if: steps.determine_commits.outputs.skip == 'false'
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        env:
+          COMMITS: ${{ steps.determine_commits.outputs.commits }}
+          TARGET_IP: ${{ secrets.EC2_TIERING_IP }}
+        run: |
+          read -ra SHAS <<< "$COMMITS"
+          for SHA in "${SHAS[@]}"; do
+            echo "=== Benchmarking $SHA ==="
+            git -C "$VALKEY_PATH" checkout --detach "$SHA"
+            python benchmark.py \
+              --config "$RUN_CONFIG" \
+              --commits "$SHA" \
+              --valkey-path "../$VALKEY_DIR" \
+              --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH" \
+              --target-ip "$TARGET_IP" \
+              --results-dir results \
+              --runs "$NUM_RUNS" \
+              ${GROUPS_INPUT:+--groups "$GROUPS_INPUT"}
+            HEAD_SHA=$(git -C "$VALKEY_PATH" rev-parse HEAD)
+            if [[ "$HEAD_SHA" != "$SHA" ]]; then
+              echo "::error::benchmarked $HEAD_SHA instead of $SHA"
+              exit 1
+            fi
+            pkill -f valkey-server || echo "No valkey-server processes to kill"
+          done
+
+      - name: Configure AWS credentials for results push
+        if: steps.determine_commits.outputs.skip == 'false'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      # Pushes metrics.json and timeseries.jsonl. The config name is stored as
+      # test_type on summary rows and as config_name on per-second rows, so the
+      # dashboard keeps mock and FlashCache results apart.
+      - name: Push results to PostgreSQL
+        if: steps.determine_commits.outputs.skip == 'false'
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname "$PG_HOST" \
+            --port 5432 \
+            --region "$AWS_REGION" \
+            --username "$PG_USERNAME")
+          python utils/push_to_postgres.py \
+            --results-dir ./results \
+            --table "$TRACKING_TABLE" \
+            --test-type "$CONFIG_NAME" \
+            --host "$PG_HOST" \
+            --port 5432 \
+            --database "$PG_DATABASE" \
+            --username "$PG_USERNAME" \
+            --password "$PGPASSWORD"
+
+      - name: Mark commits complete
+        if: steps.determine_commits.outputs.skip == 'false'
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        env:
+          COMMITS: ${{ steps.determine_commits.outputs.commits }}
+        run: |
+          read -ra SHAS <<< "$COMMITS"
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname "$PG_HOST" \
+            --port 5432 \
+            --region "$AWS_REGION" \
+            --username "$PG_USERNAME")
+          python utils/postgres_track_commits.py mark \
+            --table "$TRACKING_TABLE" \
+            --repo "$VALKEY_PATH" \
+            --config-file "$RUN_CONFIG" \
+            --status complete \
+            --host "$PG_HOST" \
+            --port 5432 \
+            --database "$PG_DATABASE" \
+            --username "$PG_USERNAME" \
+            --password "$PGPASSWORD" \
+            "${SHAS[@]}"
+
+      - name: Upload Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiering-benchmark-results
+          path: ${{ env.PERF_BENCHMARK_DIR }}/results
+
+      - name: Re-auth with AWS credentials
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Cleanup stale commit tracking
+        if: always() && env.RUN_CONFIG != ''
+        continue-on-error: true
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          PGPASSWORD=$(aws rds generate-db-auth-token \
+            --hostname "$PG_HOST" \
+            --port 5432 \
+            --region "$AWS_REGION" \
+            --username "$PG_USERNAME")
+          python utils/postgres_track_commits.py cleanup \
+            --table "$TRACKING_TABLE" \
+            --config-file "$RUN_CONFIG" \
+            --host "$PG_HOST" \
+            --port 5432 \
+            --database "$PG_DATABASE" \
+            --username "$PG_USERNAME" \
+            --password "$PGPASSWORD"
+
+      - name: Cleanup
+        if: always()
+        continue-on-error: true
+        run: |
+          pkill -f valkey || echo "No valkey processes found to kill"
+          rm -rf "$VALKEY_PATH" "${{ github.workspace }}/$BENCHMARK_TOOL_DIR" "$PERF_BENCHMARK_PATH"
