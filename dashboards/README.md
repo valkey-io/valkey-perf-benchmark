@@ -49,7 +49,7 @@ Two databases on a single RDS instance:
 2. **`postgres`** - Benchmark metrics data
    - `benchmark_metrics` table - Performance data
    - `benchmark_commits` table - Commit tracking (used by `postgres_track_commits.py`)
-   - `benchmark_timeseries_tiering` table - Per-second sampler rows (used by `push_timeseries_to_postgres.py`)
+   - `benchmark_timeseries_tiering` table - Per-second sampler rows (filled by `push_to_postgres.py --table tiering`)
 
 Two IAM-enabled users:
 
@@ -75,9 +75,15 @@ dispatchable).
 ### Per-Second Tiering Timeseries
 
 The per-second sampler appends one JSON object per second of each scenario's
-measured phase to `results/<commit>/timeseries.jsonl`. Those rows go into the
-`benchmark_timeseries_tiering` table, which is separate from the
-`benchmark_metrics_*` tables so the module dashboard does not list it as a module.
+measured phase to `results/<commit>/timeseries.jsonl`. `push_to_postgres.py`
+pushes those rows to a per-second table whose name follows `--table`, the same
+way the summary table does. `--table X` writes `metrics.json` to
+`benchmark_metrics_X` and `timeseries.jsonl` to `benchmark_timeseries_X`
+(`core` uses `benchmark_timeseries`, `tag` uses `benchmark_tags_timeseries`).
+The tiering workflow passes `--table tiering`, so its rows go to
+`benchmark_timeseries_tiering`, which is the table `schema.sql` creates and the
+dashboard reads. Being separate from the `benchmark_metrics_*` tables keeps it
+out of the module dashboard's module list.
 
 The table stores each row as recorded: typed identity columns (commit, test,
 run, `sample_time`, `elapsed_sec` and so on) and one JSONB column per sampler
@@ -94,22 +100,25 @@ re-run after editing the view:
 psql -h "$DB_HOST" -U postgres -d postgres -f schema.sql
 ```
 
-Push the rows after a benchmark run:
+Push the rows after a benchmark run. The same command pushes `metrics.json`:
 
 ```bash
-python utils/push_timeseries_to_postgres.py \
+python utils/push_to_postgres.py \
   --results-dir results \
-  --config-name tiering \
+  --table tiering \
+  --test-type tiering \
   --host "$DB_HOST" \
   --database postgres \
   --username github_actions \
   --password "$DB_PASSWORD"
 ```
 
-`--config-name` is stored on every row and is what the dashboard's Config
-variable selects. Pushing the same results twice inserts nothing, so a retried
-workflow is safe. Add `--dry-run` to see the run groups and row counts without
-connecting.
+`--test-type` is stored as `test_type` on summary rows and as `config_name` on
+every per-second row. The dashboard's Config variable matches both. The script
+does not create the per-second table. It stops with an error when results have
+`timeseries.jsonl` but the table or its columns are missing. Pushing the same
+per-second rows twice inserts nothing, so a retried workflow is safe. Add
+`--dry-run` to see the run groups and row counts without connecting.
 
 The `valkey-tiering.json` dashboard reads the view, and the raw `valkey_info`
 column for its Any INFO field panel. Pick a config, a test and one or more
@@ -143,11 +152,13 @@ Manual dispatch inputs:
 The `mock` engine runs every config with `ext-storage-engine mock` and
 `maxmemory-policy allkeys-lru` and without a storage file. Its rows are pushed
 with config name `tiering-mock`. The `flashcache` engine runs the config as is
-and pushes with config name `tiering`. Pick the config name in the dashboard's
+and pushes with config name `tiering`. The workflow passes the config name as
+`--test-type`. Pick the config name in the dashboard's
 Config variable, so mock results never mix with FlashCache results.
 
-Commit tracking uses the `benchmark_commits_tiering` table. Summary metrics go
-to `benchmark_metrics_tiering` and per-second rows to
+Commit tracking uses the `benchmark_commits_tiering` table. One
+`push_to_postgres.py --table tiering` step sends summary metrics to
+`benchmark_metrics_tiering` and per-second rows to
 `benchmark_timeseries_tiering`.
 
 ## Prerequisites

@@ -1265,8 +1265,9 @@ Each JSONL row is one line; this example is wrapped for readability:
 }
 ```
 
-`utils/push_timeseries_to_postgres.py` pushes these rows to the
-`benchmark_timeseries_tiering` table for the `valkey-tiering` dashboard, see
+`utils/push_to_postgres.py` pushes these rows together with `metrics.json`. With
+`--table X` they go to `benchmark_timeseries_X`, so `--table tiering` fills the
+`benchmark_timeseries_tiering` table used by the `valkey-tiering` dashboard. See
 `dashboards/README.md`.
 
 ## Performance Profiling

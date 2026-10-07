@@ -316,8 +316,9 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
-      # test_type carries the config name so the dashboard trend row keeps mock
-      # and FlashCache results apart.
+      # Pushes metrics.json and timeseries.jsonl. The config name is stored as
+      # test_type on summary rows and as config_name on per-second rows, so the
+      # dashboard keeps mock and FlashCache results apart.
       - name: Push results to PostgreSQL
         if: steps.determine_commits.outputs.skip == 'false'
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
@@ -331,14 +332,6 @@ jobs:
             --results-dir ./results \
             --table "$TRACKING_TABLE" \
             --test-type "$CONFIG_NAME" \
-            --host "$PG_HOST" \
-            --port 5432 \
-            --database "$PG_DATABASE" \
-            --username "$PG_USERNAME" \
-            --password "$PGPASSWORD"
-          python utils/push_timeseries_to_postgres.py \
-            --results-dir ./results \
-            --config-name "$CONFIG_NAME" \
             --host "$PG_HOST" \
             --port 5432 \
             --database "$PG_DATABASE" \
