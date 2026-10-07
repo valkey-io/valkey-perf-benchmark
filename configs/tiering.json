@@ -210,7 +210,7 @@
     "test_groups": [
       {
         "group": 5,
-        "description": "Zipfian 80/20 with one value size per scenario under a 512mb DRAM cap, keyspace sized so 10% of the values fit in memory",
+        "description": "Zipfian 80/20 with 500 B and 5 KB values, one per scenario under a 512mb DRAM cap, keyspace sized so 10% of the values fit in memory",
         "scenarios": [
           {
             "id": "v500",
@@ -261,74 +261,6 @@
             "pipeline": 1,
             "data_size": 5000,
             "keyspacelen": 776956,
-            "benchmark_args": [
-              "--zipfian 1.0",
-              "--keysize 100"
-            ],
-            "writes": [
-              {
-                "id": "set",
-                "test": "SET",
-                "clients": 40
-              }
-            ],
-            "reads": [
-              {
-                "id": "get",
-                "test": "GET",
-                "clients": 160
-              }
-            ]
-          },
-          {
-            "id": "v500k",
-            "type": "mixed",
-            "description": "500 KB values over 10284 keys, GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
-            "restart_before": true,
-            "populate_with": "SET",
-            "populate_clients": 50,
-            "populate_benchmark_args": [
-              "--keysize 100"
-            ],
-            "populate_retries": 20,
-            "duration": 60,
-            "pipeline": 1,
-            "data_size": 500000,
-            "keyspacelen": 10284,
-            "benchmark_args": [
-              "--zipfian 1.0",
-              "--keysize 100"
-            ],
-            "writes": [
-              {
-                "id": "set",
-                "test": "SET",
-                "clients": 40
-              }
-            ],
-            "reads": [
-              {
-                "id": "get",
-                "test": "GET",
-                "clients": 160
-              }
-            ]
-          },
-          {
-            "id": "v5m",
-            "type": "mixed",
-            "description": "5 MB values over 1031 keys, GET (160 clients) and SET (40 clients), zipfian alpha 1.0",
-            "restart_before": true,
-            "populate_with": "SET",
-            "populate_clients": 50,
-            "populate_benchmark_args": [
-              "--keysize 100"
-            ],
-            "populate_retries": 20,
-            "duration": 60,
-            "pipeline": 1,
-            "data_size": 5000000,
-            "keyspacelen": 1031,
             "benchmark_args": [
               "--zipfian 1.0",
               "--keysize 100"
