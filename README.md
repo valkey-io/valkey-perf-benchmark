@@ -104,6 +104,13 @@ valkey-perf-benchmark/
 ├── profiler.py              # Generic performance profiler (flamegraphs)
 ├── cpu_monitor.py           # CPU monitoring during tests
 ├── per_cpu_monitor.py       # Per-CPU monitoring (scheduler issue detection)
+├── metrics_sampler.py       # 1 Hz per-second sampler (opt-in via per_second_sampling)
+├── samplers/                # Pluggable sample sources the sampler selects between
+│   ├── base.py             # SamplerContext, SampleSource, shared CLI helper
+│   ├── valkey_info.py      # Raw INFO ALL fields
+│   ├── latency_histogram.py # Raw LATENCY HISTOGRAM reply
+│   ├── process_cpu.py      # Raw /proc/stat and per-thread server CPU ticks (local only)
+│   └── disk.py             # Raw block device stat counters (local only)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
@@ -312,7 +319,8 @@ Create benchmark configurations in JSON format. Each object represents a single 
     "custom-server-configs": {
       "maxmemory": "4gb",
       "timeout": "300"
-    }
+    },
+    "post_commands": ["INFO memory", "MEMORY STATS"]
   }
 ]
 ```
@@ -357,16 +365,19 @@ Combine with a baseline `.conf` file:
 | `client_cpu_range` | CPU cores for client (e.g. "4-7", "1,3,5", or "0-3,8-11")      | String              | No              |
 | `custom-server-configs` | Additional server configuration options the benchmark does not manage (e.g. `{"maxmemory": "4gb", "timeout": "300"}`). | Object (key-value pairs) | No |
 | `custom-server-config-file` | Path to a Valkey-format `.conf` file passed positionally to `valkey-server`. Used as a baseline configuration. | String (path) | No |
+| `build_args` | Extra `NAME=value` variables passed to `make` when the framework builds Valkey (e.g. `["BUILD_EXT_STORAGE=yes"]`). `BUILD_TLS` is not allowed because it comes from `tls_mode`. Each name may appear once. | List of strings | No |
 
-**Note on `custom-server-configs`**: This field lets you pass *additional* configuration options to the Valkey server at startup — settings the benchmark itself does not manage (e.g. `maxmemory`, `timeout`, `maxclients`, `tcp-keepalive`, `hz`).
+**Note on `custom-server-configs`**: This field lets you pass extra configuration options to the Valkey server at startup (e.g. `maxmemory`, `timeout`, `maxclients`, `tcp-keepalive`, `hz`), and to override a benchmark-managed default such as `maxmemory-policy`.
 
 **Precedence**: Configs are applied in this order on the `valkey-server` command line:
 
-1. `custom-server-config-file` (positional, parsed first — lowest priority)
-2. `custom-server-configs` (`--key value` flags)
-3. Benchmark-managed defaults (`--key value` flags — highest priority via Valkey's last-wins semantics)
+1. `custom-server-config-file` (positional, parsed first, lowest priority)
+2. Benchmark-managed defaults (`--key value` flags)
+3. `custom-server-configs` (`--key value` flags, highest priority)
 
-This means harness-critical settings (`port`, `daemonize`, `logfile`, `cluster-*`, etc.) always take effect regardless of what the user supplies. Setting them in `custom-server-configs` is allowed but has no effect.
+A key you set in `custom-server-configs` wins over the benchmark default for that key: the framework skips its own default instead of appending it afterwards. For example, setting `"maxmemory-policy": "noeviction"` takes effect even though the default is `allkeys-lru`.
+
+`custom-server-configs` is for settings the framework does not manage. A key the framework sets from another config field (`port`, `tls_mode`, `modules`, `cluster_mode`, `cluster_nodes`, `cluster_config_dir`) or needs for process management (`daemonize`, `logfile`, `save`, `appendonly`, `protected-mode`) is rejected at config validation with a message naming the reason. `io-threads` may be set through `custom-server-configs`, but not at the same time as the top-level `io-threads` field, which sweeps multiple values.
 
 When `warmup` is provided for read commands, the benchmark performs three stages:
 
@@ -444,6 +455,42 @@ variants (insert/delete/substitute) match under fuzzy search.
 
 See `configs/module-test-arm.json` for a runnable example that includes a
 mixed workload and per-cluster-execution options.
+
+### Post-run Commands (`post_commands`)
+
+`post_commands` is a list of Valkey commands that runs **after** a benchmark run
+finishes, including when that run failed. It can be used to record server-side
+state, such as memory fragmentation, keyspace stats, index stats, `INFO`
+sections, and so on.
+
+It can be set on a scenario or at the config level. A scenario's own list wins;
+otherwise the config-level list applies.
+
+A failing command is logged as a warning and never fails the benchmark.
+
+In cluster mode the commands are sent to the single port given by `port`
+rather than to every node in `cluster_ports`.
+
+Each command's output is captured to `post_commands.json` in the results
+directory. The file is a JSON array where each element records the
+command and its result:
+
+```json
+[
+  {
+    "command": "INFO memory",
+    "results": {
+      "used_memory": 1048576,
+      "used_memory_rss": 2097152,
+      "mem_fragmentation_ratio": 2.0
+    }
+  },
+  {
+    "command": "DBSIZE",
+    "results": 1000
+  }
+]
+```
 
 ## Results
 
@@ -689,7 +736,8 @@ Module tests use structured `test_groups` with `scenarios`:
         "dataset": "queries.csv",
         "clients": 1000,
         "duration": 60,
-        "warmup": 20
+        "warmup": 20,
+        "post_commands": ["INFO memory", "FT.INFO idx"]
       }
     ]
   }],
@@ -708,7 +756,12 @@ Module tests use structured `test_groups` with `scenarios`:
 | `keyspacelen`    | Per-scenario key space size, passed as `-r N`. Falls back to the config-level `keyspacelen[0]`.                                    |
 | `warmup_inline`  | Adds `--warmup N` to the main benchmark run. Distinct from `warmup`, which performs a separate warm-up run first.                  |
 | `restart_before` | Restarts the managed server before the scenario runs (flushes the database instead when using a running server).                   |
-| `populate_with`  | Write workload that seeds the keyspace before a read test. For a `test` scenario it is a predefined write name (e.g. `SET`), run as `-t NAME`; for a `command` scenario it is an arbitrary write command string (e.g. `SET key:__rand_int__ __data__`), run after `--`. The populate pass runs sequentially and shares the main run's seed, so the read hits the seeded keys. |
+| `populate_with`  | Write workload that seeds the keyspace before the measured run. For a `test` scenario it is a predefined write name (e.g. `SET`), run as `-t NAME`. For a `command` scenario it is an arbitrary write command string (e.g. `SET key:__rand_int__ __data__`), run after `--`. On a `type: mixed` scenario a single word must be a predefined write name and runs as `-t NAME`, and a longer string runs as an arbitrary write command after `--`. The populate pass runs sequentially and shares the main run's seed, so the measured run hits the seeded keys. It produces no metrics row and no sampled rows. |
+| `populate_clients` | Client count for the populate pass only. Requires `populate_with`. Defaults to the scenario's `clients`, or 1 when the scenario has none (a mixed parent carries its client counts on its children). |
+| `populate_benchmark_args` | `benchmark_args`-shaped list applied to the populate pass only, validated identically. Requires `populate_with`. The populate pass does not inherit the scenario's `benchmark_args`, so a load-only flag such as `--keysize` belongs here and a measured-only flag such as `--zipfian` stays out of the load. |
+| `populate_retries` | Additional populate attempts when the keyspace comes up short, default 0. Requires `populate_with`. At 0 the pass runs once and its key count is never checked. Above 0 the summed `DBSIZE` across the active ports is compared against `min(requests, keyspacelen)` after every attempt, and a short count (or a nonzero exit, which valkey-benchmark returns when the server rejects writes) sleeps two seconds and runs the pass again. Exhausting the attempts raises. |
+| `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. Flags the framework emits itself (`-h -p -c -P -d -n -r -t --duration --seed --sequential --threads --warmup --cluster --tls --csv`, the TLS certificate flags and the dataset flags) are rejected at config validation; use the corresponding scenario field instead. |
+| `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. Flags the framework emits itself (`-h -p -c -P -d -n -r -t --duration --seed --sequential --threads --warmup --cluster --tls --csv`, the TLS certificate flags and the dataset flags) are rejected at config validation; use the corresponding scenario field instead. |
 
 ### Cluster Mode Support
 
@@ -760,6 +813,14 @@ Module tests use structured `test_groups` with `scenarios`:
      }
      ```
      Framework calculates ranges: servers [0-7, 8-15, 16-23...], clients [40-47, 48-55...]
+
+     The client pool holds one range per server node, or one range per mixed
+     client process when a `type: mixed` scenario launches more processes than
+     there are nodes. Each `writes`/`reads` child is its own process wanting a
+     full `cores_per_client` slice, so a single-node config with one write and
+     one read child gets two client ranges: `cores_per_server` 8 with
+     `cores_per_client` 24 gives servers `0-7` and clients `8-31` and `32-55`.
+     The first ranges stay the per-node ones, so cluster pinning is unchanged.
    
    - **Manual override**: Provide `servers` + `clients` arrays
      ```json
@@ -769,6 +830,8 @@ Module tests use structured `test_groups` with `scenarios`:
      }
      ```
      Explicit ranges used as-is (cores_per_* ignored if present)
+
+     A core appearing in both arrays is rejected at config validation.
 
 2. **Old**: `server_cpu_range` + `client_cpu_range` (single-node only)
 
@@ -1148,6 +1211,131 @@ descriptions, and — when supplied — `module_commit` / `module_commit_timesta
 
 `test_id` is `{group}_{scenario}` and `test_phase` is the scenario type
 (`read`, `write`, or `mixed_read` / `mixed_write` for mixed scenarios).
+
+## Data tiering benchmarks
+
+`configs/tiering.json` ports the Valkey data-tiering benchmarks as one group per
+test. Group 1 is Zipfian 80/20: 4M keys sequentially loaded under a 1gb DRAM cap
+with FlashCache tiering, then a 60 second mixed run of 40 SET clients and 160 GET
+clients over a zipfian alpha 1.0 key distribution, pinned to 8 server cores and
+two 24-core client ranges with per-second sampling on. The other groups change
+one thing each:
+
+| Group | Test | Change |
+|---|---|---|
+| 2 | Uniform 80/20 | Every key equally likely, no `--zipfian` |
+| 3 | Balanced 50/50 | 100 GET and 100 SET clients |
+| 4 | Zipfian TTL 120 | Every write sets `EX 120`, including the load, and the run lasts 180 seconds so keys expire during it. The 100 byte keys are written out in the commands, since `--keysize` only applies to built-in tests |
+| 5 | Value sizes | One scenario each for 500 B, 5 KB, 500 KB and 5 MB values under a 512mb cap with a 10gb tiering file. Each keyspace is sized so about 10% of the values fit in memory |
+
+Group 5 needs different server settings, so it is a second entry in the file.
+One call runs every group, and `--groups` or `--scenarios` runs a subset.
+
+Requirements:
+
+- A valkey-data-tiering server build. The `ext-storage-*` settings in
+  `custom-server-configs` do not exist in upstream `valkey-server`.
+- The patched `valkey-benchmark` from the same source, passed with
+  `--valkey-benchmark-path`. `--zipfian` and `--keysize` are not upstream, so a
+  stock binary rejects the client invocation.
+- An NVMe-backed filesystem holding `ext-storage-path`.
+- libaio, which the FlashCache backend links against.
+- At least 56 CPU cores, covering the `0-7` server range and the `8-31` and
+  `32-55` client ranges.
+
+The config sets `build_args` to `["BUILD_EXT_STORAGE=yes"]`, so a framework
+build compiles the tiering code.
+
+Each time the framework starts the server, it first recreates the file at
+`ext-storage-path` when `custom-server-configs` sets `ext-storage-enabled` to
+`yes`. The new file is empty and allocated to `ext-storage-capacity` (1gb when
+unset), because FlashCache will not start unless the file exists at that size.
+Every run starts with an empty tiering file. A relative path is taken from the
+Valkey directory, or from `dir` when `custom-server-configs` sets it. If the
+path is a directory or any other non-regular file, the run stops with an error.
+Nothing is changed when you use `--use-running-server`.
+
+```bash
+python benchmark.py \
+  --mode both \
+  --valkey-path /path/to/valkey-data-tiering \
+  --valkey-benchmark-path /path/to/valkey-data-tiering/src/valkey-benchmark \
+  --config configs/tiering.json \
+  --commits HEAD
+```
+
+The load uses `populate_retries` because a 4M key load under a 1gb cap is
+rejected intermittently while eviction catches up, so the pass is repeated until
+`DBSIZE` reaches the keyspace size.
+
+## Per-Second Metrics Sampler
+
+`metrics_sampler.py` reads the server and the host once per second during a scenario's
+measured benchmark process and records what each source read, unprocessed. Deriving rates,
+percentiles and typed values is left to ingest. Sampling starts after any inline
+`warmup_inline`, so `elapsed_sec` 0 is the first measured second. Tick `k` is taken at
+`k` intervals after the first, and a tick that overruns skips the slots it missed.
+
+| Source              | Records                                                                 |
+| ------------------- | ----------------------------------------------------------------------- |
+| `valkey_info`       | every `INFO ALL` field as a string                                      |
+| `latency_histogram` | the cumulative `LATENCY HISTOGRAM` reply: per command `calls` and `histogram_usec`, server-side execution time in power-of-two microsecond buckets |
+| `process_cpu`       | the `cpu` lines of `/proc/stat` as `proc_stat`, and per server thread its `comm`, `utime` and `stime` in clock ticks as `threads`, keyed by tid |
+| `disk`              | the backing block `device` and its raw `/sys/block/<dev>/stat` counters as `stat` |
+
+`process_cpu` and `disk` read `/proc` and `/sys`, so they are collected only on Linux and
+only when the server runs on the sampling machine. `disk` samples the whole disk backing its
+`path` option, else `custom-server-configs.ext-storage-path`, else the server's
+`CONFIG GET dir`.
+
+**It is opt-in.** The root config key `per_second_sampling` takes either form:
+
+```json
+"per_second_sampling": true
+```
+
+```json
+"per_second_sampling": {
+  "sources": {
+    "valkey_info": {},
+    "disk": {"path": "/mnt/nvme"}
+  },
+  "cpu_range": "0-1"
+}
+```
+
+`true` samples every source with default options, unpinned. `sources` maps each selected
+source to its options object, and `cpu_range` pins the sampler thread.
+
+The sampler reads the server through one persistent client per scenario, with the same TLS
+settings as the benchmark when `tls_mode` is on. Each read times out after 2 seconds.
+
+Rows from every scenario, run and config set are appended to
+`results/<commit>/timeseries.jsonl`, one JSON object per line. Each row holds the same
+identity fields as a `metrics.json` row (`commit`, `repository`, `cluster_mode`, `tls`,
+`test_id`, `group`, `scenario`, `config_set`, `config_name`, `module_commit` and so on),
+plus `run`, `profiling_set`, `sample_time` (ISO 8601 UTC), `elapsed_sec`, and one key per
+source holding its reading. As in `metrics.json`, `timestamp` is the commit time. A source
+that fails a tick is absent from that row.
+
+Each JSONL row is one line; this example is wrapped for readability:
+
+```json
+{
+  "commit": "HEAD",
+  "repository": "valkey",
+  "test_id": "1_b",
+  "scenario": "b",
+  "config_set": {},
+  "run": 1,
+  "sample_time": "2026-10-06T01:26:13.915+00:00",
+  "elapsed_sec": 1,
+  "valkey_info": {"used_memory": "1950880"},
+  "latency_histogram": {"get": {"calls": 90887, "histogram_usec": {"1": 90873}}},
+  "process_cpu": {"proc_stat": {"cpu": [1768215, 220728, 1396351]}, "threads": {"22858": {"comm": "valkey-server", "utime": 121, "stime": 379}}},
+  "disk": {"device": "nvme0n1", "stat": [5664582, 1117339, 86138375]}
+}
+```
 
 ## Performance Profiling
 

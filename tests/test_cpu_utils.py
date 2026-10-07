@@ -3,7 +3,10 @@
 import pytest
 
 from utils.cpu_utils import (
+    calculate_client_cpu_ranges,
     calculate_cpu_ranges,
+    calculate_server_cpu_ranges,
+    max_mixed_processes,
     parse_core_range,
     validate_explicit_cpu_ranges,
 )
@@ -121,3 +124,129 @@ class TestValidateExplicitCpuRanges:
 
     def test_non_overlapping_non_contiguous(self):
         validate_explicit_cpu_ranges("0", "1")
+
+
+# ---------------------------------------------------------------------------
+# max_mixed_processes
+# ---------------------------------------------------------------------------
+
+
+def _mixed(writes, reads):
+    return {"id": "m", "type": "mixed", "writes": writes, "reads": reads}
+
+
+class TestMaxMixedProcesses:
+    def test_no_test_groups(self):
+        assert max_mixed_processes({}) == 0
+
+    def test_no_mixed_scenario(self):
+        cfg = {"test_groups": [{"scenarios": [{"id": "s", "test": "GET"}]}]}
+        assert max_mixed_processes(cfg) == 0
+
+    def test_counts_writes_plus_reads(self):
+        cfg = {"test_groups": [{"scenarios": [_mixed([{"id": "w"}], [{"id": "r"}])]}]}
+        assert max_mixed_processes(cfg) == 2
+
+    def test_widest_across_groups(self):
+        cfg = {
+            "test_groups": [
+                {"scenarios": [_mixed([{"id": "w"}], [{"id": "r"}])]},
+                {
+                    "scenarios": [
+                        {"id": "s", "test": "GET"},
+                        _mixed([{"id": "w"}], [{"id": f"r{i}"} for i in range(8)]),
+                    ]
+                },
+            ]
+        }
+        assert max_mixed_processes(cfg) == 9
+
+
+# ---------------------------------------------------------------------------
+# calculate_client_cpu_ranges: automatic pool sizing
+# ---------------------------------------------------------------------------
+
+
+def _auto_cfg(cores_per_server, cores_per_client, **extra):
+    cfg = {
+        "cpu_allocation": {
+            "cores_per_server": cores_per_server,
+            "cores_per_client": cores_per_client,
+        }
+    }
+    cfg.update(extra)
+    return cfg
+
+
+class TestAutomaticClientPoolSizing:
+    def test_no_cpu_allocation_returns_none(self):
+        assert calculate_client_cpu_ranges({}) is None
+
+    def test_single_node_no_mixed_scenario(self):
+        assert calculate_client_cpu_ranges(_auto_cfg(8, 24)) == ["8-31"]
+
+    def test_single_node_two_mixed_processes(self):
+        cfg = _auto_cfg(
+            8,
+            24,
+            cluster_mode=False,
+            test_groups=[{"scenarios": [_mixed([{"id": "w"}], [{"id": "r"}])]}],
+        )
+        assert calculate_client_cpu_ranges(cfg) == ["8-31", "32-55"]
+
+    def test_single_node_three_mixed_processes(self):
+        cfg = _auto_cfg(
+            4,
+            2,
+            test_groups=[
+                {"scenarios": [_mixed([{"id": "w"}], [{"id": "r1"}, {"id": "r2"}])]}
+            ],
+        )
+        assert calculate_client_cpu_ranges(cfg) == ["4-5", "6-7", "8-9"]
+
+    def test_server_ranges_unaffected_by_mixed_width(self):
+        cfg = _auto_cfg(
+            8,
+            24,
+            test_groups=[{"scenarios": [_mixed([{"id": "w"}], [{"id": "r"}])]}],
+        )
+        assert calculate_server_cpu_ranges(cfg) == ["0-7"]
+
+    def test_cluster_nodes_win_when_wider_than_mixed(self):
+        cfg = _auto_cfg(
+            8,
+            8,
+            cluster_mode=True,
+            cluster_nodes=5,
+            test_groups=[{"scenarios": [_mixed([{"id": "w"}], [{"id": "r"}])]}],
+        )
+        assert calculate_client_cpu_ranges(cfg) == [
+            "40-47",
+            "48-55",
+            "56-63",
+            "64-71",
+            "72-79",
+        ]
+
+    def test_mixed_width_extends_cluster_pool_keeping_node_prefix(self):
+        cfg = _auto_cfg(
+            8,
+            8,
+            cluster_mode=True,
+            cluster_nodes=2,
+            test_groups=[
+                {"scenarios": [_mixed([{"id": "w"}], [{"id": "r1"}, {"id": "r2"}])]}
+            ],
+        )
+        ranges = calculate_client_cpu_ranges(cfg)
+        assert ranges == ["16-23", "24-31", "32-39"]
+        assert ranges[:2] == ["16-23", "24-31"]
+
+    def test_explicit_clients_array_is_untouched(self):
+        cfg = _auto_cfg(
+            8,
+            24,
+            test_groups=[{"scenarios": [_mixed([{"id": "w"}], [{"id": "r"}])]}],
+        )
+        cfg["cpu_allocation"]["clients"] = ["8-31"]
+        assert calculate_client_cpu_ranges(cfg) == ["8-31"]

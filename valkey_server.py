@@ -1,11 +1,13 @@
 """Launch local Valkey servers for benchmark runs."""
 
 import logging
+import os
+import re
 import subprocess
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import valkey
 
@@ -13,6 +15,29 @@ import valkey
 VALKEY_SERVER = "src/valkey-server"
 DEFAULT_PORT = 6379
 DEFAULT_TIMEOUT = 30
+
+# valkey-server flags the framework sets itself. Config validation rejects
+# these keys in "custom-server-configs", using the value as the reason.
+FRAMEWORK_SERVER_FLAGS: Dict[str, str] = {
+    "port": "set from the 'port' field",
+    "tls-port": "set from 'tls_mode'",
+    "tls-cert-file": "set from 'tls_mode'",
+    "tls-key-file": "set from 'tls_mode'",
+    "tls-ca-cert-file": "set from 'tls_mode'",
+    "bind": "set from 'cluster_nodes'",
+    "cluster-announce-ip": "set from 'cluster_nodes'",
+    "cluster-config-file": "set from 'cluster_config_dir'",
+    "loadmodule": "set from 'modules'",
+    "cluster-enabled": "set from 'cluster_mode'",
+    "daemonize": "required for process management",
+    "logfile": "required for process management",
+    "save": "required for process management",
+    "appendonly": "required for process management",
+    "protected-mode": "required for process management",
+}
+
+# Flags the framework emits that "custom-server-configs" may override.
+OVERRIDABLE_SERVER_FLAGS = {"io-threads", "maxmemory-policy"}
 
 
 def apply_config_to_servers(
@@ -55,6 +80,41 @@ def apply_config_to_servers(
                 logging.info(f"Set {k} = {v} on port {port}")
         finally:
             client.close()
+
+
+# Valkey's memory units, as accepted by size configs such as ext-storage-capacity.
+_SIZE_UNITS = {
+    "": 1,
+    "b": 1,
+    "k": 1000,
+    "kb": 1024,
+    "m": 1000**2,
+    "mb": 1024**2,
+    "g": 1000**3,
+    "gb": 1024**3,
+}
+_DEFAULT_EXT_STORAGE_CAPACITY = 1024**3
+
+
+def parse_valkey_size(value) -> int:
+    """Return the bytes of a Valkey size such as 8gb, 512mb or 1048576."""
+    match = re.fullmatch(r"\s*(\d+)\s*([a-z]*)\s*", str(value).lower())
+    if not match or match.group(2) not in _SIZE_UNITS:
+        raise ValueError(f"invalid size {value!r}")
+    return int(match.group(1)) * _SIZE_UNITS[match.group(2)]
+
+
+def ext_storage_capacity_bytes(custom_configs: dict) -> int:
+    """Return the tiering file size the server expects.
+
+    Reads ext-storage-capacity, or ext-storage-capacity-mb as used by the
+    data tiering prototype, and falls back to the server default of 1gb.
+    """
+    if "ext-storage-capacity" in custom_configs:
+        return parse_valkey_size(custom_configs["ext-storage-capacity"])
+    if "ext-storage-capacity-mb" in custom_configs:
+        return parse_valkey_size(custom_configs["ext-storage-capacity-mb"]) * 1024**2
+    return _DEFAULT_EXT_STORAGE_CAPACITY
 
 
 class ServerLauncher:
@@ -199,8 +259,17 @@ class ServerLauncher:
         if bind_ip:
             cmd += ["--bind", bind_ip]
 
+        # custom-server-configs: user settings the framework does not manage,
+        # plus the flags in OVERRIDABLE_SERVER_FLAGS. Validation has already
+        # rejected any key in FRAMEWORK_SERVER_FLAGS.
+        custom_configs = (
+            (self.config or {}).get("custom-server-configs")
+            if hasattr(self, "config")
+            else None
+        ) or {}
+
         # Optional configurations
-        if io_threads is not None:
+        if io_threads is not None and "io-threads" not in custom_configs:
             cmd += ["--io-threads", str(io_threads)]
 
         # Modules
@@ -221,36 +290,24 @@ class ServerLauncher:
             if not bind_ip:
                 cmd += ["--cluster-announce-ip", self.target_ip]
 
-        # Apply custom-server-configs from benchmark config. These are added
-        # BEFORE the benchmark defaults block so that, by valkey CLI last-wins
-        # semantics, the harness's defaults always take precedence over any
-        # user-supplied value for the same key.
-        custom_configs = (
-            (self.config or {}).get("custom-server-configs")
-            if hasattr(self, "config")
-            else None
-        )
-        if custom_configs:
-            for key, value in custom_configs.items():
-                cmd += [f"--{key}", str(value)]
+        for key, value in custom_configs.items():
+            cmd += [f"--{key}", str(value)]
 
-        # Common server configuration (benchmark defaults — always win).
-        cmd += [
-            "--cluster-enabled",
-            "yes" if cluster_mode else "no",
-            "--daemonize",
-            "yes",
-            "--maxmemory-policy",
-            "allkeys-lru",
-            "--appendonly",
-            "no",
-            "--protected-mode",
-            "no",
-            "--logfile",
-            log_file,
-            "--save",
-            "''",
-        ]
+        # Benchmark defaults, emitted in a fixed order. A default is skipped
+        # when the user set the same key so the user's value is the only one.
+        benchmark_defaults = {
+            "cluster-enabled": "yes" if cluster_mode else "no",
+            "daemonize": "yes",
+            "maxmemory-policy": "allkeys-lru",
+            "appendonly": "no",
+            "protected-mode": "no",
+            "logfile": log_file,
+            "save": "''",
+        }
+        for key, value in benchmark_defaults.items():
+            if key in custom_configs:
+                continue
+            cmd += [f"--{key}", value]
 
         return cmd
 
@@ -515,6 +572,39 @@ class ServerLauncher:
             logging.error(f"Cluster creation failed: {e}")
             raise
 
+    def _reset_ext_storage_file(self) -> None:
+        """Recreate the tiering storage file empty and at its full capacity.
+
+        FlashCache refuses to start unless the file exists and is at least
+        ext-storage-capacity bytes, so the file is allocated rather than only
+        removed. A relative path is resolved the way valkey-server sees it:
+        against its working directory, which is valkey_path, or the 'dir'
+        config when set.
+        """
+        custom_configs = (self.config or {}).get("custom-server-configs") or {}
+        if str(custom_configs.get("ext-storage-enabled", "")).lower() != "yes":
+            return
+        storage_path = str(custom_configs.get("ext-storage-path", ""))
+        if not storage_path:
+            return
+
+        path = (
+            Path(self.valkey_path) / str(custom_configs.get("dir", "")) / storage_path
+        )
+        if path.exists() and not path.is_file():
+            raise RuntimeError(
+                f"ext-storage-path {path} exists but is not a regular file, "
+                "refusing to replace it"
+            )
+        size = ext_storage_capacity_bytes(custom_configs)
+        path.unlink(missing_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        try:
+            os.posix_fallocate(fd, 0, size)
+        finally:
+            os.close(fd)
+        logging.info(f"Recreated tiering storage file {path} at {size} bytes")
+
     def launch(
         self,
         cluster_mode: bool,
@@ -539,6 +629,8 @@ class ServerLauncher:
             self.modules = config["modules"]
         else:
             self.modules = []
+
+        self._reset_ext_storage_file()
 
         try:
             if cluster_mode and config and "cluster_nodes" in config:

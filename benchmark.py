@@ -5,6 +5,8 @@ import argparse
 import json
 import logging
 import platform
+import re
+import shlex
 from itertools import product
 from pathlib import Path
 from typing import List, Optional
@@ -12,7 +14,11 @@ import sys
 
 
 from valkey_build import ServerBuilder
-from valkey_server import ServerLauncher, apply_config_to_servers
+from valkey_server import (
+    FRAMEWORK_SERVER_FLAGS,
+    ServerLauncher,
+    apply_config_to_servers,
+)
 from valkey_benchmark import (
     ClientRunner,
     ORIGIN_FIELD,
@@ -22,6 +28,7 @@ from valkey_benchmark import (
     WRITE_COMMANDS,
 )
 from benchmark_build import BenchmarkBuilder
+from samplers import SOURCES
 from utils.cpu_utils import (
     parse_core_range,
     calculate_server_cpu_ranges,
@@ -64,7 +71,46 @@ OPTIONAL_CONF_KEYS = [
     "module_startup_args",
     "custom-server-configs",
     "custom-server-config-file",
+    "build_args",
 ]
+
+BUILD_ARG_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+# valkey-benchmark flags emitted by _build_benchmark_command; a duplicate in
+# benchmark_args would silently override the value recorded in metrics.json.
+# The bare separator is included so --csv can never land inside the command.
+PROTECTED_BENCHMARK_ARGS = {
+    "--",
+    "-h",
+    "-p",
+    "-c",
+    "-P",
+    "-d",
+    "-n",
+    "-r",
+    "-t",
+    "--duration",
+    "--seed",
+    "--sequential",
+    "--threads",
+    "--warmup",
+    "--cluster",
+    "--tls",
+    "--cert",
+    "--key",
+    "--cacert",
+    "--csv",
+    "--dataset",
+    "--maxdocs",
+    "--xml-root-element",
+}
+
+# Scenario keys that tune the populate pass and are meaningless without it.
+POPULATE_OPTION_KEYS = (
+    "populate_clients",
+    "populate_benchmark_args",
+    "populate_retries",
+)
 
 
 # ---------- CLI --------------------------------------------------------------
@@ -281,6 +327,15 @@ def _validate_positive_int_or_list(value, key_name: str) -> None:
         raise ValueError(f"'{key_name}' must be int or list")
 
 
+def _validate_string_list(value, key_name: str) -> None:
+    """Validate value is a list of non-empty strings."""
+    if not isinstance(value, list):
+        raise ValueError(f"'{key_name}' must be a list")
+    for i, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(f"'{key_name}[{i}]' must be a non-empty string")
+
+
 def _validate_cpu_range(value, key_name: str) -> None:
     """Validate CPU range string."""
     if not isinstance(value, str):
@@ -289,6 +344,64 @@ def _validate_cpu_range(value, key_name: str) -> None:
         parse_core_range(value)
     except ValueError as e:
         raise ValueError(f"Invalid {key_name}: {e}")
+
+
+def _validate_build_args(value) -> None:
+    """Validate `build_args`, the NAME=value variables passed to make."""
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ValueError("'build_args' must be a list of strings")
+    names = set()
+    for arg in value:
+        name, sep, _ = arg.partition("=")
+        if not sep or not BUILD_ARG_NAME.match(name):
+            raise ValueError(
+                f"'build_args' entry {arg!r} must have the form NAME=value "
+                "with NAME in uppercase letters, digits and underscores"
+            )
+        if name == "BUILD_TLS":
+            raise ValueError(
+                "'build_args' cannot set 'BUILD_TLS', it is set from 'tls_mode'"
+            )
+        if name in names:
+            raise ValueError(f"'build_args' sets {name!r} more than once")
+        names.add(name)
+
+
+def _validate_per_second_sampling(value) -> None:
+    """Validate the `per_second_sampling` config value.
+
+    A bool keeps the whole default source set, unpinned. An object enables
+    sampling by being present, maps source names to their options under
+    `sources`, and pins the sampler thread with `cpu_range`.
+    """
+    if isinstance(value, bool):
+        return
+    if not isinstance(value, dict):
+        raise ValueError("'per_second_sampling' must be a boolean or an object")
+
+    unsupported = sorted(set(value) - {"sources", "cpu_range"})
+    if unsupported:
+        raise ValueError(
+            f"'per_second_sampling' does not support key(s): {unsupported}"
+        )
+
+    if "sources" in value:
+        sources = value["sources"]
+        if not isinstance(sources, dict) or not sources:
+            raise ValueError(
+                "'per_second_sampling.sources' must be a non-empty object "
+                "mapping source names to options"
+            )
+        for name, options in sources.items():
+            if name not in SOURCES:
+                raise ValueError(
+                    f"'per_second_sampling.sources' has unknown source "
+                    f"'{name}', expected one of {sorted(SOURCES)}"
+                )
+            SOURCES[name].validate_options(options)
+
+    if "cpu_range" in value:
+        _validate_cpu_range(value["cpu_range"], "per_second_sampling.cpu_range")
 
 
 # ---------- Helpers ----------------------------------------------------------
@@ -412,14 +525,40 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(
                     f"'custom-server-configs' keys must be strings, got: {type(key)}"
                 )
+            if key in FRAMEWORK_SERVER_FLAGS:
+                raise ValueError(
+                    f"'custom-server-configs' key {key!r} is managed by the framework "
+                    f"({FRAMEWORK_SERVER_FLAGS[key]}) and cannot be set here"
+                )
             # Note: bool is a subclass of int in Python, so check bool first.
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 raise ValueError(
                     f"'custom-server-configs' values must be strings or numbers, got: {type(value)}"
                 )
+        if "io-threads" in cfg["custom-server-configs"] and "io-threads" in cfg:
+            raise ValueError(
+                "'custom-server-configs' sets 'io-threads' while the top-level "
+                "'io-threads' field is also set; use one or the other"
+            )
+        if "io-threads" in cfg["custom-server-configs"]:
+            io_threads = cfg["custom-server-configs"]["io-threads"]
+            if isinstance(io_threads, str) and io_threads.isdigit():
+                io_threads = int(io_threads)
+            if not isinstance(io_threads, int) or io_threads <= 0:
+                raise ValueError(
+                    "'custom-server-configs' 'io-threads' must be a positive "
+                    f"integer, got: {cfg['custom-server-configs']['io-threads']!r}"
+                )
     if "custom-server-config-file" in cfg:
         if not isinstance(cfg["custom-server-config-file"], str):
             raise ValueError("'custom-server-config-file' must be a string path")
+    if "per_second_sampling" in cfg:
+        _validate_per_second_sampling(cfg["per_second_sampling"])
+    if "build_args" in cfg:
+        _validate_build_args(cfg["build_args"])
+
+    if "post_commands" in cfg:
+        _validate_string_list(cfg["post_commands"], "post_commands")
 
     if "cluster_mode" in cfg and not isinstance(cfg["cluster_mode"], list):
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])
@@ -512,9 +651,86 @@ def validate_cpu_allocation(cfg: dict) -> None:
         if cpu_alloc["cores_per_server"] <= 0 or cpu_alloc["cores_per_client"] <= 0:
             raise ValueError("cores_per_server and cores_per_client must be positive")
 
+        if "servers" in cpu_alloc and "clients" in cpu_alloc:
+            server_cores = set()
+            for range_str in cpu_alloc["servers"]:
+                server_cores.update(parse_core_range(range_str))
+            client_cores = set()
+            for range_str in cpu_alloc["clients"]:
+                client_cores.update(parse_core_range(range_str))
+
+            overlap = server_cores & client_cores
+            if overlap:
+                raise ValueError(
+                    f"cpu_allocation 'servers' and 'clients' overlap on cores: "
+                    f"{sorted(overlap)}"
+                )
+
     # Validate explicit ranges
     if has_old_fields and "server_cpu_range" in cfg and "client_cpu_range" in cfg:
         validate_explicit_cpu_ranges(cfg["server_cpu_range"], cfg["client_cpu_range"])
+
+
+def _validate_benchmark_args(
+    scenario: dict, location: str, key: str = "benchmark_args"
+) -> None:
+    """Validate a scenario's optional valkey-benchmark passthrough list."""
+    if key not in scenario:
+        return
+
+    benchmark_args = scenario[key]
+    if not isinstance(benchmark_args, list) or not all(
+        isinstance(arg, str) for arg in benchmark_args
+    ):
+        raise ValueError(f"{location} '{key}' must be a list of strings")
+
+    for arg in benchmark_args:
+        for token in shlex.split(arg):
+            if not token.startswith("-"):
+                continue
+            flag = token.split("=", 1)[0]
+            if flag in PROTECTED_BENCHMARK_ARGS:
+                raise ValueError(
+                    f"{location} '{key}' sets {flag!r}, which the "
+                    "framework emits itself; use the scenario field for it instead"
+                )
+
+
+def _validate_populate_options(scenario: dict, location: str) -> None:
+    """Validate the optional keys that tune a scenario's populate pass."""
+    has_populate_with = "populate_with" in scenario
+
+    for key in POPULATE_OPTION_KEYS:
+        if key in scenario and not has_populate_with:
+            raise ValueError(
+                f"{location} sets '{key}' with no 'populate_with', "
+                f"and {key} requires populate_with"
+            )
+
+    if "populate_clients" in scenario:
+        _validate_positive_int(
+            scenario["populate_clients"], f"{location}.populate_clients"
+        )
+    if "populate_retries" in scenario:
+        _validate_non_negative_int(
+            scenario["populate_retries"], f"{location}.populate_retries"
+        )
+    _validate_benchmark_args(scenario, location, key="populate_benchmark_args")
+
+
+def _validate_populate_with(populate_with, location: str, require_write: bool) -> None:
+    """Validate a scenario's populate_with write workload."""
+    if not isinstance(populate_with, str) or not populate_with:
+        raise ValueError(f"{location} 'populate_with' must be a non-empty string")
+
+    # Predefined tests require a supported write workload. Command scenarios
+    # may use arbitrary populate commands.
+    if require_write and populate_with not in WRITE_COMMANDS:
+        raise ValueError(
+            f"{location} 'populate_with' {populate_with!r} is not a supported "
+            f"write command. It runs as a predefined test so it must be one "
+            f"of {WRITE_COMMANDS}"
+        )
 
 
 def validate_test_groups(cfg: dict) -> None:
@@ -540,13 +756,35 @@ def validate_test_groups(cfg: dict) -> None:
             if not isinstance(scenario, dict):
                 raise ValueError(f"test_groups[{i}].scenarios[{j}] must be a dict")
 
+            location = f"test_groups[{i}].scenarios[{j}]"
+            # Checked before the mixed early-return below, because a mixed
+            # parent may carry benchmark_args for its children to inherit.
+            _validate_benchmark_args(scenario, location)
+            _validate_populate_options(scenario, location)
+
+            if "post_commands" in scenario:
+                _validate_string_list(
+                    scenario["post_commands"],
+                    f"test_groups[{i}].scenarios[{j}].post_commands",
+                )
+
             if scenario.get("type") == "mixed":
                 if "populate_with" in scenario:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] combines 'mixed' "
-                        "with 'populate_with'; mixed scenarios seed the "
-                        "keyspace through their own 'writes' sub-scenarios"
+                    # A single word names a predefined write test, and
+                    # anything longer is an arbitrary write command.
+                    populate_with = scenario["populate_with"]
+                    _validate_populate_with(
+                        populate_with,
+                        location,
+                        require_write=not (
+                            isinstance(populate_with, str)
+                            and len(populate_with.split()) > 1
+                        ),
                     )
+                for side in ("writes", "reads"):
+                    for k, child in enumerate(scenario.get(side, [])):
+                        if isinstance(child, dict):
+                            _validate_benchmark_args(child, f"{location}.{side}[{k}]")
                 continue
 
             if ("test" in scenario) == ("command" in scenario):
@@ -563,20 +801,25 @@ def validate_test_groups(cfg: dict) -> None:
                 )
 
             if "populate_with" in scenario:
-                populate_with = scenario["populate_with"]
-                if not isinstance(populate_with, str) or not populate_with:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'populate_with' must "
-                        "be a non-empty string"
-                    )
-                # Predefined tests require a supported write workload; command
-                # scenarios may use arbitrary populate commands.
-                if "test" in scenario and populate_with not in WRITE_COMMANDS:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'populate_with' "
-                        f"{populate_with!r} is not a supported write command; "
-                        f"for a 'test' scenario it must be one of {WRITE_COMMANDS}"
-                    )
+                _validate_populate_with(
+                    scenario["populate_with"],
+                    location,
+                    require_write="test" in scenario,
+                )
+
+
+def has_selected_scenarios(cfg: dict) -> bool:
+    """Return whether the group and scenario filters leave cfg anything to run."""
+    if "test_groups" not in cfg:
+        return True
+    groups = cfg.get("groups_to_run")
+    scenarios = cfg.get("scenario_filter")
+    return any(
+        not scenarios or scenario.get("id") in scenarios
+        for group in cfg["test_groups"]
+        if not groups or group.get("group") in groups
+        for scenario in group.get("scenarios", [])
+    )
 
         iterations = group.get("iterations")
         if iterations is None:
@@ -684,7 +927,10 @@ def run_benchmark_matrix(
     )
 
     builder = ServerBuilder(
-        commit_id=commit_id, tls_mode=cfg["tls_mode"], valkey_path=str(valkey_dir)
+        commit_id=commit_id,
+        tls_mode=cfg["tls_mode"],
+        valkey_path=str(valkey_dir),
+        build_args=cfg.get("build_args", []),
     )
     if not args.use_running_server:
         server_binary = valkey_dir / "src" / "valkey-server"
@@ -728,6 +974,24 @@ def run_benchmark_matrix(
             builder.terminate_and_clean_valkey()
 
 
+def _resolve_io_threads_list(cfg: dict) -> list:
+    """Return the io-threads values to sweep for a config.
+
+    A value set through "custom-server-configs" is reflected here so the
+    recorded io_threads metric matches what the server ran.
+    """
+    value = cfg.get("io-threads")
+    if isinstance(value, int):
+        return [value]
+    if value is not None:
+        return value
+
+    custom = cfg.get("custom-server-configs", {}).get("io-threads")
+    if custom is None:
+        return [None]
+    return [int(custom)]
+
+
 def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):
     """Generate all execution configurations from config and CLI args."""
     # Normalize cluster_modes
@@ -748,11 +1012,7 @@ def _iterate_execution_configs(cfg: dict, args: argparse.Namespace):
         config_sets = [{}]
 
     # Normalize io_threads
-    io_threads_list = cfg.get("io-threads")
-    if io_threads_list is None:
-        io_threads_list = [None]
-    elif isinstance(io_threads_list, int):
-        io_threads_list = [io_threads_list]
+    io_threads_list = _resolve_io_threads_list(cfg)
 
     # Generate all combinations
     for cluster_mode in cluster_modes:
@@ -1002,6 +1262,12 @@ def main() -> None:
             cfg["groups_to_run"] = set(int(g.strip()) for g in args.groups.split(","))
         if args.scenarios:
             cfg["scenario_filter"] = set(s.strip() for s in args.scenarios.split(","))
+        if not has_selected_scenarios(cfg):
+            logging.info(
+                f"Skipping config {cfg.get('test_name', '')!r}, "
+                "--groups and --scenarios select none of its scenarios"
+            )
+            continue
 
         for commit in commits:
             print(f"=== Processing commit: {commit} ===")
