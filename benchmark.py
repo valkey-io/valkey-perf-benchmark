@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import platform
+import re
 import shlex
 from itertools import product
 from pathlib import Path
@@ -70,7 +71,10 @@ OPTIONAL_CONF_KEYS = [
     "module_startup_args",
     "custom-server-configs",
     "custom-server-config-file",
+    "build_args",
 ]
+
+BUILD_ARG_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 # valkey-benchmark flags emitted by _build_benchmark_command; a duplicate in
 # benchmark_args would silently override the value recorded in metrics.json.
@@ -100,6 +104,13 @@ PROTECTED_BENCHMARK_ARGS = {
     "--maxdocs",
     "--xml-root-element",
 }
+
+# Scenario keys that tune the populate pass and are meaningless without it.
+POPULATE_OPTION_KEYS = (
+    "populate_clients",
+    "populate_benchmark_args",
+    "populate_retries",
+)
 
 
 # ---------- CLI --------------------------------------------------------------
@@ -326,6 +337,27 @@ def _validate_cpu_range(value, key_name: str) -> None:
         raise ValueError(f"Invalid {key_name}: {e}")
 
 
+def _validate_build_args(value) -> None:
+    """Validate `build_args`, the NAME=value variables passed to make."""
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ValueError("'build_args' must be a list of strings")
+    names = set()
+    for arg in value:
+        name, sep, _ = arg.partition("=")
+        if not sep or not BUILD_ARG_NAME.match(name):
+            raise ValueError(
+                f"'build_args' entry {arg!r} must have the form NAME=value "
+                "with NAME in uppercase letters, digits and underscores"
+            )
+        if name == "BUILD_TLS":
+            raise ValueError(
+                "'build_args' cannot set 'BUILD_TLS', it is set from 'tls_mode'"
+            )
+        if name in names:
+            raise ValueError(f"'build_args' sets {name!r} more than once")
+        names.add(name)
+
+
 def _validate_per_second_sampling(value) -> None:
     """Validate the `per_second_sampling` config value.
 
@@ -513,6 +545,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("'custom-server-config-file' must be a string path")
     if "per_second_sampling" in cfg:
         _validate_per_second_sampling(cfg["per_second_sampling"])
+    if "build_args" in cfg:
+        _validate_build_args(cfg["build_args"])
 
     if "cluster_mode" in cfg and not isinstance(cfg["cluster_mode"], list):
         cfg["cluster_mode"] = parse_bool(cfg["cluster_mode"])
@@ -605,21 +639,38 @@ def validate_cpu_allocation(cfg: dict) -> None:
         if cpu_alloc["cores_per_server"] <= 0 or cpu_alloc["cores_per_client"] <= 0:
             raise ValueError("cores_per_server and cores_per_client must be positive")
 
+        if "servers" in cpu_alloc and "clients" in cpu_alloc:
+            server_cores = set()
+            for range_str in cpu_alloc["servers"]:
+                server_cores.update(parse_core_range(range_str))
+            client_cores = set()
+            for range_str in cpu_alloc["clients"]:
+                client_cores.update(parse_core_range(range_str))
+
+            overlap = server_cores & client_cores
+            if overlap:
+                raise ValueError(
+                    f"cpu_allocation 'servers' and 'clients' overlap on cores: "
+                    f"{sorted(overlap)}"
+                )
+
     # Validate explicit ranges
     if has_old_fields and "server_cpu_range" in cfg and "client_cpu_range" in cfg:
         validate_explicit_cpu_ranges(cfg["server_cpu_range"], cfg["client_cpu_range"])
 
 
-def _validate_benchmark_args(scenario: dict, location: str) -> None:
-    """Validate a scenario's optional benchmark_args passthrough list."""
-    if "benchmark_args" not in scenario:
+def _validate_benchmark_args(
+    scenario: dict, location: str, key: str = "benchmark_args"
+) -> None:
+    """Validate a scenario's optional valkey-benchmark passthrough list."""
+    if key not in scenario:
         return
 
-    benchmark_args = scenario["benchmark_args"]
+    benchmark_args = scenario[key]
     if not isinstance(benchmark_args, list) or not all(
         isinstance(arg, str) for arg in benchmark_args
     ):
-        raise ValueError(f"{location} 'benchmark_args' must be a list of strings")
+        raise ValueError(f"{location} '{key}' must be a list of strings")
 
     for arg in benchmark_args:
         for token in shlex.split(arg):
@@ -628,9 +679,46 @@ def _validate_benchmark_args(scenario: dict, location: str) -> None:
             flag = token.split("=", 1)[0]
             if flag in PROTECTED_BENCHMARK_ARGS:
                 raise ValueError(
-                    f"{location} 'benchmark_args' sets {flag!r}, which the "
+                    f"{location} '{key}' sets {flag!r}, which the "
                     "framework emits itself; use the scenario field for it instead"
                 )
+
+
+def _validate_populate_options(scenario: dict, location: str) -> None:
+    """Validate the optional keys that tune a scenario's populate pass."""
+    has_populate_with = "populate_with" in scenario
+
+    for key in POPULATE_OPTION_KEYS:
+        if key in scenario and not has_populate_with:
+            raise ValueError(
+                f"{location} sets '{key}' with no 'populate_with', "
+                f"and {key} requires populate_with"
+            )
+
+    if "populate_clients" in scenario:
+        _validate_positive_int(
+            scenario["populate_clients"], f"{location}.populate_clients"
+        )
+    if "populate_retries" in scenario:
+        _validate_non_negative_int(
+            scenario["populate_retries"], f"{location}.populate_retries"
+        )
+    _validate_benchmark_args(scenario, location, key="populate_benchmark_args")
+
+
+def _validate_populate_with(populate_with, location: str, require_write: bool) -> None:
+    """Validate a scenario's populate_with write workload."""
+    if not isinstance(populate_with, str) or not populate_with:
+        raise ValueError(f"{location} 'populate_with' must be a non-empty string")
+
+    # Predefined tests require a supported write workload. Command scenarios
+    # may use arbitrary populate commands.
+    if require_write and populate_with not in WRITE_COMMANDS:
+        raise ValueError(
+            f"{location} 'populate_with' {populate_with!r} is not a supported "
+            f"write command. It runs as a predefined test so it must be one "
+            f"of {WRITE_COMMANDS}"
+        )
 
 
 def validate_test_groups(cfg: dict) -> None:
@@ -660,13 +748,20 @@ def validate_test_groups(cfg: dict) -> None:
             # Checked before the mixed early-return below, because a mixed
             # parent may carry benchmark_args for its children to inherit.
             _validate_benchmark_args(scenario, location)
+            _validate_populate_options(scenario, location)
 
             if scenario.get("type") == "mixed":
                 if "populate_with" in scenario:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] combines 'mixed' "
-                        "with 'populate_with'; mixed scenarios seed the "
-                        "keyspace through their own 'writes' sub-scenarios"
+                    # A single word names a predefined write test, and
+                    # anything longer is an arbitrary write command.
+                    populate_with = scenario["populate_with"]
+                    _validate_populate_with(
+                        populate_with,
+                        location,
+                        require_write=not (
+                            isinstance(populate_with, str)
+                            and len(populate_with.split()) > 1
+                        ),
                     )
                 for side in ("writes", "reads"):
                     for k, child in enumerate(scenario.get(side, [])):
@@ -688,20 +783,25 @@ def validate_test_groups(cfg: dict) -> None:
                 )
 
             if "populate_with" in scenario:
-                populate_with = scenario["populate_with"]
-                if not isinstance(populate_with, str) or not populate_with:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'populate_with' must "
-                        "be a non-empty string"
-                    )
-                # Predefined tests require a supported write workload; command
-                # scenarios may use arbitrary populate commands.
-                if "test" in scenario and populate_with not in WRITE_COMMANDS:
-                    raise ValueError(
-                        f"test_groups[{i}].scenarios[{j}] 'populate_with' "
-                        f"{populate_with!r} is not a supported write command; "
-                        f"for a 'test' scenario it must be one of {WRITE_COMMANDS}"
-                    )
+                _validate_populate_with(
+                    scenario["populate_with"],
+                    location,
+                    require_write="test" in scenario,
+                )
+
+
+def has_selected_scenarios(cfg: dict) -> bool:
+    """Return whether the group and scenario filters leave cfg anything to run."""
+    if "test_groups" not in cfg:
+        return True
+    groups = cfg.get("groups_to_run")
+    scenarios = cfg.get("scenario_filter")
+    return any(
+        not scenarios or scenario.get("id") in scenarios
+        for group in cfg["test_groups"]
+        if not groups or group.get("group") in groups
+        for scenario in group.get("scenarios", [])
+    )
 
 
 def run_benchmark_matrix(
@@ -732,7 +832,10 @@ def run_benchmark_matrix(
     )
 
     builder = ServerBuilder(
-        commit_id=commit_id, tls_mode=cfg["tls_mode"], valkey_path=str(valkey_dir)
+        commit_id=commit_id,
+        tls_mode=cfg["tls_mode"],
+        valkey_path=str(valkey_dir),
+        build_args=cfg.get("build_args", []),
     )
     if not args.use_running_server:
         server_binary = valkey_dir / "src" / "valkey-server"
@@ -1064,6 +1167,12 @@ def main() -> None:
             cfg["groups_to_run"] = set(int(g.strip()) for g in args.groups.split(","))
         if args.scenarios:
             cfg["scenario_filter"] = set(s.strip() for s in args.scenarios.split(","))
+        if not has_selected_scenarios(cfg):
+            logging.info(
+                f"Skipping config {cfg.get('test_name', '')!r}, "
+                "--groups and --scenarios select none of its scenarios"
+            )
+            continue
 
         for commit in commits:
             print(f"=== Processing commit: {commit} ===")
