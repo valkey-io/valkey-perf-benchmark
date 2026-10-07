@@ -319,7 +319,8 @@ Create benchmark configurations in JSON format. Each object represents a single 
     "custom-server-configs": {
       "maxmemory": "4gb",
       "timeout": "300"
-    }
+    },
+    "post_commands": ["INFO memory", "MEMORY STATS"]
   }
 ]
 ```
@@ -420,6 +421,42 @@ variants (insert/delete/substitute) match under fuzzy search.
 
 See `configs/module-test-arm.json` for a runnable example that includes a
 mixed workload and per-cluster-execution options.
+
+### Post-run Commands (`post_commands`)
+
+`post_commands` is a list of Valkey commands that runs **after** a benchmark run
+finishes, including when that run failed. It can be used to record server-side
+state, such as memory fragmentation, keyspace stats, index stats, `INFO`
+sections, and so on.
+
+It can be set on a scenario or at the config level. A scenario's own list wins;
+otherwise the config-level list applies.
+
+A failing command is logged as a warning and never fails the benchmark.
+
+In cluster mode the commands are sent to the single port given by `port`
+rather than to every node in `cluster_ports`.
+
+Each command's output is captured to `post_commands.json` in the results
+directory. The file is a JSON array where each element records the
+command and its result:
+
+```json
+[
+  {
+    "command": "INFO memory",
+    "results": {
+      "used_memory": 1048576,
+      "used_memory_rss": 2097152,
+      "mem_fragmentation_ratio": 2.0
+    }
+  },
+  {
+    "command": "DBSIZE",
+    "results": 1000
+  }
+]
+```
 
 ## Results
 
@@ -665,7 +702,8 @@ Module tests use structured `test_groups` with `scenarios`:
         "dataset": "queries.csv",
         "clients": 1000,
         "duration": 60,
-        "warmup": 20
+        "warmup": 20,
+        "post_commands": ["INFO memory", "FT.INFO idx"]
       }
     ]
   }],
