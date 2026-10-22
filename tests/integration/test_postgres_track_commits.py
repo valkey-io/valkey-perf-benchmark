@@ -14,6 +14,8 @@ Setup:
 """
 
 import os
+import subprocess
+import time
 
 import pytest
 
@@ -314,6 +316,46 @@ class TestDetermineCommits:
             table_name=table,
         )
         assert len(commits) == 2
+
+    def test_determine_respects_max_age_days(self, track_table, tmp_path):
+        table, conn = track_table
+        repo = GitRepoFixture(tmp_path / "aged_repo")
+        config = [{"data_sizes": [16]}]
+
+        # Backdate one commit to 90 days ago, then add a fresh one on top.
+        # GIT_*_DATE needs a strict format (epoch), not relative dates.
+        old_date = f"@{int(time.time()) - 90 * 86400} +0000"
+        old_env = {
+            **os.environ,
+            "GIT_COMMITTER_DATE": old_date,
+            "GIT_AUTHOR_DATE": old_date,
+        }
+        (repo.path / ".marker").write_text("old")
+        subprocess.run(["git", "add", ".marker"], cwd=repo.path, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "old"], cwd=repo.path, env=old_env, check=True
+        )
+        old_sha = repo.get_current_commit()
+        new_sha = repo.create_commit("new")
+        root_sha = repo._run_git("rev-list", "--max-parents=0", "HEAD").stdout.strip()
+        mark_commits(
+            conn, repo.path, [root_sha, new_sha], "complete", "x86_64", config, table
+        )
+
+        # Without a limit, backfill reaches the old commit
+        commits = determine_commits_to_benchmark(
+            conn, repo.path, "HEAD", max_commits=10,
+            architecture="x86_64", config=config, table_name=table,
+        )
+        assert old_sha in commits
+
+        # With a 60-day window, old history is excluded
+        commits = determine_commits_to_benchmark(
+            conn, repo.path, "HEAD", max_commits=10,
+            architecture="x86_64", config=config, table_name=table,
+            max_age_days=60,
+        )
+        assert commits == []
 
 
 @requires_postgres
