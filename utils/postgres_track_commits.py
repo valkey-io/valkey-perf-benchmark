@@ -180,10 +180,19 @@ def create_tables(conn, table_name: str = CORE_TABLE_NAME, table_id: str = "core
     print(f"Created/verified {table_name} table", file=sys.stderr)
 
 
-def _git_rev_list(repo: Path, branch: str) -> List[str]:
-    """Get list of commit SHAs from git."""
+def _git_rev_list(
+    repo: Path, branch: str, max_age_days: Optional[int] = None
+) -> List[str]:
+    """Get list of commit SHAs from git, newest first.
+
+    If max_age_days is set, only commits with a committer date within the
+    last max_age_days days are returned.
+    """
+    cmd = ["git", "rev-list", branch]
+    if max_age_days is not None:
+        cmd.insert(2, f"--since={max_age_days} days ago")
     proc = subprocess.run(
-        ["git", "rev-list", branch],
+        cmd,
         cwd=repo,
         capture_output=True,
         text=True,
@@ -465,6 +474,7 @@ def determine_commits_to_benchmark(
     config: Optional[dict] = None,
     enable_subset_detection: bool = True,
     table_name: str = CORE_TABLE_NAME,
+    max_age_days: Optional[int] = None,
 ) -> List[str]:
     """Return up to max_commits SHAs not benchmarked with the given config and architecture.
 
@@ -477,6 +487,8 @@ def determine_commits_to_benchmark(
         config: Config content to check against
         enable_subset_detection: If True, skip commits that have superset configs completed
         table_name: Target table name. Defaults to core table.
+        max_age_days: If set, only consider commits from the last N days
+            (bounds backfill into old history).
 
     Returns:
         List of commit SHAs that need benchmarking
@@ -487,8 +499,14 @@ def determine_commits_to_benchmark(
         conn, table_name, config=config, architecture=architecture
     )
 
-    # Get all commits from git
-    all_shas = _git_rev_list(repo, branch)
+    # Get candidate commits from git, optionally bounded by age
+    all_shas = _git_rev_list(repo, branch, max_age_days)
+    if max_age_days is not None:
+        print(
+            f"Limiting backfill to last {max_age_days} days "
+            f"({len(all_shas)} candidate commits)",
+            file=sys.stderr,
+        )
 
     # Get completed commits for exact config match
     with conn.cursor() as cur:
@@ -673,6 +691,13 @@ def main():
         default=3,
         help="Max commits to return (for determine)",
     )
+    parser.add_argument(
+        "--max-age-days",
+        type=int,
+        default=None,
+        help="Only consider commits from the last N days (for determine). "
+        "Default: no limit.",
+    )
     parser.add_argument("--config-file", type=str, help="Config file to load")
     parser.add_argument(
         "--disable-subset-detection",
@@ -796,6 +821,7 @@ def main():
                 config=config,
                 enable_subset_detection=enable_subset_detection,
                 table_name=table_name,
+                max_age_days=args.max_age_days,
             )
             print(" ".join(commits))
 

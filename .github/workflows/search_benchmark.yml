@@ -16,6 +16,11 @@ on:
         required: false
         default: "1"
         type: string
+      max_backfill_days:
+        description: "Only backfill module commits from the last N days (default 60)"
+        required: false
+        default: "60"
+        type: string
       core_commit:
         description: "Manual core commit SHA (overrides latest HEAD)"
         required: false
@@ -96,6 +101,8 @@ jobs:
       CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ inputs.config_json || 'fts-benchmarks-shortened-arm.json' }}"
       # Run parameters
       MAX_MODULE_COMMITS: ${{ inputs.max_module_commits || '1' }}
+      # Only backfill module commits from the last N days
+      MAX_BACKFILL_DAYS: ${{ inputs.max_backfill_days || '60' }}
       NUM_RUNS: ${{ inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ inputs.core_commit || '' }}
       MODULE_COMMITS_INPUT: ${{ inputs.module_commits || '' }}
@@ -263,6 +270,7 @@ jobs:
               ${SKIP_CONFIG_SET:+--skip-config-set} \
               ${SKIP_PROFILING:+--skip-profiling} \
               --max-commits "$MAX_MODULE_COMMITS" \
+              --max-age-days "$MAX_BACKFILL_DAYS" \
               --host ${{ secrets.POSTGRESQL_ENDPOINT }} \
               --port 5432 \
               --database ${{ secrets.RDS_DATABASE }} \
