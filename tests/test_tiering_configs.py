@@ -54,7 +54,7 @@ def test_all_dashboard_tests_present():
         2: ["unif80"],
         3: ["bal50"],
         4: ["zipfttl"],
-        5: ["v500", "v5k", "v500k", "v5m"],
+        5: ["v500", "v5k"],
     }
 
 

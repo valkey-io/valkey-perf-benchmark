@@ -180,10 +180,15 @@ def create_tables(conn, table_name: str = CORE_TABLE_NAME, table_id: str = "core
     print(f"Created/verified {table_name} table", file=sys.stderr)
 
 
-def _git_rev_list(repo: Path, branch: str) -> List[str]:
-    """Get list of commit SHAs from git."""
+def _git_rev_list(repo: Path, branch: str, first_parent: bool = False) -> List[str]:
+    """Get list of commit SHAs from git, newest first.
+
+    With first_parent, merge commits are followed only through their first
+    parent, so commits that exist only on a merged-in branch are left out.
+    """
+    cmd = ["git", "rev-list"] + (["--first-parent"] if first_parent else [])
     proc = subprocess.run(
-        ["git", "rev-list", branch],
+        cmd + [branch],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -465,6 +470,7 @@ def determine_commits_to_benchmark(
     config: Optional[dict] = None,
     enable_subset_detection: bool = True,
     table_name: str = CORE_TABLE_NAME,
+    first_parent: bool = False,
 ) -> List[str]:
     """Return up to max_commits SHAs not benchmarked with the given config and architecture.
 
@@ -477,6 +483,7 @@ def determine_commits_to_benchmark(
         config: Config content to check against
         enable_subset_detection: If True, skip commits that have superset configs completed
         table_name: Target table name. Defaults to core table.
+        first_parent: If True, list only commits on the branch's first-parent line
 
     Returns:
         List of commit SHAs that need benchmarking
@@ -488,7 +495,7 @@ def determine_commits_to_benchmark(
     )
 
     # Get all commits from git
-    all_shas = _git_rev_list(repo, branch)
+    all_shas = _git_rev_list(repo, branch, first_parent)
 
     # Get completed commits for exact config match
     with conn.cursor() as cur:
@@ -680,6 +687,11 @@ def main():
         help="Disable subset config detection (for determine)",
     )
     parser.add_argument(
+        "--first-parent",
+        action="store_true",
+        help="Follow merge commits only through their first parent (for determine)",
+    )
+    parser.add_argument(
         "--architecture",
         type=str,
         help="Architecture (e.g., x86_64, arm64). Auto-detected if not provided.",
@@ -796,6 +808,7 @@ def main():
                 config=config,
                 enable_subset_detection=enable_subset_detection,
                 table_name=table_name,
+                first_parent=args.first_parent,
             )
             print(" ".join(commits))
 
