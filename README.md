@@ -1166,7 +1166,7 @@ Requirements:
 - The patched `valkey-benchmark` from the same source, passed with
   `--valkey-benchmark-path`. `--zipfian` and `--keysize` are not upstream, so a
   stock binary rejects the client invocation.
-- An NVMe-backed filesystem holding `ext-storage-path`.
+- An NVMe-backed filesystem holding the `ext-storage-path` directory.
 - libaio, which the FlashCache backend links against.
 - At least 56 CPU cores, covering the `0-7` server range and the `8-31` and
   `32-55` client ranges.
@@ -1174,14 +1174,14 @@ Requirements:
 The config sets `build_args` to `["BUILD_EXT_STORAGE=yes"]`, so a framework
 build compiles the tiering code.
 
-Each time the framework starts the server, it first recreates the file at
-`ext-storage-path` when `custom-server-configs` sets `ext-storage-enabled` to
-`yes`. The new file is empty and allocated to `ext-storage-capacity` (1gb when
-unset), because FlashCache will not start unless the file exists at that size.
-Every run starts with an empty tiering file. A relative path is taken from the
-Valkey directory, or from `dir` when `custom-server-configs` sets it. If the
-path is a directory or any other non-regular file, the run stops with an error.
-Nothing is changed when you use `--use-running-server`.
+`ext-storage-path` is the directory FlashCache keeps `flashcache.db` in.
+FlashCache creates the directory and the file at `ext-storage-capacity` when
+they are missing. Each time the framework starts the server, it first removes
+`flashcache.db` from that directory when `custom-server-configs` sets
+`ext-storage-enabled` to `yes`, so every run starts with an empty tiering file.
+A relative path is taken from the Valkey directory, or from `dir` when
+`custom-server-configs` sets it. If the path exists and is not a directory, the
+run stops with an error. Nothing is changed when you use `--use-running-server`.
 
 ```bash
 python benchmark.py \

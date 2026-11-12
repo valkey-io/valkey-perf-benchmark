@@ -508,7 +508,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.ext_storage_total_num_items) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.storage_engine_total_num_items) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
           "refId": "A"
         }
       ],
@@ -584,7 +584,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.ext_storage_total_num_bytes) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
+          "rawSql": "WITH runs AS (SELECT DISTINCT ON (commit, run) commit, run, run_started_at FROM benchmark_timeseries_tiering WHERE config_name = '$config_name' AND test_id = '$test_id' AND commit IN ($commit) AND run IN ($run) ORDER BY commit, run, run_started_at DESC) SELECT TIMESTAMP 'epoch' + v.elapsed_sec * INTERVAL '1 second' AS time, LEFT(v.commit, 8) || CASE WHEN '$runs_view' = 'average' THEN '' ELSE ' run ' || v.run END AS metric, AVG(v.storage_engine_allocated_db_size_bytes) AS value FROM benchmark_timeseries_tiering_rates v JOIN runs r ON r.commit = v.commit AND r.run = v.run AND r.run_started_at = v.run_started_at WHERE v.config_name = '$config_name' AND v.test_id = '$test_id' AND v.commit IN ($commit) AND v.run IN ($run) GROUP BY 1, 2 ORDER BY 1, 2",
           "refId": "A"
         }
       ],

@@ -14,9 +14,9 @@ on:
         default: ""
         type: string
       num_runs:
-        description: "Number of runs per scenario (default 3)"
+        description: "Number of runs per scenario (default 1)"
         required: false
-        default: "3"
+        default: "1"
         type: string
       groups:
         description: "Test groups to run, e.g. 1,2 (empty = all groups in configs/tiering.json)"
@@ -26,7 +26,7 @@ on:
       engine:
         description: "ext-storage-engine to benchmark"
         required: false
-        default: "mock"
+        default: "flashcache"
         type: choice
         options:
           - "mock"
@@ -63,10 +63,10 @@ jobs:
       BENCHMARK_TOOL_DIR: "valkey_benchmark_tool"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      ENGINE: ${{ inputs.engine || 'mock' }}
-      CONFIG_NAME: ${{ (inputs.engine || 'mock') == 'flashcache' && 'tiering' || 'tiering-mock' }}
+      ENGINE: ${{ inputs.engine || 'flashcache' }}
+      CONFIG_NAME: ${{ (inputs.engine || 'flashcache') == 'flashcache' && 'tiering' || 'tiering-mock' }}
       MAX_COMMITS: ${{ inputs.max_commits || '1' }}
-      NUM_RUNS: ${{ inputs.num_runs || '3' }}
+      NUM_RUNS: ${{ inputs.num_runs || '1' }}
       COMMITS_INPUT: ${{ inputs.commits || '' }}
       GROUPS_INPUT: ${{ inputs.groups || '' }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -197,7 +197,7 @@ jobs:
           EOF
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-region: ${{ secrets.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
@@ -306,12 +306,28 @@ jobs:
               echo "::error::benchmarked $HEAD_SHA instead of $SHA"
               exit 1
             fi
+            python - "results/$SHA/metrics.json" <<'EOF'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          try:
+              with open(path) as f:
+                  rows = json.load(f)
+          except FileNotFoundError:
+              rows = []
+          ok = [r for r in rows if r.get("status") != "failed" and "rps" in r]
+          if not ok:
+              print(f"::error::{path} has no successful rows")
+              sys.exit(1)
+          print(f"{len(ok)} of {len(rows)} rows succeeded")
+          EOF
             pkill -f valkey-server || echo "No valkey-server processes to kill"
           done
 
       - name: Configure AWS credentials for results push
         if: steps.determine_commits.outputs.skip == 'false'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-region: ${{ secrets.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
@@ -364,7 +380,7 @@ jobs:
 
       - name: Upload Artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tiering-benchmark-results
           path: ${{ env.PERF_BENCHMARK_DIR }}/results
@@ -372,7 +388,7 @@ jobs:
       - name: Re-auth with AWS credentials
         if: always()
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           aws-region: ${{ secrets.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}

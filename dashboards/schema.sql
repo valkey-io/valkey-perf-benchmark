@@ -287,8 +287,9 @@ SELECT
                          + tiering_num(s.prev_valkey_info ->> 'used_cpu_user'),
                        s.interval_sec) AS server_cpu_pct,
     tiering_num(s.valkey_info ->> 'ext_storage_capacity_bytes') AS ext_storage_capacity_bytes,
-    tiering_num(s.valkey_info ->> 'ext_storage_total_num_items') AS ext_storage_total_num_items,
-    tiering_num(s.valkey_info ->> 'ext_storage_total_num_bytes') AS ext_storage_total_num_bytes,
+    tiering_num(s.valkey_info ->> 'storage_engine_total_num_items') AS storage_engine_total_num_items,
+    tiering_num(s.valkey_info ->> 'storage_engine_allocated_db_size_bytes')
+        AS storage_engine_allocated_db_size_bytes,
     tiering_num(s.valkey_info ->> 'ext_storage_total_num_items_spilled_to_storage')
         AS ext_storage_total_num_items_spilled_to_storage,
     tiering_num(s.valkey_info ->> 'ext_storage_total_num_items_fetched_from_storage')

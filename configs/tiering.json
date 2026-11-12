@@ -20,7 +20,7 @@
       "activedefrag": "yes",
       "ext-storage-enabled": "yes",
       "ext-storage-engine": "flashcache",
-      "ext-storage-path": "/mnt/nvme/flashcache.db",
+      "ext-storage-path": "/mnt/nvme/flashcache",
       "ext-storage-capacity": "8gb"
     },
     "per_second_sampling": true,
@@ -203,7 +203,7 @@
       "activedefrag": "yes",
       "ext-storage-enabled": "yes",
       "ext-storage-engine": "flashcache",
-      "ext-storage-path": "/mnt/nvme/flashcache.db",
+      "ext-storage-path": "/mnt/nvme/flashcache",
       "ext-storage-capacity": "10gb"
     },
     "per_second_sampling": true,

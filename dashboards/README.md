@@ -144,9 +144,9 @@ Manual dispatch inputs:
 |-------|---------|---------|
 | `max_commits` | 1 | Commits to benchmark when `commits` is empty |
 | `commits` | empty | Space-separated SHAs to benchmark instead |
-| `num_runs` | 3 | Runs per scenario |
+| `num_runs` | 1 | Runs per scenario |
 | `groups` | empty | Test groups, e.g. `1,2`. Empty runs all groups |
-| `engine` | `mock` | `mock` or `flashcache` |
+| `engine` | `flashcache` | `flashcache` or `mock` |
 | `timeout_minutes` | 720 | Job timeout |
 
 The `mock` engine runs every config with `ext-storage-engine mock` and
