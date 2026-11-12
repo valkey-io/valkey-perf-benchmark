@@ -91,8 +91,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Commit selection uses upstream/unstable..data-tiering-unstable so only
-      # this branch's own commits are benchmarked.
+      # Commit selection uses upstream/unstable..data-tiering-unstable with
+      # --first-parent, so only commits as they landed on this branch are
+      # benchmarked, and an upstream sync counts as its one merge commit.
       - name: Fetch upstream valkey unstable
         working-directory: ${{ env.VALKEY_DIR }}
         run: git fetch "$UPSTREAM_REPO_URL" unstable:refs/remotes/upstream/unstable
@@ -240,6 +241,7 @@ jobs:
               --table "$TRACKING_TABLE" \
               --repo "$VALKEY_PATH" \
               --branch "upstream/unstable..$VALKEY_BRANCH" \
+              --first-parent \
               --config-file "$RUN_CONFIG" \
               --max-commits "$MAX_COMMITS" \
               --host "$PG_HOST" \

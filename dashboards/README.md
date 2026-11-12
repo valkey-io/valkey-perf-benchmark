@@ -133,7 +133,8 @@ the latest 60 commits whose `test_type` matches the selected config.
 
 `.github/workflows/tiering_benchmark.yml` benchmarks the commits of
 `dubey02/valkey-data-tiering` branch `data-tiering-unstable` that are not on
-upstream `valkey-io/valkey` `unstable`. It runs `configs/tiering.json` daily at
+upstream `valkey-io/valkey` `unstable`, following merges only through their
+first parent, so an upstream sync is benchmarked once as its merge commit. It runs `configs/tiering.json` daily at
 06:00 UTC and on manual dispatch, on the self-hosted runner labeled
 `data-tiering-benchmark-arm`. The server address comes from the
 `EC2_TIERING_IP` secret.
