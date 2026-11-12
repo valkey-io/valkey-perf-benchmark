@@ -136,8 +136,8 @@ the latest 60 commits whose `test_type` matches the selected config.
 upstream `valkey-io/valkey` `unstable`, following merges only through their
 first parent, so an upstream sync is benchmarked once as its merge commit. It runs `configs/tiering.json` daily at
 06:00 UTC and on manual dispatch, on the self-hosted runner labeled
-`data-tiering-benchmark-arm`. The server address comes from the
-`EC2_TIERING_IP` secret.
+`data-tiering-benchmark-arm`. The server and clients run on that runner, and
+the clients connect to `127.0.0.1`.
 
 Manual dispatch inputs:
 

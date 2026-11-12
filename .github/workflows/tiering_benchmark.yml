@@ -288,7 +288,6 @@ jobs:
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
         env:
           COMMITS: ${{ steps.determine_commits.outputs.commits }}
-          TARGET_IP: ${{ secrets.EC2_TIERING_IP }}
         run: |
           read -ra SHAS <<< "$COMMITS"
           for SHA in "${SHAS[@]}"; do
@@ -299,7 +298,7 @@ jobs:
               --commits "$SHA" \
               --valkey-path "../$VALKEY_DIR" \
               --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH" \
-              --target-ip "$TARGET_IP" \
+              --target-ip 127.0.0.1 \
               --results-dir results \
               --runs "$NUM_RUNS" \
               ${GROUPS_INPUT:+--groups "$GROUPS_INPUT"}
