@@ -147,15 +147,28 @@ Manual dispatch inputs:
 | `commits` | empty | Space-separated SHAs to benchmark instead |
 | `num_runs` | 1 | Runs per scenario |
 | `groups` | empty | Test groups, e.g. `1,2`. Empty runs all groups |
-| `engine` | `flashcache` | `flashcache` or `mock` |
+| `engine` | `flashcache` | `flashcache`, `mock` or `none` |
+| `custom_config` | empty | Config JSON to run instead of `configs/tiering.json`, exactly as entered |
+| `config_name` | empty | Name to save `custom_config` results under. Required with `custom_config` |
 | `timeout_minutes` | 720 | Job timeout |
 
-The `mock` engine runs every config with `ext-storage-engine mock` and
-`maxmemory-policy allkeys-lru` and without a storage file. Its rows are pushed
-with config name `tiering-mock`. The `flashcache` engine runs the config as is
-and pushes with config name `tiering`. The workflow passes the config name as
-`--test-type`. Pick the config name in the dashboard's
-Config variable, so mock results never mix with FlashCache results.
+Each run is saved under a config name, which the workflow passes as
+`--test-type`:
+
+| Run | Config name | Server settings |
+|-----|-------------|-----------------|
+| `engine: flashcache` | `tiering` | `configs/tiering.json` as is |
+| `engine: mock` | `tiering-mock` | `ext-storage-engine mock` and `maxmemory-policy allkeys-lru`, no storage file |
+| `engine: none` | `tiering-off` | No `ext-storage-*` settings and no `maxmemory` or `maxmemory-policy`, so all data stays in memory |
+| `custom_config` | `config_name` | The entered config. `engine` is not applied to it |
+
+`config_name` cannot be one of the three engine names. To run plain Valkey,
+use `engine: none` with an upstream `valkey-io/valkey` `unstable` SHA in
+`commits`. The workflow fetches upstream `unstable` into the same checkout.
+
+The dashboard's Config variable takes several config names at once. Every line
+is labelled with its commit and config name, so for example `tiering` and
+`tiering-off` for the same commit share each panel.
 
 Commit tracking uses the `benchmark_commits_tiering` table. One
 `push_to_postgres.py --table tiering` step sends summary metrics to

@@ -29,8 +29,19 @@ on:
         default: "flashcache"
         type: choice
         options:
-          - "mock"
           - "flashcache"
+          - "mock"
+          - "none"
+      custom_config:
+        description: "Config JSON to run instead of configs/tiering.json, exactly as entered. engine is not applied to it"
+        required: false
+        default: ""
+        type: string
+      config_name:
+        description: "Name to save custom_config results under. Required with custom_config"
+        required: false
+        default: ""
+        type: string
       timeout_minutes:
         description: "Job timeout in minutes (default 720)"
         required: false
@@ -64,7 +75,6 @@ jobs:
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
       ENGINE: ${{ inputs.engine || 'flashcache' }}
-      CONFIG_NAME: ${{ (inputs.engine || 'flashcache') == 'flashcache' && 'tiering' || 'tiering-mock' }}
       MAX_COMMITS: ${{ inputs.max_commits || '1' }}
       NUM_RUNS: ${{ inputs.num_runs || '1' }}
       COMMITS_INPUT: ${{ inputs.commits || '' }}
@@ -126,8 +136,12 @@ jobs:
           echo "VALKEY_BENCHMARK_PATH=$(pwd)/src/valkey-benchmark" >> "$GITHUB_ENV"
 
       # mock has no storage file, so it drops the path and capacity settings.
+      # none drops the tiering settings, maxmemory and maxmemory-policy.
       - name: Write engine config
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        env:
+          CUSTOM_CONFIG: ${{ inputs.custom_config || '' }}
+          CONFIG_NAME_INPUT: ${{ inputs.config_name || '' }}
         run: |
           if [[ -n "$GROUPS_INPUT" ]]; then
             RUN_CONFIG="$RUNNER_TEMP/tiering-groups-${GROUPS_INPUT//[^0-9]/_}.json"
@@ -135,21 +149,64 @@ jobs:
             RUN_CONFIG="$RUNNER_TEMP/tiering.json"
           fi
           python - configs/tiering.json "$RUN_CONFIG" "$ENGINE" <<'EOF'
+          import copy
           import json
+          import os
           import sys
 
+          from benchmark import validate_config, validate_cpu_allocation
+
           source, target, engine = sys.argv[1:]
-          with open(source) as f:
-              configs = json.load(f)
-          if engine == "mock":
+          custom = os.environ["CUSTOM_CONFIG"].strip()
+          name = os.environ["CONFIG_NAME_INPUT"].strip()
+          engine_names = {
+              "flashcache": "tiering",
+              "mock": "tiering-mock",
+              "none": "tiering-off",
+          }
+
+          if custom:
+              if not name:
+                  sys.exit("::error::config_name is required with custom_config")
+              if name in engine_names.values():
+                  sys.exit(f"::error::config_name {name} is used by the engine runs")
+              try:
+                  configs = json.loads(custom)
+              except json.JSONDecodeError as e:
+                  sys.exit(f"::error::custom_config is not valid JSON: {e}")
+              if isinstance(configs, dict):
+                  configs = [configs]
+              if not configs or not all(isinstance(c, dict) for c in configs):
+                  sys.exit("::error::custom_config must be an object or a list of objects")
+          else:
+              if name:
+                  sys.exit("::error::config_name is only used with custom_config")
+              name = engine_names[engine]
+              with open(source) as f:
+                  configs = json.load(f)
               for cfg in configs:
                   server = cfg["custom-server-configs"]
-                  server["ext-storage-engine"] = "mock"
-                  server.pop("ext-storage-path", None)
-                  server.pop("ext-storage-capacity", None)
-                  server["maxmemory-policy"] = "allkeys-lru"
+                  if engine == "mock":
+                      server["ext-storage-engine"] = "mock"
+                      server.pop("ext-storage-path", None)
+                      server.pop("ext-storage-capacity", None)
+                      server["maxmemory-policy"] = "allkeys-lru"
+                  elif engine == "none":
+                      for key in list(server):
+                          if key.startswith("ext-storage-") or key.startswith("maxmemory"):
+                              del server[key]
+
+          for cfg in configs:
+              try:
+                  check = copy.deepcopy(cfg)
+                  validate_config(check)
+                  validate_cpu_allocation(check)
+              except ValueError as e:
+                  sys.exit(f"::error::the benchmark config is not valid: {e}")
           with open(target, "w") as f:
               json.dump(configs, f, indent=2)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"CONFIG_NAME={name}\n")
           EOF
           cat "$RUN_CONFIG"
           echo "RUN_CONFIG=$RUN_CONFIG" >> "$GITHUB_ENV"
