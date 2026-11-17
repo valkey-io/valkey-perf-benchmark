@@ -28,7 +28,9 @@ from valkey_benchmark import (
     WRITE_COMMANDS,
 )
 from benchmark_build import BenchmarkBuilder
+import preload
 from samplers import SOURCES
+from set_matrix import compile_set_matrix
 from utils.cpu_utils import (
     parse_core_range,
     calculate_server_cpu_ranges,
@@ -456,10 +458,18 @@ def compile_simple_config(cfg: dict) -> None:
 
 
 def validate_config(cfg: dict) -> None:
-    """Validate config (commands or test_groups format)."""
+    """Validate config (commands, set_matrix or test_groups format)."""
     if "scenarios" in cfg and "test_groups" not in cfg:
         cfg["test_groups"] = [{"scenarios": cfg["scenarios"]}]
         del cfg["scenarios"]
+
+    if "set_matrix" in cfg:
+        if "test_groups" in cfg or "commands" in cfg:
+            raise ValueError(
+                "'set_matrix' generates test_groups, so it cannot be combined "
+                "with 'test_groups' or 'commands'"
+            )
+        cfg["test_groups"] = compile_set_matrix(cfg["set_matrix"])
 
     has_commands = "commands" in cfg
     has_test_groups = "test_groups" in cfg
@@ -733,6 +743,58 @@ def _validate_populate_with(populate_with, location: str, require_write: bool) -
         )
 
 
+def _validate_window(window, location: str, duration=None) -> None:
+    """Validate a ``[start, end]`` server-side throughput window in seconds."""
+    if (
+        not isinstance(window, list)
+        or len(window) != 2
+        or not all(isinstance(x, int) and not isinstance(x, bool) for x in window)
+        or not 0 <= window[0] < window[1]
+    ):
+        raise ValueError(
+            f"{location} 'window' must be [start, end] whole seconds with "
+            "0 <= start < end"
+        )
+    if duration is not None and duration <= window[1]:
+        raise ValueError(
+            f"{location} 'window' ends at {window[1]}s, so 'duration' "
+            f"({duration}s) must be longer for a sample to follow the window"
+        )
+
+
+def _sampling_reads_info(cfg: dict) -> bool:
+    """Return whether per-second sampling is on with the valkey_info source."""
+    value = cfg.get("per_second_sampling")
+    if value is True:
+        return True
+    if isinstance(value, dict):
+        return "valkey_info" in (value.get("sources") or {"valkey_info": {}})
+    return False
+
+
+def _validate_server_measurement_keys(scenario: dict, location: str, cfg: dict) -> None:
+    """Validate requires_commands, preload, window and check_after_run."""
+    if "requires_commands" in scenario:
+        _validate_string_list(
+            scenario["requires_commands"], f"{location}.requires_commands"
+        )
+    if "preload" in scenario:
+        preload.validate(scenario["preload"], f"{location}.preload")
+    if "check_after_run" in scenario and not isinstance(
+        scenario["check_after_run"], bool
+    ):
+        raise ValueError(f"{location} 'check_after_run' must be true or false")
+    window = scenario.get("window", cfg.get("window"))
+    if window is None:
+        return
+    _validate_window(window, location, scenario.get("duration"))
+    if not _sampling_reads_info(cfg):
+        raise ValueError(
+            f"{location} sets a 'window', which needs 'per_second_sampling' "
+            "with the valkey_info source"
+        )
+
+
 def validate_test_groups(cfg: dict) -> None:
     """Validate test_groups structure."""
     if "test_groups" not in cfg:
@@ -761,6 +823,7 @@ def validate_test_groups(cfg: dict) -> None:
             # parent may carry benchmark_args for its children to inherit.
             _validate_benchmark_args(scenario, location)
             _validate_populate_options(scenario, location)
+            _validate_server_measurement_keys(scenario, location, cfg)
 
             if "post_commands" in scenario:
                 _validate_string_list(

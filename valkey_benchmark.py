@@ -14,10 +14,11 @@ from typing import Iterable, List, Optional
 
 import valkey
 
+import preload
 from process_metrics import MetricsProcessor
 from valkey_server import ServerLauncher, apply_config_to_servers
 from profiler import PerformanceProfiler
-from metrics_sampler import MetricsSampler, append_jsonl
+from metrics_sampler import MetricsSampler, append_jsonl, summarize_window
 from samplers import DEFAULT_SOURCES
 from utils.git_utils import resolve_ref, get_commit_timestamp
 from utils.cpu_utils import format_core_list, parse_core_range
@@ -30,6 +31,9 @@ DEFAULT_TIMEOUT = 30
 
 # Pause between retried populate passes, giving eviction room to catch up.
 POPULATE_RETRY_SLEEP_SECONDS = 2
+
+# How long a memory reading waits for a lazy FLUSHALL to finish freeing.
+LAZYFREE_WAIT_SECONDS = 30
 
 # One appended JSON Lines file per results dir holds every per-second sample of
 # the run, and rows are told apart by the identity fields they carry.
@@ -126,6 +130,8 @@ class ClientRunner:
         self.config_suffix = "default"
         self.current_run = 1
         self.client_cpu_ranges = []
+        # Command name -> whether the server has it, filled by _missing_commands.
+        self._known: dict = {}
 
     def _tls_kwargs(self) -> dict:
         """Return the valkey-py TLS arguments, empty when TLS is off."""
@@ -834,6 +840,14 @@ class ClientRunner:
 
         logging.info(f"Running scenario: {scenario_id} (type: {scenario_type})")
 
+        missing = self._missing_commands(scenario)
+        if missing:
+            logging.warning(
+                f"Skipping scenario {group_id}_{scenario_id}: the server lacks "
+                f"{', '.join(missing)}"
+            )
+            return None
+
         self._prepare_server_state(scenario, config_set)
 
         seed_val = self._draw_scenario_seed(scenario, origin_simple)
@@ -850,7 +864,7 @@ class ClientRunner:
         }
         try:
             # Population failures follow the scenario's normal error policy.
-            self._populate_scenario_keyspace(scenario, seed_val)
+            populated = self._populate_scenario_keyspace(scenario, seed_val)
 
             self._run_scenario_warmup(scenario, group_id, config_set)
 
@@ -867,7 +881,7 @@ class ClientRunner:
                     # last client exits cover in-memory aggregation only.
                     with self._per_second_sampling(
                         scenario, group_id, **sampling_metadata
-                    ):
+                    ) as measured:
                         metrics_list = self._run_mixed_workload(
                             scenario,
                             group_id,
@@ -876,13 +890,18 @@ class ClientRunner:
                             warmup_duration,
                             group_description=group_description,
                         )
+                    self._check_preload_after_run(scenario)
+                    self._add_server_measurements(metrics_list, populated, measured)
                     return metrics_list if metrics_list else None
 
                 # Invocation errors reach the outer scenario error policy.
-                with self._per_second_sampling(scenario, group_id, **sampling_metadata):
+                with self._per_second_sampling(
+                    scenario, group_id, **sampling_metadata
+                ) as measured:
                     proc, aggregated_row = self._execute_benchmark_run(
                         scenario, seed_val
                     )
+                self._check_preload_after_run(scenario)
 
                 if proc is None and aggregated_row is None:
                     logging.error(f"Benchmark failed for scenario {scenario_id}")
@@ -910,7 +929,7 @@ class ClientRunner:
                 # Basic parse failures skip one combination; other scenarios
                 # emit a failure marker through the outer handler.
                 try:
-                    return self._build_scenario_metrics(
+                    metrics = self._build_scenario_metrics(
                         scenario,
                         proc,
                         aggregated_row,
@@ -920,6 +939,8 @@ class ClientRunner:
                         group_description,
                         metrics_processor,
                     )
+                    self._add_server_measurements([metrics], populated, measured)
+                    return metrics
                 except Exception as e:
                     if origin_simple:
                         logging.error(
@@ -980,12 +1001,140 @@ class ClientRunner:
             return seed_val
         return None
 
-    def _populate_scenario_keyspace(self, scenario, seed_val):
-        """Seed a scenario's keyspace through its configured write workload."""
-        populate_with = scenario.get("populate_with")
-        if not populate_with:
-            return
+    def _populate_scenario_keyspace(self, scenario, seed_val) -> dict:
+        """Seed a scenario's keyspace through its preload and write workload.
 
+        Returns the memory the load added, as ``populate_keys``,
+        ``populate_used_memory_mb`` and ``populate_bytes_per_key``, read
+        from DBSIZE and INFO memory across the active ports before and after.
+        Returns ``{}`` when the scenario loads nothing.
+        """
+        populate_with = scenario.get("populate_with")
+        preload_spec = scenario.get("preload")
+        if not populate_with and not preload_spec:
+            return {}
+        if scenario.get(ORIGIN_FIELD) == ORIGIN_SIMPLE:
+            # The basic format keeps its original row schema.
+            self._run_populate_with(scenario, populate_with, seed_val)
+            return {}
+
+        before = self._try_keys_and_used_memory()
+        if preload_spec:
+            self._run_preload(preload_spec)
+        if populate_with:
+            self._run_populate_with(scenario, populate_with, seed_val)
+        after = self._try_keys_and_used_memory() if before else None
+        if not before or not after:
+            return {}
+
+        keys = after[0] - before[0]
+        delta = after[1] - before[1]
+        # MB keeps large loads inside push_to_postgres's inferred column types.
+        loaded = {
+            "populate_keys": keys,
+            "populate_used_memory_mb": round(delta / 1e6, 3),
+        }
+        if keys > 0:
+            loaded["populate_bytes_per_key"] = round(delta / keys, 1)
+        logging.info(f"Populated keyspace: {loaded}")
+        return loaded
+
+    def _try_keys_and_used_memory(self) -> Optional[tuple]:
+        """Return _keys_and_used_memory(), or None when the server can't say.
+
+        The memory reading is observability, so a failure only drops the
+        populate memory fields from the row.
+        """
+        try:
+            return self._keys_and_used_memory()
+        except Exception as e:
+            logging.warning(f"Could not read DBSIZE and used_memory: {e}")
+            return None
+
+    def _keys_and_used_memory(self) -> tuple:
+        """Return summed DBSIZE and used_memory across the active ports.
+
+        Waits up to LAZYFREE_WAIT_SECONDS for lazily freed objects (FLUSHALL
+        is asynchronous when lazyfree-lazy-user-flush is on) so memory still
+        being freed is not counted against the load.
+        """
+        keys = memory = 0
+        for port in self._get_active_ports():
+            client = self._create_client(port)
+            try:
+                deadline = time.time() + LAZYFREE_WAIT_SECONDS
+                info = client.info("memory")
+                while (
+                    int(info.get("lazyfree_pending_objects", 0))
+                    and time.time() < deadline
+                ):
+                    time.sleep(0.1)
+                    info = client.info("memory")
+                keys += client.dbsize()
+                memory += int(info["used_memory"])
+            finally:
+                client.close()
+        return keys, memory
+
+    def _run_preload(self, preload_spec: list) -> None:
+        """Write a scenario's preload keyspaces and check their encoding."""
+        if self.cluster_mode:
+            # shortcut: the loader runs one script on one node, so it cannot
+            # spread keys over cluster slots; add per-slot routing for CME.
+            raise RuntimeError("'preload' does not support cluster mode")
+        client = self._create_client(socket_timeout=600)
+        try:
+            written = preload.load(client, preload_spec)
+            # Drop the loader scripts so they are not counted as loaded data.
+            client.execute_command("SCRIPT", "FLUSH", "SYNC")
+        finally:
+            client.close()
+        logging.info(f"Preload wrote {written}")
+
+    def _check_preload_after_run(self, scenario: dict) -> None:
+        """Fail the scenario when the measured run emptied or converted a key."""
+        if not scenario.get("preload") or not scenario.get("check_after_run", True):
+            return
+        client = self._create_client(socket_timeout=600)
+        try:
+            preload.verify(client, scenario["preload"], check_size=False)
+            client.execute_command("SCRIPT", "FLUSH", "SYNC")
+        finally:
+            client.close()
+
+    def _missing_commands(self, scenario: dict) -> List[str]:
+        """Return the scenario's required commands the server does not have.
+
+        Required commands are the scenario's ``requires_commands`` plus those
+        its preload uses. Answers are cached per runner, since the server
+        binary does not change between scenarios.
+        """
+        required = {c.upper() for c in scenario.get("requires_commands", [])}
+        required |= preload.required_commands(scenario.get("preload"))
+        unknown = sorted(c for c in required if c not in self._known)
+        if unknown:
+            client = self._create_client()
+            # COMMAND INFO replies nil for an unknown name, which valkey-py's
+            # COMMAND parser cannot handle, so read the raw reply.
+            client.set_response_callback("COMMAND", lambda response, **_: response)
+            try:
+                reply = client.execute_command("COMMAND", "INFO", *unknown)
+            finally:
+                client.close()
+            for name, info in zip(unknown, reply):
+                self._known[name] = info is not None
+        return sorted(c for c in required if not self._known[c])
+
+    @staticmethod
+    def _add_server_measurements(rows, populated: dict, measured: dict) -> None:
+        """Copy populate memory and window throughput onto successful rows."""
+        for row in rows or []:
+            if row and row.get("status", "success") == "success":
+                row.update(populated or {})
+                row.update(measured or {})
+
+    def _run_populate_with(self, scenario, populate_with, seed_val) -> None:
+        """Run the scenario's populate_with write workload."""
         keyspacelen_val = scenario.get(
             "keyspacelen", self.config.get("keyspacelen", [1000000])[0]
         )
@@ -1243,14 +1392,27 @@ class ClientRunner:
         run.
         """
         sampler = None
+        measured: dict = {}
         value = self.config.get("per_second_sampling")
         if value is True or isinstance(value, dict):
             sampler = self._start_metrics_sampler(scenario, group_id, **row_metadata)
         try:
-            yield
+            yield measured
         finally:
             if sampler is not None:
                 self._stop_metrics_sampler(sampler, scenario, group_id)
+                window = scenario.get("window", self.config.get("window"))
+                if window:
+                    try:
+                        measured.update(summarize_window(sampler.rows, window))
+                    except (KeyError, ValueError) as e:
+                        logging.warning(f"Could not derive window throughput: {e}")
+                    if not measured.get("window_complete"):
+                        logging.warning(
+                            f"Scenario {self._scenario_test_id(scenario, group_id)}: "
+                            f"no complete sample window {window}; the client "
+                            "stopped inside it or a sample was missed"
+                        )
 
     def _execute_benchmark_run(self, scenario, seed_val):
         """Return a process or an aggregated row for a non-mixed scenario."""

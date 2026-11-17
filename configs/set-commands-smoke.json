@@ -1,0 +1,58 @@
+[
+  {
+    "test_name": "Set commands (smoke)",
+    "set_matrix": {
+      "duration": 6,
+      "window": [1, 4],
+      "clients": 10,
+      "pipelines": [1],
+      "ttl_seconds": 100000000,
+      "shapes": {
+        "listpack16": {
+          "members": 16,
+          "member_size": 16,
+          "encoding": "listpack",
+          "encoding_with_ttl": "listpack",
+          "toggles": 8,
+          "population": 500000
+        },
+        "intset512": {
+          "members": 512,
+          "integer": true,
+          "encoding": "intset",
+          "encoding_with_ttl": "hashtable",
+          "toggles": 16,
+          "population": 20000,
+          "grow_headroom": 400
+        },
+        "hashtable2k": {
+          "members": 2000,
+          "member_size": 16,
+          "encoding": "hashtable",
+          "encoding_with_ttl": "hashtable",
+          "toggles": 100,
+          "population": 2000
+        }
+      },
+      "ttl_mixes": {
+        "none": {},
+        "half": {"fraction": 0.5}
+      },
+      "commands": {
+        "sismember": {"command": "SISMEMBER {key} {member}"},
+        "srem_sadd": {"writes": ["SREM {key} {toggle}", "SADD {key} {toggle}"], "layout": "toggle"},
+        "spop": {"command": "SPOP {rand_key} 1", "layout": "population"},
+        "smove": {"writes": ["SMOVE {key} {key2} {toggle}", "SMOVE {key2} {key} {toggle}"], "layout": "two_toggle"},
+        "sunionstore": {"command": "SUNIONSTORE {dest} {key} {key2}", "layout": "overlap"},
+        "sexpire": {"command": "SEXPIRE {key} {ttl} MEMBERS 1 {toggle}", "layout": "toggle", "toggle_ttl": true, "requires": ["SEXPIRE"]},
+        "saddex_new": {"command": "SADDEX {rand_key} EX {ttl} MEMBERS 1 {new_member}", "layout": "population", "grows": true, "adds_ttl": true, "requires": ["SADDEX"]},
+        "sttl": {"command": "STTL {key} MEMBERS 1 {member}", "requires": ["STTL"]}
+      }
+    },
+    "per_second_sampling": {"sources": {"valkey_info": {}}},
+    "custom-server-configs": {"maxmemory-policy": "noeviction"},
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false
+  }
+]

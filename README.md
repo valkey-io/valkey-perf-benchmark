@@ -66,6 +66,7 @@ valkey-perf-benchmark/
 │   │   ├── search_benchmark.yml      # Continuous valkey-search module benchmarking
 │   │   ├── benchmark_release_tags.yml # Benchmark specific Valkey release tags
 │   │   ├── module-benchmark.yml      # Module framework smoke test (CI)
+│   │   ├── set_scenarios.yml         # Set command matrix on any repo and ref (manual)
 │   │   ├── basic.yml                 # Basic benchmark validation
 │   │   ├── cluster_tls.yml           # Cluster and TLS specific tests
 │   │   ├── tests.yml                 # Unit test suite (pytest)
@@ -78,6 +79,8 @@ valkey-perf-benchmark/
 │   ├── benchmark-config-arm.json        # Core configs tuned for arm hosts
 │   ├── benchmark-configs-cluster-tls.json # Cluster + TLS core configs
 │   ├── benchmark-config-tag-arm.json    # Tag-index benchmark configs (arm)
+│   ├── set-commands.json                # Set command matrix (see Set command scenarios)
+│   ├── set-commands-smoke.json          # Small version of the set matrix
 │   ├── fts-benchmarks-arm.json          # Full search test suite (16 groups, arm)
 │   ├── fts-benchmarks-shortened-arm.json # Shortened search suite (4 groups, arm)
 │   └── module-test-arm.json             # Minimal module framework smoke test
@@ -112,6 +115,8 @@ valkey-perf-benchmark/
 │   ├── process_cpu.py      # Raw /proc/stat and per-thread server CPU ticks (local only)
 │   └── disk.py             # Raw block device stat counters (local only)
 ├── process_metrics.py       # Parses and formats benchmark results (MetricsProcessor)
+├── preload.py               # Server-side set preload with an encoding check
+├── set_matrix.py            # Compiles a set_matrix block into test_groups
 ├── tests/                   # Test suite
 │   ├── integration/        # Integration tests (+ README)
 │   └── test_*.py           # Unit tests (pytest)
@@ -515,6 +520,7 @@ The project includes several GitHub Actions workflows for automated testing and 
   - Validates the module benchmarking framework with a minimal test
   - Uses `configs/module-test-arm.json` (small, quick)
   - Builds valkey-server + valkey-search and runs a quick smoke test
+- **`set_scenarios.yml`**: Manual run of the set command matrix against any Valkey repository and ref (see [Set command scenarios](#set-command-scenarios))
 - **`basic.yml`**: Basic benchmark validation
 - **`cluster_tls.yml`**: Tests for cluster and TLS configurations
 - **`tests.yml`**: Runs the unit test suite (pytest)
@@ -728,6 +734,10 @@ Module tests use structured `test_groups` with `scenarios`:
 | `populate_retries` | Additional populate attempts when the keyspace comes up short, default 0. Requires `populate_with`. At 0 the pass runs once and its key count is never checked. Above 0 the summed `DBSIZE` across the active ports is compared against `min(requests, keyspacelen)` after every attempt, and a short count (or a nonzero exit, which valkey-benchmark returns when the server rejects writes) sleeps two seconds and runs the pass again. Exhausting the attempts raises. |
 | `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. Flags the framework emits itself (`-h -p -c -P -d -n -r -t --duration --seed --sequential --threads --warmup --cluster --tls --csv`, the TLS certificate flags and the dataset flags) are rejected at config validation; use the corresponding scenario field instead. |
 | `benchmark_args` | List of strings passed straight through to `valkey-benchmark` itself, spliced into the argv before `--csv` and therefore always left of the `--` separator. Each string is shlex-split, so `"--zipfian 1.0"` becomes two argv elements. Use it for client flags the framework does not model, including flags that only exist in a patched `valkey-benchmark` supplied via `--valkey-benchmark-path`. This targets the benchmark client, unlike `custom-server-configs`, which passes settings to `valkey-server`. On a `type: mixed` parent the value is inherited by every `writes`/`reads` child that does not set its own. Flags the framework emits itself (`-h -p -c -P -d -n -r -t --duration --seed --sequential --threads --warmup --cluster --tls --csv`, the TLS certificate flags and the dataset flags) are rejected at config validation; use the corresponding scenario field instead. |
+| `preload` | List of keyspaces written on the server by a Lua script before the run, then checked key by key for member count and `OBJECT ENCODING`. Each keyspace is `{"type": "set", "key_prefix", "sets", "encoding", "members": [{"prefix", "count", "start", "ttl": {"seconds", "count" or "fraction"}}]}`. Keys are `<key_prefix><12-digit index>` and members `<prefix><12-digit index>`, the shape valkey-benchmark gives `__rand_int__`, so `SISMEMBER s:000000000000 m__rand_int__` with `keyspacelen` 16 hits the 16 members `m000000000000`..`m000000000015`. A member `ttl` is set with `SEXPIRE`, so such a scenario needs a server that has it. Not supported in cluster mode. |
+| `check_after_run` | With `preload`, check after the run that every preloaded key still exists with the same encoding, and fail the scenario otherwise, so a run that emptied or converted a set is not reported. Default `true`. |
+| `requires_commands` | Commands the server must have, checked with `COMMAND INFO` before the scenario changes any server state. A server that lacks one skips the scenario with a warning and writes no row. A `preload` member `ttl` adds `SEXPIRE`. |
+| `window` | `[start, end]` seconds of the measured run over which the server-side throughput is taken (see [Server-side throughput](#server-side-throughput-and-populate-memory)). Needs `per_second_sampling` with the `valkey_info` source, and a `duration` longer than `end`. A root-level `window` applies to every scenario that sets none. |
 
 ### Cluster Mode Support
 
@@ -1233,6 +1243,110 @@ python benchmark.py \
 The load uses `populate_retries` because a 4M key load under a 1gb cap is
 rejected intermittently while eviction catches up, so the pass is repeated until
 `DBSIZE` reaches the keyspace size.
+
+## Set command scenarios
+
+`configs/set-commands.json` measures every set command, and the member TTL
+commands of [valkey PR #4959](https://github.com/valkey-io/valkey/pull/4959),
+over set sizes, encodings and TTL mixes. Its `set_matrix` block is compiled
+into ordinary `test_groups` when the config loads: one group per shape and TTL
+mix, one scenario per command and pipeline, 868 scenarios in all. Each
+scenario restarts (or flushes) the server, preloads its sets, checks their
+encoding, runs for `duration` seconds and records server-side ops/s over
+`window`.
+
+Run it against a branch, fork or commit on one host:
+
+```bash
+# Build the server under test from any repository and ref.
+git clone https://github.com/<owner>/valkey.git ../valkey-under-test
+git -C ../valkey-under-test checkout <branch-or-sha>   # or fetch refs/pull/4959/head
+
+# Narrow the matrix and override parameters; the file written is what runs.
+python scripts/resolve_set_matrix.py --config configs/set-commands.json \
+  --commands sismember,srem_sadd \
+  --overrides '{"server_cpu_range": "0", "client_cpu_range": "2-5",
+                "set_matrix": {"shapes": {"listpack16": {"members": 32}},
+                               "run_ttl_mixes": ["none", "half"]}}' \
+  --out results/set-config.json
+
+python benchmark.py --config results/set-config.json \
+  --valkey-path ../valkey-under-test --commits "$(git -C ../valkey-under-test rev-parse HEAD)" \
+  --repository <owner>/valkey --runs 5
+```
+
+`--groups` and `--scenarios` also work; scenario ids are
+`<shape>.<ttl mix>.<command>.P<pipeline>`, e.g. `listpack16.none.srem_sadd.P16`.
+`configs/set-commands-smoke.json` is a one-minute-per-shape version for
+checking a setup. The **Set Command Scenarios** workflow
+(`.github/workflows/set_scenarios.yml`) runs the same thing from
+`workflow_dispatch` with `valkey_repo`, `valkey_ref` (such as
+`refs/pull/4959/head`), `scenario` (command ids), `num_runs`, `runner` and one
+JSON `overrides` input, and uploads the results with the resolved config.
+
+**Parameters.** All of them are in the config:
+
+| Key | Meaning |
+|---|---|
+| `shapes.<id>` | `members` per set, `member_size` in bytes (or `integer: true` for 13-digit integers), the expected `encoding` and `encoding_with_ttl` (an intset with a member TTL becomes a listpack or hashtable), `toggles` (members a write command removes and re-adds), `population` (sets loaded for commands that pick a random set) and `grow_headroom` (members left out of those sets for commands that add members) |
+| `ttl_mixes.<id>` | `{}` for no TTLs, `{"count": n}` or `{"fraction": f}` members of each set with a TTL of `ttl_seconds`, picked evenly across the set |
+| `commands.<id>` | `command` (one process) or `writes` (concurrent processes, e.g. the SREM+SADD pair), a `layout`, and `requires` for commands only some servers have |
+| `duration`, `window`, `clients`, `pipelines` | run length, measured window, total clients, pipeline depths |
+| `run_shapes`, `run_ttl_mixes`, `run_commands` | optional lists that select a subset |
+
+The shipped shapes are 16 members (listpack), 512 integers (the intset limit)
+and 100,000 members (hashtable), each with TTL mixes none, one member, 10%,
+half and all. TTLs are 100,000,000 s, so nothing expires during a run.
+
+**Keeping sets intact during a run.** Every `__rand_int__` in a
+valkey-benchmark command is drawn from one `-r` range, so the `layout` decides
+what the command addresses and what `-r` is:
+
+- `one`: reads and member writes that do not change the size (SADD of an
+  existing member) address one set; `-r` is the member count.
+- `toggle`: SREM+SADD, SEXPIRE and the other TTL writers act only on the
+  `toggles` members, so the set stays between `members - toggles` and
+  `members` and the TTL mix of the other members does not change.
+- `two_toggle`: SMOVE runs both ways between two sets that each keep
+  `members - toggles` fixed members, so neither set empties.
+- `overlap`: SINTER, SUNION, SDIFF and their STORE forms read two sets that
+  overlap by half; the STORE forms overwrite a separate destination key.
+- `population`: SPOP and SADD/SADDEX of new members pick a random set among
+  `population` sets, so each set loses or gains only a few members. Size the
+  population so ops/s x `duration` is a small fraction of `population`.
+
+After the run every preloaded key is checked again for existence and
+encoding; a scenario that emptied or converted a set fails with the key named
+instead of reporting a number. A command marked `adds_ttl` is not generated
+for a TTL-free shape whose encoding changes with a TTL (intset), because the
+run would measure the conversion.
+
+**What a server without PR #4959 does.** Scenarios with a TTL mix, and the
+member TTL commands (SADDEX, SEXPIRE, SPEXPIRE, SEXPIREAT, SPEXPIREAT,
+SPERSIST, STTL, SPTTL, SEXPIRETIME, SPEXPIRETIME), are skipped with a warning
+after `COMMAND INFO` shows the command is missing.
+
+## Server-side throughput and populate memory
+
+`valkey-benchmark --threads` stops on a 250 ms timer, so its client-side `rps`
+moves in steps of about 2% on a 10-12 s run. A scenario with a `window` also
+gets server-side numbers, derived from the `valkey_info` samples taken at
+`elapsed_sec` start and end:
+
+| Field | Meaning |
+|---|---|
+| `server_ops_s` | Change in `cmdstat_<cmd>:calls` summed over commands, divided by the change in `server_time_usec` from the same INFO replies; the sampler's own INFO and LATENCY calls are left out |
+| `server_ops_s_by_command` | The same per command, e.g. `{"srem": 452000.1, "sadd": 451900.4}` |
+| `window_complete` | `false` when an edge sample is missing or no sample followed the window, which means the client stopped inside it |
+| `window_error_replies` | Change in `total_error_replies` over the window |
+
+Any scenario that loads data (`preload` or `populate_with`) also records
+`populate_keys`, `populate_used_memory_mb` and `populate_bytes_per_key`: the
+change in `DBSIZE` and `used_memory` across the load, read after lazy freeing
+has finished. For the set matrix this is memory per set. It is meaningful only
+for loads much larger than the allocator's noise, so read it from the
+`population` scenarios rather than from single-set ones. The comparison tool
+still compares client `rps`; these fields are in `metrics.json` for each row.
 
 ## Per-Second Metrics Sampler
 

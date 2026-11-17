@@ -57,6 +57,64 @@ def append_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
             f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
+# Commands the sampler sends itself; they are left out of server_ops_s.
+SAMPLER_COMMANDS = ("info", "latency|histogram")
+
+
+def _command_calls(info: Dict[str, str]) -> Dict[str, int]:
+    """Return calls per command from the cmdstat_* fields of an INFO reading."""
+    calls = {}
+    for key, value in info.items():
+        if not key.startswith("cmdstat_"):
+            continue
+        for part in value.split(","):
+            name, _, number = part.partition("=")
+            if name == "calls":
+                calls[key[len("cmdstat_") :]] = int(number)
+    return calls
+
+
+def summarize_window(rows: List[Dict[str, Any]], window: List[int]) -> Dict[str, Any]:
+    """Derive server-side throughput over ``[start, end]`` from sampled rows.
+
+    Uses the ``valkey_info`` readings taken at ``elapsed_sec`` start and end:
+    the change in each command's ``cmdstat_<cmd>`` calls divided by the change
+    in ``server_time_usec``, both read from the same INFO reply. The sampler's
+    own commands are excluded. ``window_complete`` is false when either edge
+    reading is missing or no tick came after the end, which means the client
+    stopped inside the window. Returns ``{}`` when no edge reading exists.
+    """
+    start, end = window
+    readings = {
+        row["elapsed_sec"]: row["valkey_info"]
+        for row in rows
+        if isinstance(row.get("valkey_info"), dict)
+    }
+    last_tick = max((row["elapsed_sec"] for row in rows), default=-1)
+    if start not in readings or end not in readings:
+        return {"window_sec": [start, end], "window_complete": False}
+    first, second = readings[start], readings[end]
+    seconds = (int(second["server_time_usec"]) - int(first["server_time_usec"])) / 1e6
+    if seconds <= 0:
+        return {"window_sec": [start, end], "window_complete": False}
+    before, after = _command_calls(first), _command_calls(second)
+    by_command = {
+        cmd: round((calls - before.get(cmd, 0)) / seconds, 2)
+        for cmd, calls in sorted(after.items())
+        if cmd not in SAMPLER_COMMANDS and calls > before.get(cmd, 0)
+    }
+    errors = int(second.get("total_error_replies", 0)) - int(
+        first.get("total_error_replies", 0)
+    )
+    return {
+        "server_ops_s": round(sum(by_command.values()), 2),
+        "server_ops_s_by_command": by_command,
+        "window_sec": [start, end],
+        "window_complete": last_tick > end,
+        "window_error_replies": errors,
+    }
+
+
 def _can_bind(family: int, address: str) -> bool:
     """Return True when address belongs to an interface on this machine."""
     sock = socket.socket(family, socket.SOCK_DGRAM)

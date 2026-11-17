@@ -1,0 +1,82 @@
+[
+  {
+    "test_name": "Set commands",
+    "set_matrix": {
+      "duration": 16,
+      "window": [3, 13],
+      "clients": 50,
+      "pipelines": [1, 16],
+      "ttl_seconds": 100000000,
+      "shapes": {
+        "listpack16": {
+          "members": 16,
+          "member_size": 16,
+          "encoding": "listpack",
+          "encoding_with_ttl": "listpack",
+          "toggles": 8,
+          "population": 10000000
+        },
+        "intset512": {
+          "members": 512,
+          "integer": true,
+          "encoding": "intset",
+          "encoding_with_ttl": "hashtable",
+          "toggles": 16,
+          "population": 1000000,
+          "grow_headroom": 64
+        },
+        "hashtable100k": {
+          "members": 100000,
+          "member_size": 16,
+          "encoding": "hashtable",
+          "encoding_with_ttl": "hashtable",
+          "toggles": 1000,
+          "population": 1000
+        }
+      },
+      "ttl_mixes": {
+        "none": {},
+        "one": {"count": 1},
+        "10pct": {"fraction": 0.1},
+        "half": {"fraction": 0.5},
+        "all": {"fraction": 1.0}
+      },
+      "commands": {
+        "sadd_existing": {"command": "SADD {key} {member}"},
+        "sadd_new": {"command": "SADD {rand_key} {new_member}", "layout": "population", "grows": true},
+        "srem_sadd": {"writes": ["SREM {key} {toggle}", "SADD {key} {toggle}"], "layout": "toggle"},
+        "sismember": {"command": "SISMEMBER {key} {member}"},
+        "smismember": {"command": "SMISMEMBER {key} {member} {member} {member} {member}"},
+        "scard": {"command": "SCARD {key}"},
+        "smembers": {"command": "SMEMBERS {key}"},
+        "srandmember": {"command": "SRANDMEMBER {key}"},
+        "spop": {"command": "SPOP {rand_key} 1", "layout": "population"},
+        "smove": {"writes": ["SMOVE {key} {key2} {toggle}", "SMOVE {key2} {key} {toggle}"], "layout": "two_toggle"},
+        "sinter": {"command": "SINTER {key} {key2}", "layout": "overlap"},
+        "sintercard": {"command": "SINTERCARD 2 {key} {key2}", "layout": "overlap"},
+        "sinterstore": {"command": "SINTERSTORE {dest} {key} {key2}", "layout": "overlap"},
+        "sunion": {"command": "SUNION {key} {key2}", "layout": "overlap"},
+        "sunionstore": {"command": "SUNIONSTORE {dest} {key} {key2}", "layout": "overlap"},
+        "sdiff": {"command": "SDIFF {key} {key2}", "layout": "overlap"},
+        "sdiffstore": {"command": "SDIFFSTORE {dest} {key} {key2}", "layout": "overlap"},
+        "sscan": {"command": "SSCAN {key} 0 COUNT 10"},
+        "saddex_new": {"command": "SADDEX {rand_key} EX {ttl} MEMBERS 1 {new_member}", "layout": "population", "grows": true, "adds_ttl": true, "requires": ["SADDEX"]},
+        "saddex_existing": {"command": "SADDEX {key} EX {ttl} MEMBERS 1 {toggle}", "layout": "toggle", "toggle_ttl": true, "requires": ["SADDEX"]},
+        "sexpire": {"command": "SEXPIRE {key} {ttl} MEMBERS 1 {toggle}", "layout": "toggle", "toggle_ttl": true, "requires": ["SEXPIRE"]},
+        "spexpire": {"command": "SPEXPIRE {key} {ttl_ms} MEMBERS 1 {toggle}", "layout": "toggle", "toggle_ttl": true, "requires": ["SPEXPIRE"]},
+        "sexpireat": {"command": "SEXPIREAT {key} {ttl_at} MEMBERS 1 {toggle}", "layout": "toggle", "toggle_ttl": true, "requires": ["SEXPIREAT"]},
+        "spexpireat": {"command": "SPEXPIREAT {key} {ttl_at_ms} MEMBERS 1 {toggle}", "layout": "toggle", "toggle_ttl": true, "requires": ["SPEXPIREAT"]},
+        "spersist_sexpire": {"writes": ["SPERSIST {key} MEMBERS 1 {toggle}", "SEXPIRE {key} {ttl} MEMBERS 1 {toggle}"], "layout": "toggle", "toggle_ttl": true, "requires": ["SPERSIST", "SEXPIRE"]},
+        "sttl": {"command": "STTL {key} MEMBERS 1 {member}", "requires": ["STTL"]},
+        "spttl": {"command": "SPTTL {key} MEMBERS 1 {member}", "requires": ["SPTTL"]},
+        "sexpiretime": {"command": "SEXPIRETIME {key} MEMBERS 1 {member}", "requires": ["SEXPIRETIME"]},
+        "spexpiretime": {"command": "SPEXPIRETIME {key} MEMBERS 1 {member}", "requires": ["SPEXPIRETIME"]}
+      }
+    },
+    "per_second_sampling": {"sources": {"valkey_info": {}}},
+    "custom-server-configs": {"maxmemory-policy": "noeviction"},
+    "port": 6379,
+    "cluster_mode": false,
+    "tls_mode": false
+  }
+]
