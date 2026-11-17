@@ -23,7 +23,7 @@
           "encoding_with_ttl": "hashtable",
           "toggles": 16,
           "population": 20000,
-          "grow_headroom": 400
+          "grow_headroom": 64
         },
         "hashtable2k": {
           "members": 2000,
