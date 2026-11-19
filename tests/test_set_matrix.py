@@ -18,7 +18,7 @@ def _matrix(**changes):
         "duration": 8,
         "window": [2, 6],
         "clients": 10,
-        "pipelines": [1, 16],
+        "pipelines": [1],
         "ttl_seconds": 1000,
         "shapes": {
             "lp": {
@@ -75,14 +75,14 @@ class TestCompile:
 
         assert [g["group"] for g in groups] == list(range(1, 7))
         assert groups[0]["description"] == "lp, TTL mix none"
-        assert len(_scenarios(groups)) == 2 * 3 * 4 * 2
+        assert len(_scenarios(groups)) == 2 * 3 * 4
 
     def test_member_command_targets_one_set_with_members_as_range(self):
-        s = _scenarios(compile_set_matrix(_matrix(), now=0))["lp.none.sismember.P16"]
+        s = _scenarios(compile_set_matrix(_matrix(), now=0))["lp.none.sismember.P1"]
 
         assert s["command"] == "SISMEMBER set:a:000000000000 mxxx__rand_int__"
         assert s["keyspacelen"] == 16
-        assert s["pipeline"] == 16
+        assert s["pipeline"] == 1
         assert s["clients"] == 10
         assert s["duration"] == 8
         assert s["window"] == [2, 6]
@@ -165,7 +165,6 @@ class TestCompile:
         )
         assert list(_scenarios(compile_set_matrix(matrix))) == [
             "lp.one.sismember.P1",
-            "lp.one.sismember.P16",
         ]
         with pytest.raises(ValueError, match="unknown commands"):
             compile_set_matrix(_matrix(run_commands=["nope"]))
@@ -210,7 +209,7 @@ class TestBuildPreload:
 class TestShippedConfigs:
     @pytest.mark.parametrize(
         "name, count",
-        [("set-commands.json", 1366), ("set-commands-smoke.json", None)],
+        [("set-commands.json", 683), ("set-commands-smoke.json", None)],
     )
     def test_compiles_and_validates(self, name, count):
         configs = json.loads((ROOT / "configs" / name).read_text())
@@ -234,12 +233,14 @@ class TestOverrides:
         resolved = resolve(
             [copy.deepcopy(cfg)],
             "sismember",
-            {"set_matrix": {"shapes": {"lp": {"members": 32}}, "pipelines": [1]}},
+            {"set_matrix": {"shapes": {"lp": {"members": 32}}, "pipelines": [1, 16]}},
         )[0]
         assert resolved["set_matrix"]["run_commands"] == ["sismember"]
         assert resolved["set_matrix"]["shapes"]["lp"]["members"] == 32
         validate_config(resolved)
-        assert len(_scenarios(resolved["test_groups"])) == 2 * 3
+        ids = _scenarios(resolved["test_groups"])
+        assert len(ids) == 2 * 3 * 2  # the override adds pipeline 16
+        assert "lp.one.sismember.P16" in ids
 
     def test_set_matrix_cannot_mix_with_test_groups(self):
         cfg = {"set_matrix": _matrix(), "test_groups": [], "per_second_sampling": True}

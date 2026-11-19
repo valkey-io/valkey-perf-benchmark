@@ -5,7 +5,7 @@
       "duration": 16,
       "window": [3, 13],
       "clients": 50,
-      "pipelines": [1, 16],
+      "pipelines": [1],
       "ttl_seconds": 100000000,
       "shapes": {
         "listpack16": {

@@ -1250,7 +1250,7 @@ rejected intermittently while eviction catches up, so the pass is repeated until
 commands of [valkey PR #4959](https://github.com/valkey-io/valkey/pull/4959),
 over set sizes, encodings and TTL mixes. Its `set_matrix` block is compiled
 into ordinary `test_groups` when the config loads: one group per shape and TTL
-mix, one scenario per command and pipeline, 1,366 scenarios in all. Each
+mix, one scenario per command and pipeline, 683 scenarios in all at pipeline 1. Each
 scenario restarts (or flushes) the server, preloads its sets, checks their
 encoding, runs for `duration` seconds and records server-side ops/s over
 `window`.
@@ -1276,7 +1276,9 @@ python benchmark.py --config results/set-config.json \
 ```
 
 `--groups` and `--scenarios` also work; scenario ids are
-`<shape>.<ttl mix>.<command>.P<pipeline>`, e.g. `listpack16.none.srem_sadd.P16`.
+`<shape>.<ttl mix>.<command>.P<pipeline>`, e.g. `listpack16.none.srem_sadd.P1`.
+The matrix runs at pipeline 1; to add depths, override `set_matrix.pipelines`,
+e.g. `{"set_matrix": {"pipelines": [1, 16]}}`.
 `configs/set-commands-smoke.json` is a one-minute-per-shape version for
 checking a setup. The **Set Command Scenarios** workflow
 (`.github/workflows/set_scenarios.yml`) runs the same thing from
