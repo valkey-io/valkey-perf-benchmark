@@ -9,6 +9,10 @@ from typing import Iterable, List, Optional
 
 from utils.git_utils import resolve_ref
 
+# Name of the file, inside the Valkey tree's git dir, recording what the last
+# framework build compiled: commit, TLS mode and build_args.
+BUILD_STAMP = "vpb-build-stamp"
+
 
 class ServerBuilder:
     """Compile Valkey for a specific commit."""
@@ -60,8 +64,57 @@ class ServerBuilder:
         except (subprocess.CalledProcessError, RuntimeError) as e:
             logging.warning(f"Failed to checkout {self.commit_id}: {e}")
 
+    def _git(self, *args: str) -> Optional[str]:
+        """Return a git command's stdout in the Valkey tree, or None if it fails."""
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=self.valkey_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (subprocess.CalledProcessError, OSError):
+            return None
+        return result.stdout.strip()
+
+    def _build_stamp(self) -> Optional[str]:
+        """Describe what a build of the tree as it is now would be.
+
+        None when the tree has uncommitted changes to tracked files, because
+        the commit alone then does not say what would be compiled.
+        """
+        head = self._git("rev-parse", "HEAD")
+        dirty = self._git("status", "--porcelain", "--untracked-files=no")
+        if not head or dirty is None or dirty:
+            return None
+        args = " ".join(self.build_args)
+        return f"{head} tls={'yes' if self.tls_mode else 'no'} args={args}\n"
+
+    def _stamp_file(self) -> Optional[Path]:
+        """Return where the last build's stamp lives, inside the tree's git dir."""
+        path = self._git("rev-parse", "--git-path", BUILD_STAMP)
+        if not path:
+            return None
+        path = Path(path)
+        return path if path.is_absolute() else self.valkey_dir / path
+
     def build(self) -> None:
+        """Check out the commit and build it, unless that build is already there.
+
+        The build is skipped when src/valkey-server exists and the stamp the
+        last build left records the same commit, TLS mode and build_args on a
+        tree without uncommitted changes, so a loop of runs against one
+        --valkey-path does not run make distclean and a full build each time.
+        """
         self.clone_and_checkout()
+        binary = self.valkey_dir / "src" / "valkey-server"
+        stamp = self._build_stamp() if binary.exists() else None
+        stamp_file = self._stamp_file() if stamp else None
+        if stamp_file and stamp_file.is_file() and stamp_file.read_text() == stamp:
+            logging.info(f"Valkey is already built for {stamp.strip()}, skipping")
+            return
+
         logging.info(f"Building with TLS {'enabled' if self.tls_mode else 'disabled'}")
         self._run(["make", "distclean"], cwd=self.valkey_dir)
         if self.tls_mode:
@@ -71,6 +124,13 @@ class ServerBuilder:
             self._run(["./utils/gen-test-certs.sh"], cwd=self.valkey_dir)
         else:
             self._run(["make", *self.build_args, "-j"], cwd=self.valkey_dir)
+
+        # _run logs failures instead of raising, so stamp only a build that
+        # produced a server binary.
+        if binary.exists():
+            stamp, stamp_file = self._build_stamp(), self._stamp_file()
+            if stamp and stamp_file:
+                stamp_file.write_text(stamp)
 
     def terminate_valkey(self) -> None:
         """Terminate all valkey processes."""

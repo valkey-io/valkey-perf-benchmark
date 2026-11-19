@@ -921,7 +921,8 @@ def run_benchmark_matrix(
     if not args.use_running_server:
         server_binary = valkey_dir / "src" / "valkey-server"
         if args.valkey_path and commit_id != "HEAD":
-            # Shared directory with explicit commit: checkout and rebuild
+            # Shared directory with explicit commit: checkout, and rebuild
+            # unless the last build there was of the same commit and options
             builder.build()
         elif server_binary.exists():
             logging.info("Using existing valkey-server binary")

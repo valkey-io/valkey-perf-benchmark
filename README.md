@@ -129,7 +129,7 @@ valkey-perf-benchmark/
 └── requirements.txt         # Locked dependencies with hashes (auto-generated, includes test deps)
 ```
 
-Each benchmark run clones a fresh copy of the Valkey repository for the target commit. When `--valkey-path` is omitted, the repository is cloned into `valkey_<commit>` and removed after the run to maintain build isolation and repeatability.
+Each benchmark run clones a fresh copy of the Valkey repository for the target commit. When `--valkey-path` is omitted, the repository is cloned into `valkey_<commit>` and removed after the run to maintain build isolation and repeatability. With `--valkey-path` and a commit, the tree is checked out at that commit and built, unless the last framework build there was of the same commit, TLS mode and `build_args` on a tree with no uncommitted changes, so repeated runs against one tree build it once.
 
 ## Usage
 
