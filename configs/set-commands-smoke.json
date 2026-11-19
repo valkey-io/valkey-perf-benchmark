@@ -22,6 +22,7 @@
           "encoding": "listpack",
           "encoding_with_ttl": "listpack",
           "toggles": 8,
+          "grow_headroom": 64,
           "population": 20000,
           "only_mixes": ["none", "exp_all_but_1", "exp_half", "exp_10pct", "exp_one"]
         },

@@ -207,6 +207,19 @@ class TestBuildPreload:
 
 
 class TestShippedConfigs:
+    @pytest.mark.parametrize("name", ["set-commands.json", "set-commands-smoke.json"])
+    def test_growing_listpack_sets_leave_room_below_the_listpack_limit(self, name):
+        # set-max-listpack-entries defaults to 128: a set that grows past it
+        # becomes a hashtable and fails the after-run encoding check.
+        cfg = json.loads((ROOT / "configs" / name).read_text())[0]
+        validate_config(cfg)
+        grows = {c for c, v in cfg["set_matrix"]["commands"].items() if v.get("grows")}
+        for s in (s for g in cfg["test_groups"] for s in g["scenarios"]):
+            keyspace = s["preload"][0]
+            if s["id"].split(".")[2] in grows and keyspace["encoding"] == "listpack":
+                members = sum(g["count"] for g in keyspace["members"])
+                assert members <= 128 - 32, s["id"]
+
     @pytest.mark.parametrize(
         "name, count",
         [("set-commands.json", 683), ("set-commands-smoke.json", None)],
