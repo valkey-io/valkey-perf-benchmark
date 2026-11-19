@@ -210,7 +210,7 @@ class TestBuildPreload:
 class TestShippedConfigs:
     @pytest.mark.parametrize(
         "name, count",
-        [("set-commands.json", 868), ("set-commands-smoke.json", None)],
+        [("set-commands.json", 1366), ("set-commands-smoke.json", None)],
     )
     def test_compiles_and_validates(self, name, count):
         configs = json.loads((ROOT / "configs" / name).read_text())
@@ -245,3 +245,153 @@ class TestOverrides:
         cfg = {"set_matrix": _matrix(), "test_groups": [], "per_second_sampling": True}
         with pytest.raises(ValueError, match="cannot be combined"):
             validate_config(cfg)
+
+
+def _expired_matrix(**changes):
+    matrix = _matrix(
+        ttl_mixes={
+            "none": {},
+            "exp_half": {"expired": True, "fraction": 0.5},
+            "exp_all_but_1": {"expired": True, "live": 1, "skip_commands": ["spop"]},
+            "exp_one": {"expired": True, "count": 1},
+        },
+        commands={
+            "sismember": {"command": "SISMEMBER {key} {member}", "on_expired": True},
+            "sismember_expired": {
+                "command": "SISMEMBER {key} {expired_member}",
+                "layout": "expired",
+                "on_expired": True,
+                "expired_only": True,
+            },
+            "sinter": {
+                "command": "SINTER {key} {key2}",
+                "layout": "overlap",
+                "on_expired": True,
+            },
+            "spop": {
+                "command": "SPOP {rand_key} 1",
+                "layout": "population",
+                "on_expired": True,
+            },
+            "srem_sadd": {
+                "writes": ["SREM {key} {toggle}", "SADD {key} {toggle}"],
+                "layout": "toggle",
+            },
+        },
+    )
+    matrix.update(changes)
+    return matrix
+
+
+class TestExpiredMixes:
+    def test_live_and_expired_groups_interleaved_with_ranges(self):
+        s = _scenarios(compile_set_matrix(_expired_matrix(), now=0))
+
+        live = s["lp.exp_half.sismember.P1"]
+        assert live["command"] == "SISMEMBER set:a:000000000000 mxxx__rand_int__"
+        assert live["keyspacelen"] == 8
+        assert live["preload"] == [
+            {
+                "type": "set",
+                "key_prefix": "set:a:",
+                "sets": 1,
+                "encoding": "listpack",
+                "interleave": True,
+                "members": [
+                    {"prefix": "mxxx", "count": 8},
+                    {
+                        "prefix": "exxx",
+                        "count": 8,
+                        "ttl": {"seconds": 1000, "expired": True},
+                    },
+                ],
+            }
+        ]
+        gone = s["int.exp_all_but_1.sismember_expired.P1"]
+        assert gone["command"] == "SISMEMBER set:a:000000000000 5__rand_int__"
+        assert gone["keyspacelen"] == 511
+        assert gone["preload"][0]["encoding"] == "hashtable"
+        assert s["int.exp_all_but_1.sismember.P1"]["keyspacelen"] == 1
+        assert s["lp.exp_one.sismember_expired.P1"]["keyspacelen"] == 1
+
+    def test_overlap_and_population_shapes(self):
+        s = _scenarios(compile_set_matrix(_expired_matrix(), now=0))
+        a, b = s["lp.exp_half.sinter.P1"]["preload"]
+        assert [g.get("start", 0) for g in b["members"]] == [4, 4]
+        spop = s["lp.exp_half.spop.P1"]
+        assert spop["preload"][0]["sets"] == 100
+        assert spop["keyspacelen"] == 100
+
+    def test_command_selection(self):
+        ids = _scenarios(compile_set_matrix(_expired_matrix(), now=0))
+        assert "lp.none.sismember_expired.P1" not in ids  # expired_only
+        assert "lp.exp_half.srem_sadd.P1" not in ids  # not on_expired
+        assert "lp.exp_all_but_1.spop.P1" not in ids  # skip_commands
+        assert "lp.exp_one.spop.P1" in ids
+        assert "lp.none.srem_sadd.P1" in ids
+
+    def test_only_mixes_restricts_a_shape(self):
+        matrix = _expired_matrix()
+        matrix["shapes"]["int"]["only_mixes"] = ["exp_half"]
+        ids = _scenarios(compile_set_matrix(matrix, now=0))
+        assert {i.split(".")[1] for i in ids if i.startswith("int.")} == {"exp_half"}
+
+    @pytest.mark.parametrize(
+        "mix, members, expected",
+        [
+            ({"live": 1}, 16, 15),
+            ({"count": 1}, 16, 1),
+            ({"fraction": 0.1}, 16, 2),
+            ({"fraction": 1.0}, 16, 15),
+            ({"live": 20}, 16, 1),
+        ],
+    )
+    def test_expired_count_keeps_one_live_and_one_expired(self, mix, members, expected):
+        from set_matrix import expired_count
+
+        assert expired_count(mix, members) == expected
+
+    @pytest.mark.parametrize(
+        "mixes, commands, message",
+        [
+            ({"x": {"expired": True}}, None, "needs 'count'"),
+            ({"x": {"live": 1}}, None, "'live' is for expired mixes"),
+            ({"x": {"expired": True, "count": 1, "fraction": 0.5}}, None, "one of"),
+            ({"x": {"colour": 1}}, None, "colour"),
+            (
+                None,
+                {
+                    "c": {
+                        "command": "SCARD {key}",
+                        "layout": "expired",
+                        "on_expired": True,
+                    }
+                },
+                "expired_only",
+            ),
+            (
+                None,
+                {"c": {"command": "SCARD {key}", "expired_only": True}},
+                "on_expired",
+            ),
+            (
+                {"x": {"expired": True, "count": 1}},
+                {
+                    "c": {
+                        "writes": ["SREM {key} {toggle}"],
+                        "layout": "toggle",
+                        "on_expired": True,
+                    }
+                },
+                "not available in an expired mix",
+            ),
+        ],
+    )
+    def test_invalid(self, mixes, commands, message):
+        changes = {}
+        if mixes:
+            changes["ttl_mixes"] = mixes
+        if commands:
+            changes["commands"] = commands
+        with pytest.raises(ValueError, match=message):
+            compile_set_matrix(_expired_matrix(**changes), now=0)

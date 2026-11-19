@@ -132,6 +132,8 @@ class ClientRunner:
         self.client_cpu_ranges = []
         # Command name -> whether the server has it, filled by _missing_commands.
         self._known: dict = {}
+        # expired_set_members after an expired-member preload, else None.
+        self._reclaimed_baseline: Optional[int] = None
 
     def _tls_kwargs(self) -> dict:
         """Return the valkey-py TLS arguments, empty when TLS is off."""
@@ -953,6 +955,7 @@ class ClientRunner:
                 self._stop_scenario_profiling(
                     profiler, scenario_profiling_enabled, profile_id
                 )
+                self._restore_active_expiry()
                 self._run_post_commands(scenario)
 
         except Exception as e:
@@ -1019,8 +1022,7 @@ class ClientRunner:
             return {}
 
         before = self._try_keys_and_used_memory()
-        if preload_spec:
-            self._run_preload(preload_spec)
+        written = self._run_preload(preload_spec) if preload_spec else {}
         if populate_with:
             self._run_populate_with(scenario, populate_with, seed_val)
         after = self._try_keys_and_used_memory() if before else None
@@ -1036,6 +1038,8 @@ class ClientRunner:
         }
         if keys > 0:
             loaded["populate_bytes_per_key"] = round(delta / keys, 1)
+        if "expired_members" in written:
+            loaded["preload_expired_members"] = written["expired_members"]
         logging.info(f"Populated keyspace: {loaded}")
         return loaded
 
@@ -1076,8 +1080,12 @@ class ClientRunner:
                 client.close()
         return keys, memory
 
-    def _run_preload(self, preload_spec: list) -> None:
-        """Write a scenario's preload keyspaces and check their encoding."""
+    def _run_preload(self, preload_spec: list) -> dict:
+        """Write a scenario's preload keyspaces and check their encoding.
+
+        Returns what preload.load wrote. A preload with expired members leaves
+        active expiry off; _check_preload_after_run turns it back on.
+        """
         if self.cluster_mode:
             # shortcut: the loader runs one script on one node, so it cannot
             # spread keys over cluster slots; add per-slot routing for CME.
@@ -1090,17 +1098,40 @@ class ClientRunner:
         finally:
             client.close()
         logging.info(f"Preload wrote {written}")
+        self._reclaimed_baseline = written.get("reclaimed_baseline")
+        return written
 
     def _check_preload_after_run(self, scenario: dict) -> None:
-        """Fail the scenario when the measured run emptied or converted a key."""
-        if not scenario.get("preload") or not scenario.get("check_after_run", True):
+        """Fail the scenario when the measured run emptied or converted a key.
+
+        With expired members it also fails when the run reclaimed any of them,
+        and turns active expiry back on either way.
+        """
+        spec = scenario.get("preload")
+        expired = preload.has_expired(spec) and self._reclaimed_baseline is not None
+        if not spec or (not scenario.get("check_after_run", True) and not expired):
             return
         client = self._create_client(socket_timeout=600)
         try:
-            preload.verify(client, scenario["preload"], check_size=False)
+            if scenario.get("check_after_run", True):
+                preload.verify(client, spec, check_size=False)
+            if expired:
+                baseline, self._reclaimed_baseline = self._reclaimed_baseline, None
+                preload.finish_expired(client, spec, baseline)
             client.execute_command("SCRIPT", "FLUSH", "SYNC")
         finally:
             client.close()
+
+    def _restore_active_expiry(self) -> None:
+        """Turn active expiry back on when a run failed before its check did."""
+        if self._reclaimed_baseline is None:
+            return
+        self._reclaimed_baseline = None
+        try:
+            with self._client_context() as client:
+                preload.set_active_expire(client, True)
+        except Exception as e:
+            logging.warning(f"Could not turn active expiry back on: {e}")
 
     def _missing_commands(self, scenario: dict) -> List[str]:
         """Return the scenario's required commands the server does not have.

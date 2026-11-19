@@ -11,13 +11,24 @@ Placeholders in a command template:
 - ``{key}``, ``{key2}``: the first set of keyspace A and B; ``{dest}``: a
   destination key for the *STORE commands.
 - ``{rand_key}``: a random set of the population (layout ``population``).
-- ``{member}``: a random existing member; ``{toggle}``: a random toggled
-  member; ``{new_member}``: a random member the sets do not hold.
+- ``{member}``: a random existing (live) member; ``{toggle}``: a random
+  toggled member; ``{new_member}``: a random member the sets do not hold;
+  ``{expired_member}``: a random expired member (layout ``expired``).
 - ``{ttl}``, ``{ttl_ms}``: ``ttl_seconds`` in seconds and milliseconds;
   ``{ttl_at}``, ``{ttl_at_ms}``: that far in the future as a Unix time.
 
 valkey-benchmark draws every ``__rand_int__`` from one ``-r`` range, so each
 layout fixes which placeholders a template may use and what ``-r`` is.
+
+A TTL mix with ``expired: true`` leaves that many members expired but still
+stored when the run starts: each set holds a live group and an expired group,
+interleaved, and the preload turns active expiry off and expires the second
+group (see preload.py). ``count``/``fraction`` then size the expired group and
+``live`` leaves that many members live. Only commands marked ``on_expired`` run
+in such a mix, and commands marked ``expired_only`` run only there; layouts
+``toggle`` and ``two_toggle`` are not available in it. Reads in PR #4959 skip
+expired members without reclaiming them, and the runner fails a scenario whose
+run reclaimed any, so the expired fraction is the same for the whole run.
 """
 
 import copy
@@ -40,15 +51,32 @@ LAYOUTS = {
     "two_toggle": ({"key", "key2", "toggle"}, "toggles"),
     # `population` sets, addressed at random. -r is the population, so a
     # random member is drawn from that range and only {new_member} fits.
+    # shortcut: in an expired mix SPOP pops only live members, so the expired
+    # fraction rises by up to pops / (population x live) during a run; a
+    # pop+refill pair would hold it fixed if that drift matters.
     "population": ({"rand_key", "new_member"}, "population"),
+    # One set, in an expired mix; the command addresses its expired members.
+    "expired": ({"key", "expired_member"}, "expired"),
 }
 
 TIME_PLACEHOLDERS = {"ttl", "ttl_ms", "ttl_at", "ttl_at_ms"}
 
 # Member prefixes per role. String members are the letter padded with "x" to
 # member_size; integer members use a digit, so the set can be an intset.
-ROLE_LETTERS = {"member": "m", "toggle": "t", "other": "o", "new_member": "n"}
-ROLE_DIGITS = {"member": "1", "toggle": "2", "other": "3", "new_member": "4"}
+ROLE_LETTERS = {
+    "member": "m",
+    "toggle": "t",
+    "other": "o",
+    "new_member": "n",
+    "expired": "e",
+}
+ROLE_DIGITS = {
+    "member": "1",
+    "toggle": "2",
+    "other": "3",
+    "new_member": "4",
+    "expired": "5",
+}
 
 INDEX_DIGITS = 12
 
@@ -61,7 +89,9 @@ SHAPE_KEYS = {
     "toggles",
     "population",
     "grow_headroom",
+    "only_mixes",
 }
+MIX_KEYS = {"count", "fraction", "live", "expired", "skip_commands"}
 COMMAND_KEYS = {
     "command",
     "writes",
@@ -70,6 +100,8 @@ COMMAND_KEYS = {
     "toggle_ttl",
     "grows",
     "adds_ttl",
+    "on_expired",
+    "expired_only",
 }
 MATRIX_KEYS = {
     "duration",
@@ -136,9 +168,42 @@ def _check_shape(name: str, shape: Dict[str, Any]) -> None:
     toggles = shape.get("toggles", 0)
     if not isinstance(toggles, int) or not 0 <= toggles < shape["members"]:
         raise ValueError(f"{where}.toggles must be below members")
+    only = shape.get("only_mixes")
+    if only is not None and (
+        not isinstance(only, list) or not all(isinstance(x, str) for x in only)
+    ):
+        raise ValueError(f"{where}.only_mixes must be a list of TTL mix names")
     headroom = shape.get("grow_headroom", 0)
     if not isinstance(headroom, int) or not 0 <= headroom < shape["members"]:
         raise ValueError(f"{where}.grow_headroom must be below members")
+
+
+def _check_mix(name: str, mix: Dict[str, Any]) -> None:
+    where = f"set_matrix.ttl_mixes.{name}"
+    if not isinstance(mix, dict):
+        raise ValueError(f"{where} must be an object")
+    unknown = sorted(set(mix) - MIX_KEYS)
+    if unknown:
+        raise ValueError(f"{where} does not support key(s): {unknown}")
+    if sum(k in mix for k in ("count", "fraction", "live")) > 1:
+        raise ValueError(f"{where} takes one of 'count', 'fraction' or 'live'")
+    if "live" in mix and not mix.get("expired"):
+        raise ValueError(f"{where}: 'live' is for expired mixes")
+    if mix.get("expired") and not any(k in mix for k in ("count", "fraction", "live")):
+        raise ValueError(
+            f"{where} is expired, so it needs 'count', 'fraction' or 'live'"
+        )
+
+
+def expired_count(mix: Dict[str, Any], members: int) -> int:
+    """Return how many of a set's members an expired mix expires, 1..members-1."""
+    if "live" in mix:
+        n = members - mix["live"]
+    elif "count" in mix:
+        n = mix["count"]
+    else:
+        n = round(members * mix["fraction"])
+    return max(1, min(members - 1, n))
 
 
 def _ttl(mix: Dict[str, Any], seconds: int) -> Dict[str, Any]:
@@ -206,6 +271,36 @@ def build_preload(
     return [_keyspace(a, shape["population"], [_group(member, count, ttl=ttl)], shape)]
 
 
+def build_expired_preload(
+    layout: str,
+    shape: Dict[str, Any],
+    mix: Dict[str, Any],
+    key_prefix: str,
+    ttl_seconds: int,
+) -> List[Dict[str, Any]]:
+    """Return the preload for an expired mix: live and expired groups per set."""
+    members = shape["members"]
+    expired = expired_count(mix, members)
+    live = members - expired
+    m, e = _member_prefix(shape, "member"), _member_prefix(shape, "expired")
+    gone = {"seconds": ttl_seconds, "expired": True}
+    a, b = f"{key_prefix}a:", f"{key_prefix}b:"
+
+    def ks(prefix, sets, live_start=0, expired_start=0):
+        groups = [_group(m, live, live_start), _group(e, expired, expired_start, gone)]
+        spec = _keyspace(prefix, sets, groups, shape)
+        spec["interleave"] = True
+        return spec
+
+    if layout in ("one", "expired"):
+        return [ks(a, 1)]
+    if layout == "overlap":
+        return [ks(a, 1), ks(b, 1, live // 2, expired // 2)]
+    if layout == "population":
+        return [ks(a, shape["population"])]
+    raise ValueError(f"layout {layout!r} is not available in an expired mix")
+
+
 def _placeholders(shape: dict, key_prefix: str, ttl_seconds: int, now: int) -> dict:
     first = "0" * INDEX_DIGITS
     rand = "__rand_int__"
@@ -217,6 +312,7 @@ def _placeholders(shape: dict, key_prefix: str, ttl_seconds: int, now: int) -> d
         "member": _member_prefix(shape, "member") + rand,
         "toggle": _member_prefix(shape, "toggle") + rand,
         "new_member": _member_prefix(shape, "new_member") + rand,
+        "expired_member": _member_prefix(shape, "expired") + rand,
         "ttl": str(ttl_seconds),
         "ttl_ms": str(ttl_seconds * 1000),
         "ttl_at": str(now + ttl_seconds),
@@ -277,6 +373,16 @@ def compile_set_matrix(matrix: Dict[str, Any], now: int = None) -> List[dict]:
             raise ValueError(
                 f"set_matrix.commands.{name}.layout must be one of {list(LAYOUTS)}"
             )
+        if cmd.get("layout") == "expired" and not cmd.get("expired_only"):
+            raise ValueError(
+                f"set_matrix.commands.{name} uses layout 'expired', so it must "
+                "be 'expired_only'"
+            )
+        if cmd.get("expired_only") and not cmd.get("on_expired"):
+            raise ValueError(
+                f"set_matrix.commands.{name} is 'expired_only', so it must be "
+                "'on_expired' too"
+            )
 
     groups = []
     for shape_name in _selected(matrix, "shapes", "run_shapes"):
@@ -284,10 +390,22 @@ def compile_set_matrix(matrix: Dict[str, Any], now: int = None) -> List[dict]:
         _check_shape(shape_name, shape)
         values = _placeholders(shape, key_prefix, ttl_seconds, now)
         for mix_name in _selected(matrix, "ttl_mixes", "run_ttl_mixes"):
-            ttl = _ttl(matrix["ttl_mixes"][mix_name], ttl_seconds)
+            if "only_mixes" in shape and mix_name not in shape["only_mixes"]:
+                continue
+            mix = matrix["ttl_mixes"][mix_name]
+            _check_mix(mix_name, mix)
+            expired_mix = bool(mix.get("expired"))
+            ttl = _ttl(mix, ttl_seconds)
             scenarios = []
             for cmd_name in _selected(matrix, "commands", "run_commands"):
                 cmd = matrix["commands"][cmd_name]
+                if expired_mix and (
+                    not cmd.get("on_expired")
+                    or cmd_name in mix.get("skip_commands", [])
+                ):
+                    continue
+                if cmd.get("expired_only") and not expired_mix:
+                    continue
                 if (
                     cmd.get("adds_ttl")
                     and not ttl
@@ -305,10 +423,20 @@ def compile_set_matrix(matrix: Dict[str, Any], now: int = None) -> List[dict]:
                         f"{where} toggles members, so shape {shape_name} "
                         "needs 'toggles'"
                     )
-                keyspacelen = shape[range_of]
-                preload_spec = build_preload(
-                    layout, shape, ttl, cmd, key_prefix, ttl_seconds
-                )
+                if expired_mix:
+                    gone = expired_count(mix, shape["members"])
+                    keyspacelen = {
+                        "members": shape["members"] - gone,
+                        "expired": gone,
+                    }.get(range_of, shape.get(range_of))
+                    preload_spec = build_expired_preload(
+                        layout, shape, mix, key_prefix, ttl_seconds
+                    )
+                else:
+                    keyspacelen = shape[range_of]
+                    preload_spec = build_preload(
+                        layout, shape, ttl, cmd, key_prefix, ttl_seconds
+                    )
                 for pipeline in pipelines:
                     scenario = {
                         "id": f"{shape_name}.{mix_name}.{cmd_name}.P{pipeline}",

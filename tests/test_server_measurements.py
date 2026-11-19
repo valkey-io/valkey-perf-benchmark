@@ -223,3 +223,76 @@ class TestValidation:
     def test_invalid(self, change, sampling, message):
         with pytest.raises(ValueError, match=message):
             validate_config(_cfg({**self.base, **change}, sampling))
+
+
+EXPIRED_PRELOAD = [
+    {
+        "type": "set",
+        "key_prefix": "s:",
+        "encoding": "listpack",
+        "interleave": True,
+        "members": [
+            {"prefix": "m", "count": 2},
+            {"prefix": "e", "count": 2, "ttl": {"seconds": 9, "expired": True}},
+        ],
+    }
+]
+
+
+class TestExpiredRunChecks:
+    def test_after_run_compares_with_the_preload_baseline(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner._create_client = MagicMock(return_value=MagicMock())
+        runner._reclaimed_baseline = 41
+        with (
+            patch("valkey_benchmark.preload.verify") as verify,
+            patch("valkey_benchmark.preload.finish_expired") as finish,
+        ):
+            runner._check_preload_after_run({"preload": EXPIRED_PRELOAD})
+        verify.assert_called_once()
+        assert finish.call_args.args[1:] == (EXPIRED_PRELOAD, 41)
+        assert runner._reclaimed_baseline is None
+
+    def test_check_after_run_false_still_finishes_expired(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner._create_client = MagicMock(return_value=MagicMock())
+        runner._reclaimed_baseline = 3
+        with (
+            patch("valkey_benchmark.preload.verify") as verify,
+            patch("valkey_benchmark.preload.finish_expired") as finish,
+        ):
+            runner._check_preload_after_run(
+                {"preload": EXPIRED_PRELOAD, "check_after_run": False}
+            )
+        verify.assert_not_called()
+        finish.assert_called_once()
+
+    def test_failed_run_turns_active_expiry_back_on(self, minimal_client_runner):
+        runner = minimal_client_runner
+        runner._reclaimed_baseline = 3
+
+        @contextmanager
+        def ctx():
+            yield "client"
+
+        with (
+            patch.object(runner, "_client_context", ctx),
+            patch("valkey_benchmark.preload.set_active_expire") as sae,
+        ):
+            runner._restore_active_expiry()
+            runner._restore_active_expiry()
+        sae.assert_called_once_with("client", True)
+        assert runner._reclaimed_baseline is None
+
+    def test_expired_preload_requires_spexpire_and_debug(self, minimal_client_runner):
+        client = MagicMock()
+        client.execute_command.return_value = [["x"], ["x"], ["x"]]
+        minimal_client_runner._create_client = MagicMock(return_value=client)
+        minimal_client_runner._missing_commands({"preload": EXPIRED_PRELOAD})
+        assert client.execute_command.call_args.args == (
+            "COMMAND",
+            "INFO",
+            "DEBUG",
+            "SEXPIRE",
+            "SPEXPIRE",
+        )

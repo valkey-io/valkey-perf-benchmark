@@ -1250,7 +1250,7 @@ rejected intermittently while eviction catches up, so the pass is repeated until
 commands of [valkey PR #4959](https://github.com/valkey-io/valkey/pull/4959),
 over set sizes, encodings and TTL mixes. Its `set_matrix` block is compiled
 into ordinary `test_groups` when the config loads: one group per shape and TTL
-mix, one scenario per command and pipeline, 868 scenarios in all. Each
+mix, one scenario per command and pipeline, 1,366 scenarios in all. Each
 scenario restarts (or flushes) the server, preloads its sets, checks their
 encoding, runs for `duration` seconds and records server-side ops/s over
 `window`.
@@ -1289,14 +1289,39 @@ JSON `overrides` input, and uploads the results with the resolved config.
 | Key | Meaning |
 |---|---|
 | `shapes.<id>` | `members` per set, `member_size` in bytes (or `integer: true` for 13-digit integers), the expected `encoding` and `encoding_with_ttl` (an intset with a member TTL becomes a listpack or hashtable), `toggles` (members a write command removes and re-adds), `population` (sets loaded for commands that pick a random set) and `grow_headroom` (members left out of those sets for commands that add members) |
-| `ttl_mixes.<id>` | `{}` for no TTLs, `{"count": n}` or `{"fraction": f}` members of each set with a TTL of `ttl_seconds`, picked evenly across the set |
-| `commands.<id>` | `command` (one process) or `writes` (concurrent processes, e.g. the SREM+SADD pair), a `layout`, and `requires` for commands only some servers have |
+| `ttl_mixes.<id>` | `{}` for no TTLs, `{"count": n}` or `{"fraction": f}` members of each set with a TTL of `ttl_seconds`, picked evenly across the set. With `"expired": true` that many members are expired but still stored (`{"live": n}` leaves n live), and `skip_commands` drops commands from the mix (see below) |
+| `commands.<id>` | `command` (one process) or `writes` (concurrent processes, e.g. the SREM+SADD pair), a `layout`, `requires` for commands only some servers have, `on_expired` to run in expired mixes and `expired_only` to run only there |
+| `shapes.<id>.only_mixes` | optional list of the TTL mixes a shape runs in |
 | `duration`, `window`, `clients`, `pipelines` | run length, measured window, total clients, pipeline depths |
 | `run_shapes`, `run_ttl_mixes`, `run_commands` | optional lists that select a subset |
 
 The shipped shapes are 16 members (listpack), 512 integers (the intset limit)
 and 100,000 members (hashtable), each with TTL mixes none, one member, 10%,
-half and all. TTLs are 100,000,000 s, so nothing expires during a run.
+half and all. TTLs are 100,000,000 s, so nothing expires during a run. A
+128-member listpack runs only with no TTLs and in the expired mixes.
+
+**Expired but not reclaimed.** PR #4959 hides an expired member from reads
+and leaves it stored until active expiry or a write that touches it reclaims
+it, so commands that walk a set skip hidden members. The expired mixes
+(`exp_one`: 1 member, `exp_10pct`, `exp_half`, `exp_all_but_1`) measure that
+path. Each set holds a live group and an expired group, interleaved, so a
+listpack does not keep all expired members at one end. The preload loads them
+with long TTLs, checks the encoding, turns active expiry off with
+`DEBUG SET-ACTIVE-EXPIRE 0`, gives the expired group a 1 ms TTL and checks that
+every key still stores all its members while the expired ones read as absent.
+After the run the `expired_set_members` count in `INFO stats` must not have
+moved, so a run that reclaimed members fails instead of reporting a number,
+and active expiry is turned back on. Reads in the PR do not reclaim, so the
+expired fraction is fixed for the whole run and there is no separate first
+pass to report. The runs need `enable-debug-command` (`local` in the shipped
+config, `yes` when the client is on another host) and a server with SEXPIRE;
+without it they are skipped. Commands: SISMEMBER on a live member and, as
+`sismember_expired`, on an expired one; SMISMEMBER, SCARD (which counts hidden
+members), SMEMBERS, SRANDMEMBER, SSCAN, SPOP, and SINTER, SUNION, SDIFF with
+their STORE forms. SPOP pops live members only, so in a population of P sets
+with L live members each the expired fraction rises by up to
+ops/s x `duration` / (P x L) during a run; SPOP is skipped in `exp_all_but_1`,
+where every pop would empty a set's live part.
 
 **Keeping sets intact during a run.** Every `__rand_int__` in a
 valkey-benchmark command is drawn from one `-r` range, so the `layout` decides
