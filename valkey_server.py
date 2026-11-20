@@ -693,6 +693,11 @@ class ServerLauncher:
                 except Exception as e:
                     logging.warning(f"Could not shutdown node {node['port']}: {e}")
 
+            # Wait for all processes to stop before removing their config files:
+            # a node whose SHUTDOWN timed out rewrites nodes-<port>.conf when it
+            # later exits on SIGTERM, which would leave a stale node ID behind.
+            self._wait_for_process_shutdown()
+
             # Clean cluster config files
             try:
                 cluster_config_dir = (
@@ -721,8 +726,8 @@ class ServerLauncher:
             except Exception as e:
                 logging.warning(f"Could not send shutdown command: {e}")
 
-        # Wait for all processes to stop (escalates to SIGKILL if needed)
-        self._wait_for_process_shutdown()
+            # Wait for all processes to stop (escalates to SIGKILL if needed)
+            self._wait_for_process_shutdown()
 
     def _valkey_processes_running(self) -> bool:
         """Check if any valkey-server processes are running."""
