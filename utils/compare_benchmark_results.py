@@ -6,6 +6,7 @@ This tool compares benchmark results between two versions, automatically averagi
 multiple runs for identical configurations and generating a comprehensive comparison report.
 """
 
+import html
 import json
 import statistics
 import sys
@@ -1305,6 +1306,128 @@ def _format_failed_scenarios_section(
     return lines
 
 
+# (table_row metric, column heading, unit) in scenario table column order.
+_SCENARIO_METRIC_COLUMNS = [
+    ("rps", "Throughput", "rps"),
+    ("avg_latency", "Avg Lat", "ms"),
+    ("p50_latency", "P50", "ms"),
+    ("p95_latency", "P95", "ms"),
+    ("p99_latency", "P99", "ms"),
+]
+
+# Config keys already shown in their own scenario table column.
+_SCENARIO_SHOWN_KEYS = {
+    "test_id",
+    "group",
+    "scenario",
+    "test_phase",
+    "group_description",
+    "scenario_description",
+    "dataset",
+}
+
+
+def _plain_table_cell(text: Any) -> str:
+    """Render config-file text as escaped plain text inside a Markdown table."""
+    if text is None:
+        return ""
+    s = " ".join(str(text).split())
+    return html.escape(s, quote=False).replace("|", r"\|")
+
+
+def _scenario_rows(groups_with_unique: List[Dict]) -> List[Dict[str, Any]]:
+    """Collapse per-metric table rows into one row per scenario and command."""
+    rows = []
+    for group in groups_with_unique:
+        config = group["config_dict"]
+        # "P1 - Text baseline" + scenario "a" -> "P1.a" / "Text baseline".
+        prefix, sep, family = (config.get("group_description") or "").partition(" - ")
+        if sep and config.get("scenario") is not None:
+            code = f"{prefix.strip()}.{config['scenario']}"
+        else:
+            code, family = config.get("test_id") or "-", config.get("group_description")
+        config_text = "<br>".join(
+            f"{k}={v}" if k == "config_set" else _plain_table_cell(f"{k}={v}")
+            for k, v in sorted(group.get("unique_config", {}).items())
+            if k not in _SCENARIO_SHOWN_KEYS
+        )
+
+        by_command: Dict[Tuple, Dict[str, Dict[str, Any]]] = {}
+        for row in group["table_rows"]:
+            key = (row["command"], row["pipeline"], row["io_threads"])
+            by_command.setdefault(key, {})[row["metric"]] = row
+
+        for (command, _, _), metrics in by_command.items():
+            cells, marks = {}, []
+            for metric, _, unit in _SCENARIO_METRIC_COLUMNS:
+                row = metrics.get(metric)
+                if row is None:
+                    continue
+                mark = _get_significance_indicator(
+                    row.get("baseline_run_count", 0),
+                    row.get("new_run_count", 0),
+                    row.get("baseline_ci_lower", 0.0),
+                    row.get("baseline_ci_upper", 0.0),
+                    row.get("new_ci_lower", 0.0),
+                    row.get("new_ci_upper", 0.0),
+                    row["change"],
+                    row["metric"],
+                )
+                change = _format_percent_change(
+                    row["baseline_value"],
+                    row.get("baseline_stdev", 0.0),
+                    row["new_value"],
+                    row.get("new_stdev", 0.0),
+                    row.get("baseline_run_count", 0),
+                    row.get("new_run_count", 0),
+                )
+                new = _format_with_sig_figs(row["new_value"])
+                baseline = _format_with_sig_figs(row["baseline_value"])
+                cells[metric] = (
+                    f"{mark} {change}<br><sub>{new} vs {baseline} {unit}</sub>"
+                )
+                marks.append(mark)
+
+            description = [_plain_table_cell(config.get("scenario_description")) or "-"]
+            description.append(f"<sub>{_sanitize_table_cell(command)}</sub>")
+            if config.get("dataset"):
+                description.append(
+                    f"<sub>dataset: {_sanitize_table_cell(config['dataset'])}</sub>"
+                )
+            scenario = _plain_table_cell(code)
+            if family:
+                scenario += f"<br><sub>{_plain_table_cell(family)}</sub>"
+            rows.append(
+                {
+                    "scenario": scenario,
+                    "description": "<br>".join(description),
+                    "phase": _plain_table_cell(config.get("test_phase")) or "-",
+                    "config": config_text or "-",
+                    "cells": cells,
+                    "marks": marks,
+                    "max_change": max(abs(r["change"]) for r in metrics.values()),
+                }
+            )
+    return rows
+
+
+def _scenario_table(
+    rows: List[Dict[str, Any]], columns: List[Tuple[str, str, str]]
+) -> List[str]:
+    """Render scenario rows with one column per selected metric."""
+    headings = ["Scenario", "Description", "Phase", "Config"]
+    headings += [heading for _, heading, _ in columns]
+    lines = [
+        "| " + " | ".join(headings) + " |",
+        "|" + " --- |" * len(headings),
+    ]
+    for row in rows:
+        cells = [row["scenario"], row["description"], row["phase"], row["config"]]
+        cells += [row["cells"].get(metric, "-") for metric, _, _ in columns]
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
+
+
 def format_comparison_report(
     config_groups: List[Dict],
     baseline_version: str,
@@ -1333,41 +1456,36 @@ def format_comparison_report(
 
     report_lines = []
 
-    # Summary section
-    significant_changes = [
-        ("✅", item["change"], item["test"], item["change_magnitude"])
-        for item in improvements
-    ] + [
-        ("❌", item["change"], item["test"], item["change_magnitude"])
-        for item in regressions
+    rows = _scenario_rows(groups_with_unique)
+    # Regressions first, then improvements, each by largest change.
+    rows.sort(
+        key=lambda r: ("❌" not in r["marks"], "✅" not in r["marks"], -r["max_change"])
+    )
+    significant = [r for r in rows if "❌" in r["marks"] or "✅" in r["marks"]]
+    columns = [
+        c for c in _SCENARIO_METRIC_COLUMNS if any(c[0] in r["cells"] for r in rows)
     ]
-    significant_changes.sort(key=lambda x: x[3], reverse=True)
 
-    total_tests = len(significant_changes) + no_change_count + insufficient_data_count
-
-    if significant_changes:
-        report_lines.append(f"## {len(significant_changes)} significant change(s)")
-        report_lines.append("")
-        for emoji, change, test, _ in significant_changes:
-            report_lines.append(f"- {emoji} {change} {test}")
-        report_lines.append("")
+    report_lines.append(
+        f"{len(improvements) + len(regressions)} significant metric change(s) across "
+        f"{len(significant)} scenario(s); {no_change_count} with no significant "
+        f"change, {insufficient_data_count} with insufficient data."
+    )
+    report_lines.append("")
+    report_lines.append(
+        "Legend: ✅ significant improvement, ❌ significant regression, "
+        "➖ not significant, ❔ insufficient data. Throughput: higher is better; "
+        f"latency: lower is better. Cells show % change ±{CONFIDENCE_PERCENT}% CI, "
+        f"then {new_version} vs {baseline_version}."
+    )
+    report_lines.append("")
+    report_lines.append("## Significant Scenarios")
+    report_lines.append("")
+    if significant:
+        report_lines.extend(_scenario_table(significant, columns))
     else:
-        report_lines.append("## No significant changes")
-        report_lines.append("")
-        report_lines.append(
-            f"No statistically significant changes detected across {total_tests} test(s)."
-        )
-        report_lines.append("")
-
-    # Summary counts
-    summary_parts = []
-    if no_change_count:
-        summary_parts.append(f"{no_change_count} with no significant change")
-    if insufficient_data_count:
-        summary_parts.append(f"{insufficient_data_count} with insufficient data")
-    if summary_parts:
-        report_lines.append(f"*{', '.join(summary_parts)}*")
-        report_lines.append("")
+        report_lines.append("No statistically significant changes.")
+    report_lines.append("")
 
     if failed_scenarios:
         report_lines.extend(
