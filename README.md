@@ -1191,7 +1191,6 @@ one thing each:
 |---|---|---|
 | 2 | Uniform 80/20 | Every key equally likely, no `--zipfian` |
 | 3 | Balanced 50/50 | 100 GET and 100 SET clients |
-| 4 | Zipfian TTL 120 | Every write sets `EX 120`, including the load, and the run lasts 180 seconds so keys expire during it. The 100 byte keys are written out in the commands, since `--keysize` only applies to built-in tests |
 | 5 | Value sizes | One scenario each for 500 B and 5 KB values under a 512mb cap with a 10gb tiering file. Each keyspace is sized so about 10% of the values fit in memory |
 
 Group 5 needs different server settings, so it is a second entry in the file.
