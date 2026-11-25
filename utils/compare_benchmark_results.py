@@ -1114,10 +1114,11 @@ def _generate_summary(
 
     for group in config_groups:
         unique_config = group.get("unique_config", {})
-        config_str = (
-            ", ".join(f"{k}={v}" for k, v in sorted(unique_config.items()))
-            if unique_config
-            else ""
+        # Descriptions and test ids repeat what scenario already says.
+        config_str = ", ".join(
+            f"{k}={v}"
+            for k, v in sorted(unique_config.items())
+            if k not in ("test_id", "test_phase") and not k.endswith("_description")
         )
 
         for row in group.get("table_rows", []):
