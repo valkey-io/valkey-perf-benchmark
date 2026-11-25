@@ -143,42 +143,6 @@
             ]
           }
         ]
-      },
-      {
-        "group": 4,
-        "description": "Zipfian 80/20 over 4M keys that expire 120 seconds after each write, under a 1gb DRAM cap with FlashCache tiering",
-        "scenarios": [
-          {
-            "id": "zipfttl",
-            "type": "mixed",
-            "description": "Concurrent GET (160 clients) and SET with EX 120 (40 clients), zipfian alpha 1.0, 180 seconds so keys expire during the run",
-            "restart_before": true,
-            "populate_with": "SET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__rand_int__ __data__ EX 120",
-            "populate_clients": 50,
-            "populate_retries": 20,
-            "duration": 180,
-            "pipeline": 1,
-            "data_size": 512,
-            "keyspacelen": 4000000,
-            "benchmark_args": [
-              "--zipfian 1.0"
-            ],
-            "writes": [
-              {
-                "id": "set",
-                "command": "SET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__rand_int__ __data__ EX 120",
-                "clients": 40
-              }
-            ],
-            "reads": [
-              {
-                "id": "get",
-                "command": "GET aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__rand_int__",
-                "clients": 160
-              }
-            ]
-          }
-        ]
       }
     ]
   },

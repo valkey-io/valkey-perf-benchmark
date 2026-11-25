@@ -53,7 +53,6 @@ def test_all_dashboard_tests_present():
         1: ["zipf80"],
         2: ["unif80"],
         3: ["bal50"],
-        4: ["zipfttl"],
         5: ["v500", "v5k"],
     }
 
@@ -104,18 +103,3 @@ def test_mixed_children_argv(config, scenario):
         _assert_100_byte_keys(argv)
         assert ("--zipfian" in argv) == zipfian
     assert sum(c["clients"] for c in writes + reads) == 200
-
-
-def test_ttl_keys_match_the_loaded_keys_and_expire_during_the_run():
-    scenario = next(
-        s
-        for c in CONFIGS
-        for g in c["test_groups"]
-        for s in g["scenarios"]
-        if s["id"] == "zipfttl"
-    )
-    key = "a" * 88 + "__rand_int__"
-    assert scenario["populate_with"] == f"SET {key} __data__ EX 120"
-    assert scenario["writes"][0]["command"] == f"SET {key} __data__ EX 120"
-    assert scenario["reads"][0]["command"] == f"GET {key}"
-    assert scenario["duration"] > 120
