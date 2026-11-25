@@ -1144,6 +1144,38 @@ class TestComparisonPipeline:
         assert baseline_ver == "base111"
         assert new_ver == "new2222"
 
+    def test_summary_line_leaves_out_descriptions_and_test_ids(self):
+        def runs(commit, base_rps, scenario):
+            return [
+                {
+                    **self._make_run(rps, 1.0, 0.8, 1.5, 2.0, commit=commit),
+                    "scenario": scenario,
+                    "scenario_description": "A long description of " + scenario,
+                    "test_id": "1_" + scenario,
+                    "test_phase": "mixed_read",
+                }
+                for rps in (base_rps - 1000, base_rps, base_rps + 1000)
+            ]
+
+        baseline = average_multiple_runs(
+            runs("base111", 100000, "zipf80") + runs("base111", 50000, "unif80")
+        )
+        new = average_multiple_runs(
+            runs("new2222", 120000, "zipf80") + runs("new2222", 50000, "unif80")
+        )
+        groups, base_ver, new_ver, base_repo, new_repo = create_comparison_table_data(
+            baseline, new, "rps"
+        )
+        report = format_comparison_report(
+            groups, base_ver, new_ver, base_repo, new_repo
+        )
+
+        summary = report.split("<details>")[0]
+        assert "scenario=zipf80" in summary
+        assert "description" not in summary
+        assert "test_id" not in summary
+        assert "test_phase" not in summary
+
     def test_significance_direction_by_metric_type(self):
         # Latency decrease = improvement
         assert (
