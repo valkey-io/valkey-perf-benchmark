@@ -120,3 +120,21 @@ jobs:
           gcx resources push -p "$tmp" --dry-run
           echo "=== push ==="
           gcx resources push -p "$tmp" --on-error abort
+
+      # Dashboards created through gcx get no default permissions, so grant the
+      # Viewer role View on every pushed dashboard. This only sets the Viewer
+      # entry and leaves all other permissions unchanged.
+      - name: Grant Viewer role view access
+        if: steps.guard.outputs.run == 'true' && steps.changed.outputs.files != ''
+        run: |
+          while IFS= read -r json; do
+            [ -z "$json" ] && continue
+            uid=$(jq -r '.uid' "$json")
+            echo "→ Viewer: View on $uid"
+            curl -fsS -X POST \
+              -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d '{"permission":"View"}' \
+              "${GRAFANA_SERVER}/api/access-control/dashboards/${uid}/builtInRoles/Viewer"
+            echo
+          done <<< "${{ steps.changed.outputs.files }}"
