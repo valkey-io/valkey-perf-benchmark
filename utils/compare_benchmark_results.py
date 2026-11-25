@@ -170,6 +170,14 @@ _CONFIG_EXCLUDED_FIELDS = frozenset(
         "p95_latency_ms",
         "p99_latency_ms",
         "max_latency_ms",
+        # Server-side measurements: window throughput and populate memory
+        "server_ops_s",
+        "server_ops_s_by_command",
+        "window_complete",
+        "window_error_replies",
+        "populate_keys",
+        "populate_used_memory_mb",
+        "populate_bytes_per_key",
         # Standard deviation fields
         "rps_stdev",
         "avg_latency_ms_stdev",
